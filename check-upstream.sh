@@ -18,7 +18,7 @@ if [ "$accept" = 1 ]; then
   echo "snapshot updated."
   exit 0
 fi
-if diff -u "$here/upstream/implement-spec.SKILL.md" "$file"; then
+if diff -u --strip-trailing-cr "$here/upstream/implement-spec.SKILL.md" "$file"; then
   echo "no upstream changes."
 else
   echo
