@@ -23,6 +23,8 @@ Invoke manually with `/implement-spec-split [spec ref]`. Change the models in th
 
 ## Keeping up with upstream
 
+Read [MAINTAINING.md](MAINTAINING.md) (中文) before syncing or editing: it records the design decisions and pitfalls.
+
 `upstream/` holds a snapshot of the original `implement-spec/SKILL.md` and the upstream commit it came from.
 
 ```bash
