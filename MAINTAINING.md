@@ -58,7 +58,7 @@
   - pi 确实读了 tdd 的 `SKILL.md`。
 
   另外还会测超时和认证失败两条路径。全部通过就删掉临时目录，失败则保留，方便排查。改了 `pi-worker.sh` 或升级了 pi 以后，都要重跑一遍。
-- **L3 端到端**（手动）：
+- **L3 端到端**（手动）：私有仓库 `allanpk716/iss-e2e-test` 先留着，以后做回归测试接着用，本地路径是 `~/orca/iss-e2e-test`，已经加进 Orca。再测时开一个新 spec 就行，不用重建仓库。第一次搭建的步骤如下：
   1. 在 GitHub 上建一个临时的私有仓库，加一个最简单的 Node 项目（只要能跑 `npm test` 就行）。再执行 `/setup-matt-pocock-skills`，让 tracker 用 GitHub。
   2. 开一个 spec issue，下面挂 3 个子 issue，其中 #2 被 #1 阻塞。
   3. 在这个仓库里执行 `/implement-spec-split --impl pi`。
