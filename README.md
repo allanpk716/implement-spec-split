@@ -7,7 +7,7 @@ A Claude Code skill: [Matt Pocock's `implement-spec`](https://github.com/mattpoc
 
 The original skill lets every subagent inherit the session model, so you pay top-tier prices for coding or get a weaker review. This version passes `model` explicitly on every subagent call. It also auto-discovers open, unfinished specs when invoked without an argument.
 
-> Status: not yet exercised end-to-end on a real project. Report problems via issues.
+> Status: `--impl pi` exercised end-to-end on a scratch repo (2026-10-11); `--impl sonnet` and the draft-PR flow not yet. Report problems via issues.
 
 ## Requirements
 

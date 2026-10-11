@@ -73,15 +73,29 @@
 
 ## 安装方式
 
-- 技能目录 `~/.claude/skills/implement-spec-split` 就是这个仓库的 git 克隆，在这里改完直接 commit、push。
+- 技能目录 `~/.claude/skills/implement-spec-split` 是这个仓库的 git 克隆。
+- 如果在别的地方的克隆里改（比如 `~/orca/implement-spec-split`），commit 之后要在技能目录里执行 `git pull --ff-only <那个克隆的路径> main` 同步过去。
 - 不用软链接，因为 Windows 上软链接很麻烦。
 
-## 尚未验证的事项（首次实跑时检查）
+## 已验证（2026-10-11，临时仓库 `allanpk716/iss-e2e-test` 上的 L3 测试）
 
-- 技能还没在真实项目上完整跑过一次。
-- 不带参数运行时，`sub_issues_summary` 查询列出的 spec 对不对。
-- review 时 Standards 和 Spec 两个子代理是否真的跑在 `REVIEW_MODEL` 上，实现子代理是否真的跑在 `IMPLEMENT_MODEL` 上。
-- `--impl pi` 的完整流程（L3）：Brief 是否够用，验收检查能不能拦住不合格的 worker，fix 角色能不能根据 review 报告改对。L1 和 L2 已经在 2026-10-11 通过。
+- 不带参数运行时，第 0 步用 `sub_issues_summary` 查询能正确找到 spec。
+- `--impl pi` 的完整流程走通了：
+  - 前沿调度正确：先跑 #2 和 #3，两个都合并后才跑 #4；
+  - merger 一次只跑一个；
+  - 每个 worker 都经过了验收检查；
+  - 写代码的 worker 都读了 tdd 技能；
+  - fix 角色按 review 报告改好了；
+  - 第 9 步合并、push、关单都正常。
+- review 的两个子代理确实跑在 `REVIEW_MODEL`（opus）上。
+- 发现的问题：主代理用 sed 从上一份 Brief 改出下一份，结果留下了错误的 issue 编号。已经在 `SKILL.md` 里要求每份 Brief 都从头写。
+
+## 尚未验证的事项
+
+- 用 `--impl sonnet` 跑一遍完整流程，确认实现子代理真的跑在 `IMPLEMENT_MODEL` 上。
+- exploration 角色。在小仓库里，主代理会按"可选"直接跳过它。
+- 验收检查能不能拦住不合格的 worker。L3 里所有 worker 一次就通过了，没有触发过拦截。
+- GLM 出错的处理：碰到 auth、quota 或 transient 错误时，主代理会不会停下来问用户。L2 只测了 wrapper 会不会给出正确的退出码。
 - 有 PR 流程的仓库里，draft PR 能不能开出来、最后能不能标成可以 review。
 
 验证过的项目从这里删掉，发现的新问题补到"设计要点"里。

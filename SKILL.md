@@ -80,7 +80,7 @@ If it fails, stop and show the user the error (usually a bad key or model id in 
 **Dispatching a role:**
 
 1. Make a run directory per worker: `~/.cache/implement-spec-split/runs/<spec>-<YYYYmmdd-HHMM>/<role>-<ticket>/`.
-2. Write the Brief to a file. Keep it to pointers and rules:
+2. Write the Brief to a file, fresh for every worker: do not derive one Brief from another with `sed` or search-and-replace (ticket numbers and branch names get left behind). Keep it to pointers and rules:
    - who it is (role, ticket number, how to read the spec and ticket, e.g. `gh issue view <n>`), worktree path, branch, integration branch;
    - exploration notes dir and, for fix, the review report path;
    - the rules for its role from the Steps above (for implementers: tdd, commit, clean tree, merge the integration tip; for exploration: do not modify the repo);
