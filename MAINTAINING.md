@@ -104,11 +104,23 @@
 - review 的两个子代理确实跑在 `REVIEW_MODEL`（opus）上。
 - 发现的问题：主代理用 sed 从上一份 Brief 改出下一份，结果留下了错误的 issue 编号。已经在 `SKILL.md` 里要求每份 Brief 都从头写。
 
+## 已验证（2026-10-14，`iss-e2e-test` 的 spec #5，L3 测试 Time limit 和 Resume）
+
+- 为了确定能触发 Time limit，#6 implementer 的第一段故意把 Time limit 设得很小。其余角色都用 Config 里的值。
+- 第一次给 60s：worker 停在 `timeout`，没有任何进展（`new_commits` = 0，工作区干净）。主代理按规则判断出"不 Resume，要问用户"。
+- 换新的运行目录，给 150s：停在 `timeout` 时工作区是脏的（有进展）。主代理用 `--resume` 续了一次，用的是 `GLM_TIME_LIMIT_IMPL`：
+  - 用的还是同一个 pi 会话：只有一个会话文件，第 2 段收到的是 Resume 提示词；
+  - 第 2 段 87s 就提交完成；
+  - `segments` = 2，`new_commits` = 2，从第一段的 base head 起算；
+  - 通过了验收检查，merger 重跑测试也通过了。
+- `--time-limit` 和 `--idle-timeout` 在真实运行中都生效了。merger 用的是 `GLM_TIME_LIMIT_SHORT`，各跑了 16–21s。
+- 发现的问题：Brief 直接写在运行目录里时，wrapper 用 `cp` 拷贝自己，会往 stderr 打一条 "same file"。已经改成同一个文件就跳过。
+
 ## 尚未验证的事项
 
 - 用 `--impl sonnet` 跑一遍完整流程，确认实现子代理真的跑在 `IMPLEMENT_MODEL` 上。
-- 按角色 Time limit 和 `stalled` 在真实 L3 运行里的表现（目前只有 L2 的确定性用例，还没有 worker 在真实运行中触发过这两条路径）。
-- Resume 在真实 L3 运行里的表现：到 Time limit 的 worker 被 Resume 一次并通过验收检查（L2 已用真 pi 验证过 wrapper 的 Resume 契约，但还没有 worker 在真实 L3 运行中触发过 Time limit → Resume）。
+- `stalled` 在真实 L3 运行里的表现（目前只有 L2 用假 pi 做的确定性用例）。
+- 第二次 `timeout` 时主代理会停下来问用户（2026-10-14 的 L3 里 Resume 一次就完成了，没走到这条路径）。
 - exploration 角色。在小仓库里，主代理会按"可选"直接跳过它。
 - 验收检查能不能拦住不合格的 worker。L3 里所有 worker 一次就通过了，没有触发过拦截。
 - GLM 出错的处理：碰到 auth、quota 或 transient 错误时，主代理会不会停下来问用户。L2 只测了 wrapper 会不会给出正确的退出码。

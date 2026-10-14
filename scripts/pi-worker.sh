@@ -193,7 +193,8 @@ if $RESUME; then
   SEGMENTS=$((SEGMENTS + 1))
   write_state
 else
-  cp "$BRIEF" "$RUN_DIR/brief.md"
+  # SKILL.md writes the Brief straight into the run dir; copying a file onto itself fails.
+  [ "$BRIEF" -ef "$RUN_DIR/brief.md" ] || cp "$BRIEF" "$RUN_DIR/brief.md"
   : > "$EVENTS"; : > "$STDERR"
   SESSION_ID=$(node -e 'console.log(require("crypto").randomUUID())')
   BASE_HEAD=$(git -C "$CWD" rev-parse HEAD 2>/dev/null || echo "")
