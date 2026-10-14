@@ -3,13 +3,20 @@
 #
 # Usage:
 #   pi-worker.sh --cwd <worktree> --brief <file> --run-dir <dir>
-#                [--model glm/glm-5.3] [--timeout 1800] [--retries 2] [--retry-wait 60]
-#                [--thinking <level>] [--skill <dir>]...
+#                [--model glm/glm-5.3] [--time-limit 1800] [--idle-timeout 600]
+#                [--retries 2] [--retry-wait 60] [--thinking <level>] [--skill <dir>]...
+#
+# Terms follow GLOSSARY.md: --time-limit is the per-role Time limit (hard cap on one
+# attempt); --idle-timeout is the Idle timeout (pi is judged stuck when its event
+# stream has not grown for that long).
 #
 # Writes into --run-dir: brief.md, events.jsonl, stderr.log, sessions/, result.md, status.json.
 # Prints status.json on stdout. Exit codes:
 #   0 ok (pi finished without an API error) | 2 auth error | 3 quota exhausted | 4 transient error (retries used up)
-#   5 timeout | 6 other error | 64 bad usage
+#   5 Time limit reached | 6 other error | 7 stalled (Idle timeout) | 64 bad usage
+#
+# Test hooks (same spirit): PI_WORKER_PI overrides the pi executable;
+# PI_WORKER_API_KEY forces a specific API key.
 #
 # Never trust "ok" alone: it only means pi finished without an API error. The caller
 # still checks the worktree (new commits, clean tree) and re-runs the tests.
@@ -17,7 +24,8 @@
 set -u
 
 MODEL="glm/glm-5.3"
-TIMEOUT=1800
+TIME_LIMIT=1800
+IDLE_TIMEOUT=600
 RETRIES=2
 RETRY_WAIT=60
 THINKING=""
@@ -34,7 +42,8 @@ while [ $# -gt 0 ]; do
     --brief) BRIEF="$2"; shift 2 ;;
     --run-dir) RUN_DIR="$2"; shift 2 ;;
     --model) MODEL="$2"; shift 2 ;;
-    --timeout) TIMEOUT="$2"; shift 2 ;;
+    --time-limit) TIME_LIMIT="$2"; shift 2 ;;
+    --idle-timeout) IDLE_TIMEOUT="$2"; shift 2 ;;
     --retries) RETRIES="$2"; shift 2 ;;
     --retry-wait) RETRY_WAIT="$2"; shift 2 ;;
     --thinking) THINKING="$2"; shift 2 ;;
@@ -46,8 +55,9 @@ done
 [ -n "$CWD" ] && [ -d "$CWD" ] || die "--cwd must be an existing directory"
 [ -n "$BRIEF" ] && [ -f "$BRIEF" ] || die "--brief must be an existing file"
 [ -n "$RUN_DIR" ] || die "--run-dir is required"
-command -v pi >/dev/null || die "pi not found on PATH"
 command -v node >/dev/null || die "node not found on PATH"
+PI_BIN="${PI_WORKER_PI:-pi}"
+command -v "$PI_BIN" >/dev/null || die "pi not found on PATH (PI_WORKER_PI=${PI_WORKER_PI:-unset})"
 
 # pi and node are native Windows programs under Git Bash: hand them Windows-style paths.
 winpath() { if command -v cygpath >/dev/null; then cygpath -m "$1"; else echo "$1"; fi; }
@@ -72,6 +82,37 @@ for s in "${SKILLS[@]+"${SKILLS[@]}"}"; do ARGS+=(--skill "$(winpath "$s")"); do
 
 FIRST_PROMPT="Do the task described in the attached brief. Finish with the report it asks for."
 RETRY_PROMPT="The previous attempt was interrupted by an API error. Continue the task from where you left off, then finish with the report the brief asks for."
+
+# Run one pi attempt in the background under a watchdog that enforces both limits:
+#   - Time limit: the attempt must end within $TIME_LIMIT seconds;
+#   - Idle timeout: pi's event stream must grow at least every $IDLE_TIMEOUT seconds
+#     (pi streams events densely; the largest observed gap between messages is ~114s).
+# Sets WATCHDOG to "time-limit" or "idle" when we killed pi, "" when it exited on its own.
+run_pi() {
+  WATCHDOG=""
+  (cd "$CWD" && exec "$PI_BIN" "${ARGS[@]}" "${PROMPT[@]}" \
+      </dev/null >"$ATTEMPT_EVENTS" 2>>"$STDERR") &
+  PI_PID=$!
+  local started last_change last_size now size grace
+  started=$(date +%s); last_change=$started; last_size=0
+  while kill -0 "$PI_PID" 2>/dev/null; do
+    sleep 5
+    now=$(date +%s)
+    size=$(($(wc -c < "$ATTEMPT_EVENTS" 2>/dev/null || echo 0)))
+    if [ "$size" -gt "$last_size" ]; then last_size=$size; last_change=$now; fi
+    if [ $((now - started)) -ge "$TIME_LIMIT" ]; then WATCHDOG="time-limit"; break; fi
+    if [ $((now - last_change)) -ge "$IDLE_TIMEOUT" ]; then WATCHDOG="idle"; break; fi
+  done
+  if [ -n "$WATCHDOG" ]; then
+    echo "=== watchdog killed pi ($WATCHDOG) $(date -Iseconds) ===" >> "$STDERR"
+    kill "$PI_PID" 2>/dev/null
+    grace=0
+    while kill -0 "$PI_PID" 2>/dev/null && [ "$grace" -lt 6 ]; do sleep 5; grace=$((grace + 1)); done
+    kill -9 "$PI_PID" 2>/dev/null
+  fi
+  wait "$PI_PID"
+  PI_EXIT=$?
+}
 
 # Classify the last assistant message of one attempt: prints "<class>\t<error message>".
 classify() {
@@ -112,13 +153,17 @@ while :; do
     PROMPT=("$RETRY_PROMPT")
   fi
   echo "=== attempt $ATTEMPT $(date -Iseconds) ===" >> "$STDERR"
-  (cd "$CWD" && timeout --kill-after=30 "$TIMEOUT" pi "${ARGS[@]}" "${PROMPT[@]}" \
-      </dev/null >"$ATTEMPT_EVENTS" 2>>"$STDERR")
-  PI_EXIT=$?
+  run_pi
   cat "$ATTEMPT_EVENTS" >> "$EVENTS"
 
+  if [ "$WATCHDOG" = "time-limit" ]; then
+    STATUS="timeout"; ERROR="Time limit reached: pi did not finish within ${TIME_LIMIT}s"; EXIT_CODE=5; break
+  fi
+  if [ "$WATCHDOG" = "idle" ]; then
+    STATUS="stalled"; ERROR="Idle timeout: no pi events for ${IDLE_TIMEOUT}s"; EXIT_CODE=7; break
+  fi
   if [ "$PI_EXIT" -eq 124 ] || [ "$PI_EXIT" -eq 137 ]; then
-    STATUS="timeout"; ERROR="pi did not finish within ${TIMEOUT}s"; EXIT_CODE=5; break
+    STATUS="timeout"; ERROR="pi exited with code $PI_EXIT inside the ${TIME_LIMIT}s Time limit"; EXIT_CODE=5; break
   fi
   IFS=$'\t' read -r CLS MSG < <(classify "$ATTEMPT_EVENTS")
   case "$CLS" in

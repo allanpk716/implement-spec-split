@@ -3,8 +3,8 @@
 #
 #   L1  connectivity: pi can reach GLM with the configured key and model.
 #   L2  pi-worker.sh: implements a tiny ticket in a git worktree with the tdd skill,
-#       leaves commits and a clean tree, keeps its run artifacts; timeouts and auth
-#       failures are classified correctly.
+#       leaves commits and a clean tree, keeps its run artifacts; Time limit, Idle timeout
+#       (via a fake pi behind the PI_WORKER_PI hook) and auth failures are classified correctly.
 #
 # Usage: scripts/selftest.sh [--model glm/glm-5.3] [--only L1]
 # Scratch dir: ~/.cache/implement-spec-split-selftest/<timestamp>, deleted on success.
@@ -40,7 +40,7 @@ echo "L1 connectivity"
 mkdir -p "$ROOT/l1"
 echo "Reply with exactly the word: ok. Do not use any tools." > "$ROOT/l1.brief"
 "$WORKER" --cwd "$ROOT/l1" --brief "$ROOT/l1.brief" --run-dir "$ROOT/l1-run" \
-  --model "$MODEL" --timeout 120 --retries 0 > /dev/null
+  --model "$MODEL" --time-limit 120 --idle-timeout 30 --retries 0 > /dev/null
 L1=$?
 if [ "$L1" -eq 0 ]; then
   pass "pi answered on $MODEL"
@@ -87,7 +87,7 @@ Files changed, test command and result, anything you could not do.
 EOF
 
 "$WORKER" --cwd "$WT" --brief "$ROOT/l2.brief" --run-dir "$ROOT/l2-run" \
-  --model "$MODEL" --timeout 900 ${TDD_SKILL:+--skill "$TDD_SKILL"} > /dev/null
+  --model "$MODEL" --time-limit 900 --idle-timeout 120 ${TDD_SKILL:+--skill "$TDD_SKILL"} > /dev/null
 L2=$?
 S="$ROOT/l2-run/status.json"
 check "worker exit code 0 (got $L2)" test "$L2" -eq 0
@@ -107,23 +107,37 @@ check "tdd skill was read by the worker" node -e '
     return e.type === "tool_execution_start" && /tdd[\\/]+SKILL\.md/i.test(JSON.stringify(e.args)); } catch { return false; } });
   process.exit(hit ? 0 : 1);' "$(cygpath -m "$ROOT/l2-run/events.jsonl")"
 
-# ---------- L2 timeout ----------
+# ---------- L2 Time limit ----------
 echo "L2 timeout"
 git -C "$REPO" worktree add -q "$ROOT/wt-timeout" -b timeout integration
 printf 'Write a 3000-word essay about git into essay.md, one paragraph at a time, re-reading the file after each paragraph.\n' > "$ROOT/to.brief"
 T0=$(date +%s)
 "$WORKER" --cwd "$ROOT/wt-timeout" --brief "$ROOT/to.brief" --run-dir "$ROOT/to-run" \
-  --model "$MODEL" --timeout 15 > /dev/null
+  --model "$MODEL" --time-limit 15 --idle-timeout 60 > /dev/null
 TO=$?
 T1=$(date +%s)
 check "timeout exit code 5 (got $TO)" test "$TO" -eq 5
 check "status timeout" test "$(json "$ROOT/to-run/status.json" status)" = timeout
 check "killed promptly ($((T1 - T0))s)" test "$((T1 - T0))" -lt 90
 
+# ---------- L2 Idle timeout: deterministic, no GLM involvement (PI_WORKER_PI hook) ----------
+echo "L2 idle"
+FAKE_PI="$ROOT/fake-pi.sh"
+printf '#!/usr/bin/env bash\n# Fake pi: accepts any arguments, produces no events, just sleeps far past the Time limit.\nsleep 300\n' > "$FAKE_PI"
+chmod +x "$FAKE_PI"
+T0=$(date +%s)
+PI_WORKER_PI="$FAKE_PI" "$WORKER" --cwd "$ROOT/l1" --brief "$ROOT/l1.brief" --run-dir "$ROOT/idle-run" \
+  --model "$MODEL" --time-limit 120 --idle-timeout 6 > /dev/null
+IDLE=$?
+T1=$(date +%s)
+check "idle exit code 7 (got $IDLE)" test "$IDLE" -eq 7
+check "status stalled" test "$(json "$ROOT/idle-run/status.json" status)" = stalled
+check "stopped well before the Time limit ($((T1 - T0))s < 120s)" test "$((T1 - T0))" -lt 120
+
 # ---------- L2 auth failure ----------
 echo "L2 auth"
 PI_WORKER_API_KEY="invalid-selftest-key" "$WORKER" --cwd "$ROOT/l1" --brief "$ROOT/l1.brief" \
-  --run-dir "$ROOT/auth-run" --model "$MODEL" --timeout 120 > /dev/null
+  --run-dir "$ROOT/auth-run" --model "$MODEL" --time-limit 120 --idle-timeout 30 > /dev/null
 AU=$?
 check "auth exit code 2 (got $AU)" test "$AU" -eq 2
 check "auth not retried" test "$(json "$ROOT/auth-run/status.json" attempts)" -eq 1
