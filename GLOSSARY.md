@@ -42,6 +42,18 @@ The single branch where every Ticket of a Spec is merged before review.
 **Frontier**:
 The Tickets whose blockers are all merged, so they can be started now.
 
+**Time limit**:
+The longest an External worker may run in one go, set per role; reaching it stops the worker but keeps its conversation so it can be Resumed.
+_Avoid_: timeout (ambiguous with Idle timeout and with a worker's own command timeouts)
+
+**Idle timeout**:
+How long an External worker may go without any visible activity before it is judged stuck and killed; a stuck worker is not Resumed.
+_Avoid_: hang timeout
+
+**Resume**:
+Continuing a stopped External worker's own conversation, in the same worktree, instead of starting a new worker with a new Brief; decided by the Orchestrator.
+_Avoid_: retry (that is the wrapper re-sending after an API error), re-brief
+
 **Brief**:
 The self-contained task description handed to an External worker, made of context pointers rather than copied content.
 _Avoid_: prompt
