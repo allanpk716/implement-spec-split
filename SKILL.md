@@ -19,7 +19,9 @@ Terms (Orchestrator, In-session subagent, External worker, Implement backend, Br
 - `IMPLEMENT_MODEL` = `sonnet` — model for implementing roles when the backend is `sonnet`.
 - `GLM_MODEL` = `glm/glm-5.3` — pi `provider/id`; the provider, key and model list live in `~/.pi/agent/models.json`, never in this repo.
 - `GLM_MAX_PARALLEL` = `2` — at most this many External workers at once.
-- `GLM_TIMEOUT` = `1800` — seconds before an External worker is killed.
+- `GLM_TIME_LIMIT_IMPL` = `3600` — Time limit (seconds, GLOSSARY.md) for implementer and fix External workers.
+- `GLM_TIME_LIMIT_SHORT` = `1200` — Time limit (seconds) for merger and exploration External workers.
+- `GLM_IDLE_TIMEOUT` = `600` — Idle timeout (seconds, GLOSSARY.md) for every External worker: no pi events for this long means the worker is stuck and is killed as `stalled`.
 - `REVIEW_MODEL` = `opus` — every code-review subagent (use `fable` for the strongest option). Review always runs In-session, whatever the backend.
 
 With the `sonnet` backend, pass the `model` parameter explicitly on every Agent call. Never rely on inheritance: the session itself may be on any model.
@@ -90,8 +92,10 @@ If it fails, stop and show the user the error (usually a bad key or model id in 
 
    ```bash
    <skill dir>/scripts/pi-worker.sh --cwd <worktree> --brief <brief file> --run-dir <run dir> \
-     --model <GLM_MODEL> --timeout <GLM_TIMEOUT> --skill <tdd skill dir>
+     --model <GLM_MODEL> --time-limit <role Time limit> --idle-timeout <GLM_IDLE_TIMEOUT> --skill <tdd skill dir>
    ```
+
+   The role's Time limit: `GLM_TIME_LIMIT_IMPL` for implementers and fix, `GLM_TIME_LIMIT_SHORT` for merger and exploration.
 
    The tdd skill dir is the newest `~/.claude/plugins/cache/mattpocock/mattpocock-skills/*/skills/*/tdd`; pass it to implementers and fix only. Mergers run in the checkout that has the integration branch.
 4. When it exits, read `<run dir>/status.json` and `result.md`. Do not read `events.jsonl` unless debugging a failure.
@@ -100,7 +104,8 @@ If it fails, stop and show the user the error (usually a bad key or model id in 
 
 - `0` / `ok`: pi finished without an API error. This is not success yet: apply the verification gate.
 - `2` / `auth`, `3` / `quota`, `4` / `transient` (already retried by pi and by the wrapper): the GLM side is unusable right now. Stop dispatching new External workers, let running ones finish, and ask the user: wait and retry, switch the remaining work to `sonnet`, or pause. Never switch to `sonnet` on your own: saving Claude quota is the point of this backend.
-- `5` / `timeout`, `6` / `error`: read the tail of `stderr.log` and `result.md` if any. Re-brief once in a fresh run dir with the failure appended; if it fails again, ask the user.
+- `5` / `timeout`: the worker reached its Time limit. Read the tail of `stderr.log` and `result.md` if any. Re-brief once in a fresh run dir with the failure appended; if it fails again, ask the user. (A stopped-at-the-Time-limit session is meant to be Resumable eventually; until Resume exists, keep this handling.)
+- `6` / `error`, `7` / `stalled`: the worker failed (`stalled` = the Idle timeout fired: no pi events for `GLM_IDLE_TIMEOUT`, so the session is stuck — do not continue that session). Read the tail of `stderr.log` and `result.md` if any. Re-brief once in a fresh run dir with the failure appended; if it fails again, ask the user.
 
 **Verification gate** (implementers and fix). Never trust the worker's report alone. All must hold:
 

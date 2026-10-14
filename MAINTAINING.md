@@ -34,6 +34,12 @@
 12. **GLM 不可用时不能自动换回 sonnet。** 用 GLM 就是为了省 CC 额度，自动切回去这个目的就没了。碰到 auth、quota 错误，或者重试完还是失败，要先停下来问用户。
 13. **merger 一次只能跑一个，GLM worker 最多同时跑 `GLM_MAX_PARALLEL` 个。** 智谱高峰期会限流，所以并发数不能开大。
 14. **pi 用 `--no-extensions --no-skills` 启动，只用 `--skill` 加载 tdd 技能。** 这样 Orca 装在 `~/.pi/agent` 下的扩展和 orchestration 技能不会混进 worker。
+15. **External worker 的停止条件是两道，不再共用一个 30 分钟墙钟。**
+    - `--time-limit` 按角色设定（implementer/fix 长上限，merger/exploration 短上限），到点退出码 `5`、状态 `timeout`；`--idle-timeout`（默认 600s）监控事件流是否增长，超时退出码 `7`、状态 `stalled`。
+    - 判卡死看事件流增长而不是墙钟：pi 的消息间隔实测最大约 114s，它自己的命令超时至多 300s，所以 600s 的 Idle timeout 不会误杀还在推进的 worker。
+    - `stalled` 按 error 处理（重写一次 Brief，再失败问用户），不续跑：卡死的会话不值得救。到 Time limit 停下的 worker 以后可以 Resume（尚未实现）。
+    - 别把它改回一个大墙钟超时，也别加自动续跑/重试循环。
+    - `PI_WORKER_PI` 环境变量可替换 pi 可执行文件（与 `PI_WORKER_API_KEY` 同思路），自测用它造一个只睡觉的假 pi，确定性地测 Idle timeout 路径。
 
 ## 同步上游
 
@@ -57,7 +63,7 @@
   - 运行目录里的文件都在；
   - pi 确实读了 tdd 的 `SKILL.md`。
 
-  另外还会测超时和认证失败两条路径。全部通过就删掉临时目录，失败则保留，方便排查。改了 `pi-worker.sh` 或升级了 pi 以后，都要重跑一遍。
+  另外还会测 Time limit（`--time-limit`）、Idle timeout（`PI_WORKER_PI` 指向只睡觉的假 pi，确定性、不依赖 GLM）和认证失败三条路径。全部通过就删掉临时目录，失败则保留，方便排查。改了 `pi-worker.sh` 或升级了 pi 以后，都要重跑一遍。
 - **L3 端到端**（手动）：私有仓库 `allanpk716/iss-e2e-test` 先留着，以后做回归测试接着用，本地路径是 `~/orca/iss-e2e-test`，已经加进 Orca。再测时开一个新 spec 就行，不用重建仓库。第一次搭建的步骤如下：
   1. 在 GitHub 上建一个临时的私有仓库，加一个最简单的 Node 项目（只要能跑 `npm test` 就行）。再执行 `/setup-matt-pocock-skills`，让 tracker 用 GitHub。
   2. 开一个 spec issue，下面挂 3 个子 issue，其中 #2 被 #1 阻塞。
@@ -93,6 +99,7 @@
 ## 尚未验证的事项
 
 - 用 `--impl sonnet` 跑一遍完整流程，确认实现子代理真的跑在 `IMPLEMENT_MODEL` 上。
+- 按角色 Time limit 和 `stalled` 在真实 L3 运行里的表现（目前只有 L2 的确定性用例，还没有 worker 在真实运行中触发过这两条路径）。
 - exploration 角色。在小仓库里，主代理会按"可选"直接跳过它。
 - 验收检查能不能拦住不合格的 worker。L3 里所有 worker 一次就通过了，没有触发过拦截。
 - GLM 出错的处理：碰到 auth、quota 或 transient 错误时，主代理会不会停下来问用户。L2 只测了 wrapper 会不会给出正确的退出码。
