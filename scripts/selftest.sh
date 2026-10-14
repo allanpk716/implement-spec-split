@@ -3,8 +3,10 @@
 #
 #   L1  connectivity: pi can reach GLM with the configured key and model.
 #   L2  pi-worker.sh: implements a tiny ticket in a git worktree with the tdd skill,
-#       leaves commits and a clean tree, keeps its run artifacts; Time limit, Idle timeout
-#       (via a fake pi behind the PI_WORKER_PI hook) and auth failures are classified correctly.
+#       leaves commits and a clean tree, keeps its run artifacts; a Time-limited run is
+#       Resumed from its run dir (segments = 2); a bad Resume exits 64; Time limit, Idle
+#       timeout (via a fake pi behind the PI_WORKER_PI hook) and auth failures are
+#       classified correctly.
 #
 # Usage: scripts/selftest.sh [--model glm/glm-5.3] [--only L1]
 # Scratch dir: ~/.cache/implement-spec-split-selftest/<timestamp>, deleted on success.
@@ -119,6 +121,70 @@ T1=$(date +%s)
 check "timeout exit code 5 (got $TO)" test "$TO" -eq 5
 check "status timeout" test "$(json "$ROOT/to-run/status.json" status)" = timeout
 check "killed promptly ($((T1 - T0))s)" test "$((T1 - T0))" -lt 90
+
+# ---------- L2 Time limit + Resume (GLOSSARY.md: Resume) ----------
+echo "L2 resume"
+git -C "$REPO" worktree add -q "$ROOT/wt-resume" -b ticket-2 integration
+cat > "$ROOT/rs.brief" <<'EOF'
+# Ticket 2: add a `str` helper module
+
+You are an implementer working in a git worktree on branch `ticket-2`, based on `integration`.
+
+## Requirements
+`str.js` exports four helpers, each with tests in `str.test.js` (`node:test` + `node:assert`):
+1. `initials(name)`: uppercase first letter of each word ("ada lovelace" -> "AL").
+2. `truncate(s, n)`: at most `n` characters, with "..." appended when cut ("hello", 3 -> "hel...").
+3. `slug(s)`: lowercase words joined by single hyphens, other characters dropped ("Hello, World!" -> "hello-world").
+4. `pluralize(n, word)`: "1 item" / "2 items".
+
+## How to work
+- Use the tdd skill (red-green-refactor): one helper at a time, test first.
+- Run the tests with `npm test`; they must pass.
+- Commit your work on the current branch with a clear message. Leave no uncommitted changes.
+- Do not touch any other branch and do not push.
+
+## Report (final message)
+Files changed, test command and result, anything you could not do.
+EOF
+RS_BASE=$(git -C "$ROOT/wt-resume" rev-parse HEAD)
+"$WORKER" --cwd "$ROOT/wt-resume" --brief "$ROOT/rs.brief" --run-dir "$ROOT/rs-run" \
+  --model "$MODEL" --time-limit 15 --idle-timeout 300 ${TDD_SKILL:+--skill "$TDD_SKILL"} > /dev/null
+RS1=$?
+S_RS="$ROOT/rs-run/status.json"
+check "resume: segment 1 stops at the Time limit (exit 5, got $RS1)" test "$RS1" -eq 5
+check "resume: segment 1 status timeout" test "$(json "$S_RS" status)" = timeout
+check "resume: segment 1 saved Resume state" test -s "$ROOT/rs-run/resume.json"
+check "resume: segment 1 segments = 1" test "$(json "$S_RS" segments)" = 1
+EV1=$(wc -l < "$ROOT/rs-run/events.jsonl" | tr -d ' ')
+"$WORKER" --resume --run-dir "$ROOT/rs-run" --time-limit 1200 --idle-timeout 120 > /dev/null
+RS2=$?
+check "resume: segment 2 finishes without --cwd/--brief/--model/--skill (exit 0, got $RS2)" test "$RS2" -eq 0
+check "resume: status ok" test "$(json "$S_RS" status)" = ok
+check "resume: segments = 2" test "$(json "$S_RS" segments)" = 2
+check "resume: same pi session across segments" test "$(json "$S_RS" session_id)" = "$(json "$ROOT/rs-run/resume.json" session_id)"
+RS_NEW=$(git -C "$ROOT/wt-resume" rev-list --count "$RS_BASE..HEAD")
+check "resume: new_commits counted from the first segment's base head ($RS_NEW)" test "$(json "$S_RS" new_commits)" = "$RS_NEW"
+check "resume: at least one new commit" test "$RS_NEW" -ge 1
+check "resume: worktree clean" test "$(json "$S_RS" dirty)" = false
+check "resume: str.js exists" test -f "$ROOT/wt-resume/str.js"
+check "resume: tests pass when re-run by us" bash -c "cd '$ROOT/wt-resume' && node --test"
+check "resume: result.md non-empty" test -s "$ROOT/rs-run/result.md"
+check "resume: events accumulated across segments" bash -c "[ \$(wc -l < '$ROOT/rs-run/events.jsonl' | tr -d ' ') -gt $EV1 ]"
+check "resume: segment 2 added a new attempt file" test -f "$ROOT/rs-run/attempt-2.jsonl"
+
+# ---------- L2 bad Resume: usage error, never a fresh session (no pi needed) ----------
+echo "L2 bad resume"
+mkdir -p "$ROOT/bad-run"
+"$WORKER" --resume --run-dir "$ROOT/bad-run" > /dev/null 2>&1
+BR1=$?
+check "bad resume: no saved state exits 64 (got $BR1)" test "$BR1" -eq 64
+check "bad resume: no run artifacts created" bash -c "! ls '$ROOT/bad-run/events.jsonl' '$ROOT/bad-run/status.json' >/dev/null 2>&1"
+"$WORKER" --resume --run-dir "$ROOT/no-such-run" > /dev/null 2>&1
+BR2=$?
+check "bad resume: missing run dir exits 64 (got $BR2)" test "$BR2" -eq 64
+"$WORKER" --resume --run-dir "$ROOT/l2-run" --cwd "$ROOT/l1" > /dev/null 2>&1
+BR3=$?
+check "bad resume: --cwd rejected on a Resume (got $BR3)" test "$BR3" -eq 64
 
 # ---------- L2 Idle timeout: deterministic, no GLM involvement (PI_WORKER_PI hook) ----------
 echo "L2 idle"

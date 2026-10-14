@@ -104,7 +104,14 @@ If it fails, stop and show the user the error (usually a bad key or model id in 
 
 - `0` / `ok`: pi finished without an API error. This is not success yet: apply the verification gate.
 - `2` / `auth`, `3` / `quota`, `4` / `transient` (already retried by pi and by the wrapper): the GLM side is unusable right now. Stop dispatching new External workers, let running ones finish, and ask the user: wait and retry, switch the remaining work to `sonnet`, or pause. Never switch to `sonnet` on your own: saving Claude quota is the point of this backend.
-- `5` / `timeout`: the worker reached its Time limit. Read the tail of `stderr.log` and `result.md` if any. Re-brief once in a fresh run dir with the failure appended; if it fails again, ask the user. (A stopped-at-the-Time-limit session is meant to be Resumable eventually; until Resume exists, keep this handling.)
+- `5` / `timeout`: the worker reached its Time limit; the pi session is kept and can be **Resumed** (GLOSSARY.md). Read the tail of `stderr.log` and `result.md` if any, then check `status.json` for progress. With progress (`new_commits` ≥ 1 or `dirty` is `true`), Resume it once — same worktree, same run dir, same pi session, no new Brief:
+
+  ```bash
+  <skill dir>/scripts/pi-worker.sh --resume --run-dir <run dir> \
+    --time-limit <role Time limit> --idle-timeout <GLM_IDLE_TIMEOUT>
+  ```
+
+  The wrapper reads the worktree, model, skills and session from the run dir; never pass `--cwd`, `--brief`, `--model` or `--skill` to a Resume. Afterwards apply the verification gate as usual: `segments` is now 2 and `new_commits` still counts from the first segment's base head, so the gate sees every commit across segments. On a second `timeout`, or a first `timeout` with no progress (`new_commits` = 0 and a clean tree), do not Resume again — ask the user.
 - `6` / `error`, `7` / `stalled`: the worker failed (`stalled` = the Idle timeout fired: no pi events for `GLM_IDLE_TIMEOUT`, so the session is stuck — do not continue that session). Read the tail of `stderr.log` and `result.md` if any. Re-brief once in a fresh run dir with the failure appended; if it fails again, ask the user.
 
 **Verification gate** (implementers and fix). Never trust the worker's report alone. All must hold:
@@ -118,5 +125,5 @@ If any check fails, re-brief once with what is missing; if it still fails, ask t
 ## Report at the end
 
 - Which backend and model ran each role (implement / merge / fix / review), and any role that ran on a different backend than configured, and why.
-- For External workers: one line per run with ticket, status, duration and run directory; whether the run overlapped GLM peak hours.
+- For External workers: one line per run with ticket, status, segments (`status.json`; more than 1 means it was Resumed), duration and run directory; whether the run overlapped GLM peak hours.
 - The review findings per axis, and how they were resolved.
