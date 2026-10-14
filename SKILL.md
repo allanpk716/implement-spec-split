@@ -111,7 +111,7 @@ If it fails, stop and show the user the error (usually a bad key or model id in 
     --time-limit <role Time limit> --idle-timeout <GLM_IDLE_TIMEOUT>
   ```
 
-  The wrapper reads the worktree, model, skills and session from the run dir; never pass `--cwd`, `--brief`, `--model` or `--skill` to a Resume. Afterwards apply the verification gate as usual: `segments` is now 2 and `new_commits` still counts from the first segment's base head, so the gate sees every commit across segments. On a second `timeout`, or a first `timeout` with no progress (`new_commits` = 0 and a clean tree), do not Resume again — ask the user.
+  The wrapper reads the worktree, model, skills, thinking level and session from the run dir; never pass `--cwd`, `--brief`, `--model`, `--skill` or `--thinking` to a Resume. Afterwards apply the verification gate as usual: `segments` is now 2 and `new_commits` still counts from the first segment's base head, so the gate sees every commit across segments. On a second `timeout`, or a first `timeout` with no progress (`new_commits` = 0 and a clean tree), do not Resume again — ask the user.
 - `6` / `error`, `7` / `stalled`: the worker failed (`stalled` = the Idle timeout fired: no pi events for `GLM_IDLE_TIMEOUT`, so the session is stuck — do not continue that session). Read the tail of `stderr.log` and `result.md` if any. Re-brief once in a fresh run dir with the failure appended; if it fails again, ask the user.
 
 **Verification gate** (implementers and fix). Never trust the worker's report alone. All must hold:
