@@ -34,6 +34,19 @@
 12. **GLM 不可用时不能自动换回 sonnet。** 用 GLM 就是为了省 CC 额度，自动切回去这个目的就没了。碰到 auth、quota 错误，或者重试完还是失败，要先停下来问用户。
 13. **merger 一次只能跑一个，GLM worker 最多同时跑 `GLM_MAX_PARALLEL` 个。** 智谱高峰期会限流，所以并发数不能开大。
 14. **pi 用 `--no-extensions --no-skills` 启动，只用 `--skill` 加载 tdd 技能。** 这样 Orca 装在 `~/.pi/agent` 下的扩展和 orchestration 技能不会混进 worker。
+15. **External worker 的停止条件是两道，不再共用一个 30 分钟墙钟。**
+    - `--time-limit` 按角色设定（implementer/fix 长上限，merger/exploration 短上限），按**整段**计：从本段第一次 attempt 开始量到段内最后一次 attempt，中间的 API 错误重试等待也计入；单个 attempt 只用剩余预算，预算耗尽就按 `timeout` 停，不新开 attempt。到点退出码 `5`、状态 `timeout`；`--idle-timeout`（默认 600s）监控事件流是否增长，超时退出码 `7`、状态 `stalled`。状态名 `timeout` 是沿用改造前的外部契约，不再改名，含义就是"到达 Time limit"。
+    - 判卡死看事件流增长而不是墙钟：pi 的消息间隔实测最大约 114s，它自己的命令超时至多 300s，所以 600s 的 Idle timeout 不会误杀还在推进的 worker。
+    - 停止 worker 时要连进程树一起杀（Windows 下 `taskkill //T //F`，配 `/proc/<pid>/winpid` 拿 Windows pid；Git Bash 的 `kill` 只能杀到 pi 本体，够不到它的工具子进程，会留孤儿）。pi 自己退出 124/137（比如被外部 OOM 杀）不算到达 Time limit，按普通 `error` 处理，不能 Resume。
+    - `stalled` 按 error 处理（重写一次 Brief，再失败问用户），不续跑：卡死的会话不值得救。到 Time limit 停下的 worker 由 Orchestrator 决定是否 Resume（见要点 16）。
+    - 别把它改回一个大墙钟超时，也别加自动续跑/重试循环。
+    - `PI_WORKER_PI` 环境变量可替换 pi 可执行文件（与 `PI_WORKER_API_KEY` 同思路），自测用它造假 pi，确定性地测 Idle timeout、整段 Time limit、非 watchdog 杀死这些路径。
+16. **Resume 由 Orchestrator 决定，wrapper 永不自动续命。**
+    - fresh run 一开始就把 cwd、model、skills、thinking 级别、session id 和第一段的 base head 写进 run dir 的 `resume.json`；`--resume --run-dir` 读取它们、在同一个 worktree 里续接同一个 pi 会话（Resume 提示词要求先把能过测试的成果 commit），向 `events.jsonl`/`stderr.log` 追加、继续编号新增 attempt 文件、覆盖 `status.json`。新一段的 Time limit、Idle timeout 和 API 错误重试预算由 Resume 调用的旗标决定，每段自己的预算。
+    - 每次 Resume 都再烧一段 GLM 额度，所以只有 Orchestrator 能决定续跑：`timeout` 且有进展（`new_commits` ≥ 1 或树是脏的）才 Resume 一次；第二次 `timeout` 或没进展就问用户。`new_commits` 永远从第一段的 base head 起算，`segments` 记录段数（fresh = 1，每次 Resume +1），验收检查因此能看到跨段的全部 commit。
+    - `stalled`（卡死）绝不 Resume：按 error 处理，重写一次 Brief，再失败问用户。
+    - 坏 Resume（run dir 不存在、没有存档、存档指向的 pi session 文件已不在 run dir 的 `sessions/` 里、或带了 `--cwd`/`--brief`/`--model`/`--skill`/`--thinking`）退出码 64，绝不悄悄新开一个会话：绝不能把续跑落到别的 worktree 或别的 Brief 上。pi 对找不到的 `--session-id` 只在 stderr 警告一声就新建同 id 的新会话，所以 session 文件必须由 wrapper 自己查（pi 把会话存在 `<时间戳>_<session id>.jsonl`，首行是 `{"type":"session","id":...}`）。
+    - 别给 wrapper 加自动 Resume 或不问用户的多重 Resume，那会把额度烧穿。
 
 ## 同步上游
 
@@ -57,7 +70,7 @@
   - 运行目录里的文件都在；
   - pi 确实读了 tdd 的 `SKILL.md`。
 
-  另外还会测超时和认证失败两条路径。全部通过就删掉临时目录，失败则保留，方便排查。改了 `pi-worker.sh` 或升级了 pi 以后，都要重跑一遍。
+  另外还会测 Time limit（`--time-limit`）、Resume（先把一个小 tdd ticket 用很小的 Time limit 停在退出码 5，再 `--resume --run-dir` 用正常上限续完，断言退出码 0、`segments` = 2、`new_commits` 从第一段 base 起算、树干净、我们重跑测试通过、两个段的事件都在 `events.jsonl` 里）、坏 Resume（没有存档的 run dir 退出码 64；存档里 session 文件丢了的也退出码 64，都不需要真 pi）、Idle timeout、非 watchdog 杀死（假 pi 自杀成 137，断言按 `error` 处理而不是可 Resume 的 `timeout`）、整段 Time limit（假 pi 每次都报 429，重试等待要把整段预算烧完，断言不再新开 attempt 而按 `timeout` 停）、杀进程树（假 pi 起一个原生 node 子进程，断言 pi 被杀时子进程也死）和认证失败几条路径，除前两条外全用 `PI_WORKER_PI` 造假 pi，确定性、不依赖 GLM。全部通过就删掉临时目录，失败则保留，方便排查。改了 `pi-worker.sh` 或升级了 pi 以后，都要重跑一遍。
 - **L3 端到端**（手动）：私有仓库 `allanpk716/iss-e2e-test` 先留着，以后做回归测试接着用，本地路径是 `~/orca/iss-e2e-test`，已经加进 Orca。再测时开一个新 spec 就行，不用重建仓库。第一次搭建的步骤如下：
   1. 在 GitHub 上建一个临时的私有仓库，加一个最简单的 Node 项目（只要能跑 `npm test` 就行）。再执行 `/setup-matt-pocock-skills`，让 tracker 用 GitHub。
   2. 开一个 spec issue，下面挂 3 个子 issue，其中 #2 被 #1 阻塞。
@@ -66,6 +79,7 @@
      - 不带参数时，第 0 步能找出这个 spec；
      - 第一批只派发了 #1 和 #3，#1 合并之后才派发 #2；
      - merger 是一个一个跑的；
+     - 到 Time limit 被停下的 worker 被 Orchestrator Resume 一次（`--resume --run-dir`），续跑后通过验收检查（`segments` = 2）；
      - review 的两个子代理用的是 `REVIEW_MODEL`；
      - fix 也是由 pi 来跑的；
      - 最后的报告里列出了每次运行的目录，并且标注了是否在高峰期。
@@ -90,9 +104,23 @@
 - review 的两个子代理确实跑在 `REVIEW_MODEL`（opus）上。
 - 发现的问题：主代理用 sed 从上一份 Brief 改出下一份，结果留下了错误的 issue 编号。已经在 `SKILL.md` 里要求每份 Brief 都从头写。
 
+## 已验证（2026-10-14，`iss-e2e-test` 的 spec #5，L3 测试 Time limit 和 Resume）
+
+- 为了确定能触发 Time limit，#6 implementer 的第一段故意把 Time limit 设得很小。其余角色都用 Config 里的值。
+- 第一次给 60s：worker 停在 `timeout`，没有任何进展（`new_commits` = 0，工作区干净）。主代理按规则判断出"不 Resume，要问用户"。
+- 换新的运行目录，给 150s：停在 `timeout` 时工作区是脏的（有进展）。主代理用 `--resume` 续了一次，用的是 `GLM_TIME_LIMIT_IMPL`：
+  - 用的还是同一个 pi 会话：只有一个会话文件，第 2 段收到的是 Resume 提示词；
+  - 第 2 段 87s 就提交完成；
+  - `segments` = 2，`new_commits` = 2，从第一段的 base head 起算；
+  - 通过了验收检查，merger 重跑测试也通过了。
+- `--time-limit` 和 `--idle-timeout` 在真实运行中都生效了。merger 用的是 `GLM_TIME_LIMIT_SHORT`，各跑了 16–21s。
+- 发现的问题：Brief 直接写在运行目录里时，wrapper 用 `cp` 拷贝自己，会往 stderr 打一条 "same file"。已经改成同一个文件就跳过。
+
 ## 尚未验证的事项
 
 - 用 `--impl sonnet` 跑一遍完整流程，确认实现子代理真的跑在 `IMPLEMENT_MODEL` 上。
+- `stalled` 在真实 L3 运行里的表现（目前只有 L2 用假 pi 做的确定性用例）。
+- 第二次 `timeout` 时主代理会停下来问用户（2026-10-14 的 L3 里 Resume 一次就完成了，没走到这条路径）。
 - exploration 角色。在小仓库里，主代理会按"可选"直接跳过它。
 - 验收检查能不能拦住不合格的 worker。L3 里所有 worker 一次就通过了，没有触发过拦截。
 - GLM 出错的处理：碰到 auth、quota 或 transient 错误时，主代理会不会停下来问用户。L2 只测了 wrapper 会不会给出正确的退出码。
