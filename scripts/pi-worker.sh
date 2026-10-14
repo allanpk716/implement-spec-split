@@ -9,31 +9,36 @@
 #                [--retries 2] [--retry-wait 60]
 #
 # Terms follow GLOSSARY.md: --time-limit is the per-role Time limit (hard cap on one
-# segment); --idle-timeout is the Idle timeout (pi is judged stuck when its event
-# stream has not grown for that long).
+# segment, counted from the segment's start across all of its attempts and retry
+# waits); --idle-timeout is the Idle timeout (pi is judged stuck when its event
+# stream has not grown for that long; per attempt, since it watches the current
+# attempt's event stream).
 #
 # --resume (GLOSSARY.md: Resume) continues the same pi session in the same worktree
 # and run dir, from the state a fresh run persisted in the run dir's resume.json
 # (cwd, model, skills, thinking level, session id, base head). It needs no --cwd,
-# --brief, --model or --skill, and rejects them: a Resume must not land in another
-# worktree or run under a different Brief. It appends to events.jsonl and stderr.log,
-# adds new attempt files (numbering continues across segments) and overwrites
-# status.json. The new segment's Time limit, Idle timeout and API-error retry budget
-# come from the flags of the Resume call. --resume on a missing run dir, or one
-# without saved state, exits 64 and never starts a fresh session.
+# --brief, --model, --skill or --thinking, and rejects them: a Resume must not land
+# in another worktree or run under a different Brief. It appends to events.jsonl and
+# stderr.log, adds new attempt files (numbering continues across segments) and
+# overwrites status.json. The new segment's Time limit, Idle timeout and API-error
+# retry budget come from the flags of the Resume call. --resume on a missing run
+# dir, one without saved state, or one whose saved pi session file is gone, exits 64
+# and never starts a fresh session.
 #
 # Writes into --run-dir: brief.md, events.jsonl, stderr.log, sessions/, resume.json,
 # attempt-<n>.jsonl, result.md, status.json. Prints status.json on stdout. Exit codes:
 #   0 ok (pi finished without an API error) | 2 auth error | 3 quota exhausted | 4 transient error (retries used up)
 #   5 Time limit reached (Resumable) | 6 other error | 7 stalled (Idle timeout; not Resumable) | 64 bad usage
 #
-# status.json: attempts and duration_s cover this segment only (the retry budget is
-# per segment); segments is 1 for a fresh run, +1 per Resume; new_commits counts from
-# the FIRST segment's base head, so the verification gate sees every commit across
-# segments.
+# status.json: attempts and duration_s cover this segment only (the retry budget and
+# the Time limit are per segment); segments is 1 for a fresh run, +1 per Resume;
+# new_commits counts from the FIRST segment's base head, so the verification gate
+# sees every commit across segments.
 #
-# Test hooks (same spirit): PI_WORKER_PI overrides the pi executable;
-# PI_WORKER_API_KEY forces a specific API key.
+# Test hooks: selftest.sh uses them to exercise wrapper paths deterministically,
+# without GLM. PI_WORKER_PI swaps in a fake pi executable (Idle timeout, segment
+# Time limit accounting, non-watchdog kills, lost session files); PI_WORKER_API_KEY
+# forces a specific API key (auth failure).
 #
 # Never trust "ok" alone: it only means pi finished without an API error. The caller
 # still checks the worktree (new commits, clean tree) and re-runs the tests.
@@ -165,6 +170,26 @@ if $RESUME; then
     esac
   done <<< "$STATE_OUT"
   [ -d "$CWD" ] || die "--resume: saved worktree does not exist: $CWD"
+  # pi itself would only warn on stderr and then start a FRESH session with the same
+  # id when --session-id matches no file; the wrapper must refuse instead. pi stores
+  # each session as <timestamp>_<session id>.jsonl under --session-dir, with a
+  # {"type":"session","id":...} header as its first line.
+  SESSION_FILE_FOUND=$(node -e '
+    const fs = require("fs"), path = require("path");
+    const dir = process.argv[1], id = process.argv[2];
+    let found = false;
+    try {
+      for (const f of fs.readdirSync(dir)) {
+        if (!f.endsWith(".jsonl")) continue;
+        try {
+          const h = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8").split("\n", 1)[0]);
+          if (h && h.type === "session" && h.id === id) { found = true; break; }
+        } catch {}
+      }
+    } catch {}
+    process.stdout.write(found ? "yes" : "no");
+  ' "$(winpath "$RUN_DIR/sessions")" "$SESSION_ID")
+  [ "$SESSION_FILE_FOUND" = yes ] || die "--resume: no pi session file for session $SESSION_ID in $RUN_DIR/sessions; not starting a fresh session"
   SEGMENTS=$((SEGMENTS + 1))
   write_state
 else
@@ -189,32 +214,56 @@ FIRST_PROMPT="Do the task described in the attached brief. Finish with the repor
 RETRY_PROMPT="The previous attempt was interrupted by an API error. Continue the task from where you left off, then finish with the report the brief asks for."
 RESUME_PROMPT="You were paused because you reached the time limit. First commit the work that is done and passes its tests, then continue the remaining work. If you still cannot finish, list the unfinished acceptance criteria in your final report."
 
+# Kill pi and its whole process tree: pi's tool children (npm test, shells) are
+# native Windows processes that an MSYS `kill` cannot reach, so on Git Bash kill the
+# Windows tree via taskkill //T on the pid from /proc; elsewhere fall back to
+# kill -> grace -> kill -9.
+kill_tree() {
+  if [ -r "/proc/$1/winpid" ] && command -v taskkill >/dev/null 2>&1; then
+    taskkill //T //F //PID "$(cat "/proc/$1/winpid")" >/dev/null 2>&1
+    return
+  fi
+  kill "$1" 2>/dev/null
+  local grace=0
+  while kill -0 "$1" 2>/dev/null && [ "$grace" -lt 6 ]; do sleep 5; grace=$((grace + 1)); done
+  kill -9 "$1" 2>/dev/null
+}
+
 # Run one pi attempt in the background under a watchdog that enforces both limits:
-#   - Time limit: the attempt must end within $TIME_LIMIT seconds;
-#   - Idle timeout: pi's event stream must grow at least every $IDLE_TIMEOUT seconds
-#     (pi streams events densely; the largest observed gap between messages is ~114s).
-# Sets WATCHDOG to "time-limit" or "idle" when we killed pi, "" when it exited on its own.
+#   - Time limit: the whole segment (every attempt plus the retry waits between
+#     them) must end within $TIME_LIMIT seconds of the segment's start ($SEG_START);
+#     each attempt only gets the remaining budget;
+#   - Idle timeout: per attempt, pi's event stream must grow at least every
+#     $IDLE_TIMEOUT seconds (pi streams events densely; the largest observed gap
+#     between messages is ~114s).
+# Sets WATCHDOG to "time-limit" or "idle" when we killed pi, "" when it exited on
+# its own. When the segment budget is already spent before an attempt would start,
+# it flags "time-limit" without launching pi.
 run_pi() {
   WATCHDOG=""
+  local deadline=$((SEG_START + TIME_LIMIT))
+  if [ "$(date +%s)" -ge "$deadline" ]; then
+    echo "=== segment Time limit spent before attempt $ATTEMPT $(date -Iseconds) ===" >> "$STDERR"
+    : > "$ATTEMPT_EVENTS"
+    WATCHDOG="time-limit"
+    return
+  fi
   (cd "$CWD" && exec "$PI_BIN" "${ARGS[@]}" "${PROMPT[@]}" \
       </dev/null >"$ATTEMPT_EVENTS" 2>>"$STDERR") &
   PI_PID=$!
-  local started last_change last_size now size grace
-  started=$(date +%s); last_change=$started; last_size=0
+  local last_change last_size now size
+  last_change=$(date +%s); last_size=0
   while kill -0 "$PI_PID" 2>/dev/null; do
     sleep 5
     now=$(date +%s)
-    size=$(($(wc -c < "$ATTEMPT_EVENTS" 2>/dev/null || echo 0)))
+    if [ -f "$ATTEMPT_EVENTS" ]; then size=$(( $(wc -c < "$ATTEMPT_EVENTS") )); else size=0; fi
     if [ "$size" -gt "$last_size" ]; then last_size=$size; last_change=$now; fi
-    if [ $((now - started)) -ge "$TIME_LIMIT" ]; then WATCHDOG="time-limit"; break; fi
+    if [ "$now" -ge "$deadline" ]; then WATCHDOG="time-limit"; break; fi
     if [ $((now - last_change)) -ge "$IDLE_TIMEOUT" ]; then WATCHDOG="idle"; break; fi
   done
   if [ -n "$WATCHDOG" ]; then
     echo "=== watchdog killed pi ($WATCHDOG) $(date -Iseconds) ===" >> "$STDERR"
-    kill "$PI_PID" 2>/dev/null
-    grace=0
-    while kill -0 "$PI_PID" 2>/dev/null && [ "$grace" -lt 6 ]; do sleep 5; grace=$((grace + 1)); done
-    kill -9 "$PI_PID" 2>/dev/null
+    kill_tree "$PI_PID"
   fi
   wait "$PI_PID"
   PI_EXIT=$?
@@ -248,6 +297,7 @@ classify() {
 }
 
 START=$(date +%s)
+SEG_START=$START   # the Time limit budget is anchored at the segment's first attempt
 SEG_ATTEMPT=0
 STATUS="error"; ERROR=""; EXIT_CODE=6
 while :; do
@@ -274,9 +324,10 @@ while :; do
   if [ "$WATCHDOG" = "idle" ]; then
     STATUS="stalled"; ERROR="Idle timeout: no pi events for ${IDLE_TIMEOUT}s"; EXIT_CODE=7; break
   fi
-  if [ "$PI_EXIT" -eq 124 ] || [ "$PI_EXIT" -eq 137 ]; then
-    STATUS="timeout"; ERROR="pi exited with code $PI_EXIT inside the ${TIME_LIMIT}s Time limit"; EXIT_CODE=5; break
-  fi
+  # Only the watchdog's kill means the Time limit fired. A pi that exits 124/137 on
+  # its own (OOM, external SIGKILL, ...) is NOT Resumable: it falls through to the
+  # normal classification below (`error`, unless the API-error classifier says
+  # otherwise).
   IFS=$'\t' read -r CLS MSG < <(classify "$ATTEMPT_EVENTS")
   case "$CLS" in
     ok) STATUS="ok"; ERROR=""; EXIT_CODE=0; break ;;
