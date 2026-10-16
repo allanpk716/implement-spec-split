@@ -18,7 +18,7 @@ Terms (Orchestrator, In-session subagent, External worker, Implement backend, Br
   - Override per run with an argument: `/implement-spec-split <spec> --impl pi` (or `--impl sonnet`).
 - `IMPLEMENT_MODEL` = `sonnet` — model for implementing roles when the backend is `sonnet`.
 - `GLM_MODEL` = `glm/glm-5.3` — pi `provider/id`; the provider, key and model list live in `~/.pi/agent/models.json`, never in this repo.
-- `GLM_MAX_PARALLEL` = `2` — at most this many External workers at once.
+- `GLM_MAX_PARALLEL` = `2` — at most this many External workers at once. Override per run with an argument: `/implement-spec-split <spec> --impl pi --parallel 4`. The override replaces the default for that run only. Keep it small (2–3, at most 4 off-peak): Zhipu rate-limits during peak hours, and one quota/429 among the workers stops the whole run to ask the user.
 - `GLM_TIME_LIMIT_IMPL` = `3600` — Time limit (seconds, GLOSSARY.md) for implementer and fix External workers.
 - `GLM_TIME_LIMIT_SHORT` = `1200` — Time limit (seconds) for merger and exploration External workers.
 - `GLM_IDLE_TIMEOUT` = `600` — Idle timeout (seconds, GLOSSARY.md) for every External worker: no pi events for this long means the worker is stuck and is killed as `stalled`.
@@ -88,7 +88,7 @@ If it fails, stop and show the user the error (usually a bad key or model id in 
    - the rules for its role from the Steps above (for implementers: tdd, commit, clean tree, merge the integration tip; for exploration: do not modify the repo);
    - the repo's real test command if you know it;
    - "Final message: files changed, test command and result, anything you could not do or are unsure about."
-3. Run it with Bash, `run_in_background: true`, never more than `GLM_MAX_PARALLEL` at once:
+3. Run it with Bash, `run_in_background: true`, never more than `GLM_MAX_PARALLEL` at once (or the run's `--parallel` override, which replaces it for that run):
 
    ```bash
    <skill dir>/scripts/pi-worker.sh --cwd <worktree> --brief <brief file> --run-dir <run dir> \
