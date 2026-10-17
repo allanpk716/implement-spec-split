@@ -156,6 +156,15 @@
 - 跑完没有残留的 codex 进程；每个 run dir 上 `progress.sh` 都显示 `finished: ok`，和 `status.json` 一致。
 - 本次没有走到 Resume、`stalled` 和补救这几条路径（V3 用真 GLM 测过 Resume，V1 用假 codex 测过其余路径）。
 
+## 已验证（2026-10-18，全局"写代码交给 codex worker"流程，即 V5）
+
+全局 `~/.claude/CLAUDE.md` 改成用 `codex-worker.sh` 写代码之后，在 iss-e2e-test 里新开一个会话，让它修 V4 review 留下的取整 bug（`0 K` 输出 `-273.1 °C`）。提需求时没提 codex。
+
+- 主代理没有自己用 Edit/Write 改代码，也没用 `pi -p`。它写的 Brief 很规范：根因定位到 `format.js:9`，写了改法和验收标准，也写了"不要 commit"和"不要 rm -rf"。
+- 它用 `codex-worker.sh` 在后台运行 worker，22s 就 `ok` 了。
+- 主代理看了 diff、跑了测试（68 项全过），然后自己 commit 并 push。
+- 问它"进行到哪了"时任务已经做完，所以它直接汇报了结果，没有调 `progress.sh`。运行中用 `progress.sh` 查进度，在 V3、V4 里验证过。
+
 ## 尚未验证的事项
 
 - 用 `--impl sonnet` 跑一遍完整流程，确认实现子代理真的跑在 `IMPLEMENT_MODEL` 上。
