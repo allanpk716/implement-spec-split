@@ -95,14 +95,15 @@
 - **L3 端到端**（手动）：私有仓库 `allanpk716/iss-e2e-test` 先留着，以后做回归测试接着用，本地路径是 `~/orca/iss-e2e-test`，已经加进 Orca。再测时开一个新 spec 就行，不用重建仓库。第一次搭建的步骤如下：
   1. 在 GitHub 上建一个临时的私有仓库，加一个最简单的 Node 项目（只要能跑 `npm test` 就行）。再执行 `/setup-matt-pocock-skills`，让 tracker 用 GitHub。
   2. 开一个 spec issue，下面挂 3 个子 issue，其中 #2 被 #1 阻塞。
-  3. 在这个仓库里执行 `/implement-spec-split --impl pi`。
+  3. 在这个仓库里执行 `/implement-spec-split --impl codex`（或 `--impl pi`）。
   4. 检查以下几点：
      - 不带参数时，第 0 步能找出这个 spec；
      - 第一批只派发了 #1 和 #3，#1 合并之后才派发 #2；
      - merger 是一个一个跑的；
      - 到 Time limit 被停下的 worker 被 Orchestrator Resume 一次（`--resume --run-dir`），续跑后通过验收检查（`segments` = 2）；
      - review 的两个子代理用的是 `REVIEW_MODEL`；
-     - fix 也是由 pi 来跑的；
+     - fix 也是由 External worker（codex 或 pi）来跑的；
+     - （codex）跑完没有残留的 codex/node 进程，`progress.sh` 的输出和 `status.json` 一致；
      - 最后的报告里列出了每次运行的目录，并且标注了是否在高峰期。
   5. 用 `--impl sonnet` 再跑一遍。这次重点看：实现类的子代理确实用了 `IMPLEMENT_MODEL`，而且全程没有调用 `pi-worker.sh`。
 
@@ -142,9 +143,21 @@
 - `selftest-codex.sh` 的 V1（42 项）、V2（8 项）、V3（16 项）全部通过，跑完没有残留进程。
 - 发现并修复了一个只在真实运行里出现的问题：Windows pid 复用，导致已结束的 run 被报成 `running`。
 
+## 已验证（2026-10-18，`iss-e2e-test` 的 spec #8，L3 测试 `--impl codex`，即 V4）
+
+- 不带参数运行，第 0 步找到了 spec #8，并先跑了 codex 的 preflight（`selftest-codex.sh --only L1`）。
+- 调度正确：#9 和 #11 并行；#9 合并之后才派发 #10；merger 一次只跑一个，时间上不重叠。
+- 8 次 worker 运行（3 个 implementer、4 个 merger、1 个 fix）全部是 codex：
+  - 都是一次 `ok`，单段，耗时 22–144s；
+  - 整个 spec 从派发到修复合并共约 11 分钟。
+- 写代码的 worker（implementer 和 fix）都读了 tdd 的 `SKILL.md`。每次运行都通过了验收检查。
+- review 的两个子代理跑在 opus 上，fix 由 codex 完成，修了 3 项。
+- 第 9 步 push 和关单之前，主代理停下来问了用户。
+- 跑完没有残留的 codex 进程；每个 run dir 上 `progress.sh` 都显示 `finished: ok`，和 `status.json` 一致。
+- 本次没有走到 Resume、`stalled` 和补救这几条路径（V3 用真 GLM 测过 Resume，V1 用假 codex 测过其余路径）。
+
 ## 尚未验证的事项
 
-- `--impl codex` 的 L3 端到端（V4）。验证时在 L3 清单之外再检查两点：跑完没有残留的 codex/node 进程；每次运行结束时 `progress.sh` 的最后输出和 `status.json` 一致。
 - 用 `--impl sonnet` 跑一遍完整流程，确认实现子代理真的跑在 `IMPLEMENT_MODEL` 上。
 - `stalled` 在真实 L3 运行里的表现（目前只有 L2 用假 pi 做的确定性用例）。
 - 第二次 `timeout` 时主代理会停下来问用户（2026-10-14 的 L3 里 Resume 一次就完成了，没走到这条路径）。
