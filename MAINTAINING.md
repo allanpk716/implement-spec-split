@@ -21,11 +21,15 @@
    - Agent 工具的 `model` 参数只能选 `sonnet`、`opus`、`haiku`、`fable`。
    - 服务地址和 token 是整个进程共用的，所以没法让会话里的某一个子代理单独走 GLM。
    - 所以要另起一个 CLI 进程来跑 GLM，会话里只留下主代理和 review。
-9. **External worker 用 pi，不用 `claude -p`，也不用 codex。**
+9. **External worker 用 codex（首选）或 pi，不用 `claude -p`。**
    - `claude -p` 接 GLM 跑无头模式，会被检测、被限流，下午高峰期更明显。这是用户实际用下来的经验。
-   - codex 依赖本机 cc-switch 代理（`127.0.0.1:15721`），代理不开就用不了。它也不读 `CLAUDE.md`，还加载不了 Claude 插件里的 tdd 技能。另外它的 `workspace-write` 沙箱会拦掉 worktree 里的 commit，因为 commit 要写主仓库的 `.git/worktrees/`，那不在放行范围内。
-   - pi 直接连 bigmodel，能读 `CLAUDE.md`，能用 `--skill` 加载 tdd 技能，也没有沙箱。
-   - pi 不在智谱公布的 Coding Plan 支持工具名单里，有被风控的可能。用户已经知道并接受。
+   - 以前不用 codex 的几条理由，2026-10-17 的实验大多推翻了（证据见 `docs/codex-backend.md`）：
+     - 不读 `CLAUDE.md`：加 `-c 'project_doc_fallback_filenames=["CLAUDE.md"]'` 就读（E2）；
+     - 加载不了 tdd 技能：在提示词里写"先读 `<tdd dir>/SKILL.md`"就行，wrapper 的 `--skill` 就是这么做的（E3）；
+     - 沙箱拦 worktree commit：改用 `--dangerously-bypass-approvals-and-sandbox`，和 pi 一样无沙箱（E1、E8，约束 2）；
+     - 依赖本机代理：依然成立，现在是 Ferryman（`127.0.0.1:15722`）。所以 wrapper 先探端口，preflight 也会先探。
+   - 换成 codex 的原因是**能看到进度**：pi 的 `-p` 模式外面看不出它在干什么，用户碰到过 worker 卡很久却没法判断。codex 的 `--json` 每个命令、改动、说明都有事件，`progress.sh` 能直接展示。
+   - pi 后端保留，等 codex 后端用过一段时间再决定删不删。pi 不在智谱公布的 Coding Plan 支持工具名单里，有被风控的可能，用户已经知道并接受。
 10. **pi 的 JSON 模式出错时退出码也是 0。**
     - `pi-worker.sh` 不看退出码，而是看事件流里最后一条 assistant 消息的 `stopReason`。
     - 再根据 `errorMessage` 判断错误类型：auth、quota、transient 或 error。
@@ -47,6 +51,17 @@
     - `stalled`（卡死）绝不 Resume：按 error 处理，重写一次 Brief，再失败问用户。
     - 坏 Resume（run dir 不存在、没有存档、存档指向的 pi session 文件已不在 run dir 的 `sessions/` 里、或带了 `--cwd`/`--brief`/`--model`/`--skill`/`--thinking`）退出码 64，绝不悄悄新开一个会话：绝不能把续跑落到别的 worktree 或别的 Brief 上。pi 对找不到的 `--session-id` 只在 stderr 警告一声就新建同 id 的新会话，所以 session 文件必须由 wrapper 自己查（pi 把会话存在 `<时间戳>_<session id>.jsonl`，首行是 `{"type":"session","id":...}`）。
     - 别给 wrapper 加自动 Resume 或不问用户的多重 Resume，那会把额度烧穿。
+17. **codex 后端的坑（`codex-worker.sh`，详细证据和设计约束见 `docs/codex-backend.md`）。** 改 wrapper 前先读那份文档，别把这些改回去：
+    - codex 和 wrapper 之间不能夹 MSYS 程序（`timeout`、`env`、管道）。夹了，`taskkill //T` 就杀不到 codex 的子进程（F9）。假 codex 也要用 `exec node` 的 sh 包一层，不能写 `#!/usr/bin/env node`。
+    - stdin 必须是会结束的文件。codex 会一直读 stdin，开着的管道会让它永远挂住（F8）。
+    - 不看 codex 的退出码（失败一律是 1），看事件：`turn.completed` 算 ok，`turn.failed` 按 message 分类。429 分不出是限流还是额度用完，因为 codex 把响应正文丢了（F1），所以按 transient 处理，错误信息里注明。
+    - Idle timeout 只按 `thread.*`/`turn.*`/`item.*` 事件计时。`Reconnecting...` 这类顶层 `error` 行不算进展，否则代理断了会一直被当成活着（F4）。连续 3 条 `waiting for network` 就判代理断了。
+    - 流空闲上限和重试次数用 `-c` 钉死（120s × 2 次重试），否则 SSE 半开时 codex 自己要拖约 30 分钟（F6）。V2 实测 365s 退出。
+    - Resume 用 `codex exec <全部 exec 级参数> resume <thread_id> -`，exec 级参数必须写在 `resume` 之前（E5）。会话文件在全局 `~/.codex/sessions/`，坏 Resume 的检查是找文件名含 thread_id 的 rollout。
+    - 答完不收尾：Idle timeout 触发时，如果最后一个进展事件就是 `agent_message`、也没有在跑的命令，把它存进 `result.md`，状态仍是 `stalled`，由 Orchestrator 走验收检查决定（插件 issue #391）。中途的说明文字（"我先看看 X"）不算。
+    - Windows 的 pid 会很快被复用。`pid` 文件记录"pid + 进程启动时间"；`progress.sh` 先看 `status.json` 是否比 `pid` 新，再核对启动时间（V3 实测碰到过）。
+    - bypass 下 codex 仍有内置命令策略，会拒绝 `rm -rf` 和 `Remove-Item -Recurse`（E15）。Brief 里别让它递归删目录。
+    - 不走 codex-plugin-cc：它没有卡死检测和 Time limit，后台任务会永远停在 running，在 Git Bash 下取消会失败，还依赖本地补丁（见文档第一节"参考"）。插件只留给临时手动用。
 
 ## 同步上游
 
@@ -64,8 +79,14 @@
 
 ## 自测
 
-- **L1 连通性**：`scripts/selftest.sh --only L1`。用 `--impl pi` 跑技能时，第 0 步也会执行这个检查。
-- **L2 wrapper**：`scripts/selftest.sh`。它会在 `~/.cache/implement-spec-split-selftest/` 下建一个临时仓库和 worktree，让 pi 用 tdd 技能实现一个很小的 ticket，然后检查这几件事：
+- **codex 后端**：`scripts/selftest-codex.sh [--only L1|V1|V2|V3]`。各级的内容见脚本开头的注释和 `docs/codex-backend.md` 第三节：
+  - V1：假 codex，确定性，不花 GLM；
+  - V2：真 codex 连假服务器（`scripts/testing/mock-responses.js`），不花 GLM，要跑 6–7 分钟；
+  - L1、V3：真 GLM，要求 Ferryman 开着。V3 会跑 tdd 小 ticket、Resume，以及 2 个 worker 并发。
+
+  改了 `codex-worker.sh` 或 `progress.sh`，或者升级了 codex，都要把 V1、V2、V3 全部重跑一遍。用 `--impl codex` 跑技能时，第 0 步会跑 L1。
+- **L1 连通性（pi）**：`scripts/selftest.sh --only L1`。用 `--impl pi` 跑技能时，第 0 步也会执行这个检查。
+- **L2 wrapper（pi）**：`scripts/selftest.sh`。它会在 `~/.cache/implement-spec-split-selftest/` 下建一个临时仓库和 worktree，让 pi 用 tdd 技能实现一个很小的 ticket，然后检查这几件事：
   - 有新 commit，工作区是干净的，测试我们自己重跑能通过；
   - 运行目录里的文件都在；
   - pi 确实读了 tdd 的 `SKILL.md`。
@@ -116,8 +137,14 @@
 - `--time-limit` 和 `--idle-timeout` 在真实运行中都生效了。merger 用的是 `GLM_TIME_LIMIT_SHORT`，各跑了 16–21s。
 - 发现的问题：Brief 直接写在运行目录里时，wrapper 用 `cp` 拷贝自己，会往 stderr 打一条 "same file"。已经改成同一个文件就跳过。
 
+## 已验证（2026-10-17，codex 后端 V0–V3）
+
+- `selftest-codex.sh` 的 V1（42 项）、V2（8 项）、V3（16 项）全部通过，跑完没有残留进程。
+- 发现并修复了一个只在真实运行里出现的问题：Windows pid 复用，导致已结束的 run 被报成 `running`。
+
 ## 尚未验证的事项
 
+- `--impl codex` 的 L3 端到端（V4）。验证时在 L3 清单之外再检查两点：跑完没有残留的 codex/node 进程；每次运行结束时 `progress.sh` 的最后输出和 `status.json` 一致。
 - 用 `--impl sonnet` 跑一遍完整流程，确认实现子代理真的跑在 `IMPLEMENT_MODEL` 上。
 - `stalled` 在真实 L3 运行里的表现（目前只有 L2 用假 pi 做的确定性用例）。
 - 第二次 `timeout` 时主代理会停下来问用户（2026-10-14 的 L3 里 Resume 一次就完成了，没走到这条路径）。

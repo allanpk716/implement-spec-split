@@ -13,7 +13,7 @@ A subagent spawned by the Orchestrator inside the Claude Code session, with its 
 _Avoid_: native subagent, Claude subagent
 
 **External worker**:
-A separate coding-agent CLI process (pi, running GLM) that the Orchestrator launches outside the session to do one role's work; it shares no conversation with the Orchestrator.
+A separate coding-agent CLI process (codex or pi, running GLM) that the Orchestrator launches outside the session to do one role's work; it shares no conversation with the Orchestrator.
 _Avoid_: delegate, GLM subagent, headless subagent
 
 **Implement backend**:

@@ -2,16 +2,17 @@
 
 A Claude Code skill: [Matt Pocock's `implement-spec`](https://github.com/mattpocock/skills/tree/main/skills/engineering/implement-spec) with **per-role models**.
 
-- Exploration / implementer / merger / fix run on a cheaper model: `sonnet` subagents by default, or, with `--impl pi`, GLM-5.3 through headless [pi](https://github.com/earendil-works/pi-mono) processes, which spends no Claude quota on coding.
+- Exploration / implementer / merger / fix run on a cheaper model: `sonnet` subagents by default, or GLM-5.3 through headless External workers, which spends no Claude quota on coding: `--impl codex` ([codex](https://github.com/openai/codex) `exec --json`, with live progress via `scripts/progress.sh`) or `--impl pi` ([pi](https://github.com/earendil-works/pi-mono)).
 - The two code-review subagents (Standards and Spec, from `mattpocock-skills:code-review`) always run on a stronger model (`opus`, or `fable`).
 
 The original skill lets every subagent inherit the session model, so you pay top-tier prices for coding or get a weaker review. This version passes `model` explicitly on every subagent call. It also auto-discovers open, unfinished specs when invoked without an argument.
 
-> Status: `--impl pi` exercised end-to-end on a scratch repo (2026-10-11); `--impl sonnet` and the draft-PR flow not yet. Report problems via issues.
+> Status: `--impl pi` exercised end-to-end on a scratch repo (2026-10-11); `--impl codex` passes its wrapper selftests including real-GLM runs (2026-10-17), end-to-end not yet; `--impl sonnet` and the draft-PR flow not yet. Report problems via issues.
 
 ## Requirements
 
 - Claude Code with the `mattpocock-skills` plugin installed (uses its `tdd` and `code-review` skills, and its `docs/agents/issue-tracker.md` setup via `/setup-matt-pocock-skills`).
+- For `--impl codex` only: the `codex` CLI (tested with 0.163.0), Node.js, Git Bash (on Windows), and a `custom` model provider in `~/.codex/config.toml` serving GLM (here: a local proxy on `127.0.0.1:15722`). Check it with `scripts/selftest-codex.sh` (`--only V1` needs no model at all). Design notes and evidence: [docs/codex-backend.md](docs/codex-backend.md) (中文).
 - For `--impl pi` only: the `pi` CLI, Node.js, Git Bash (on Windows), and a GLM provider in `~/.pi/agent/models.json` with a valid Zhipu Coding Plan key, e.g.:
 
   ```json
@@ -31,7 +32,7 @@ The original skill lets every subagent inherit the session model, so you pay top
 git clone https://github.com/allanpk716/implement-spec-split ~/.claude/skills/implement-spec-split
 ```
 
-Invoke manually with `/implement-spec-split [spec ref] [--impl pi|sonnet]`. Change the defaults in the "Config" section of `SKILL.md`.
+Invoke manually with `/implement-spec-split [spec ref] [--impl codex|pi|sonnet] [--parallel n]`. Change the defaults in the "Config" section of `SKILL.md`.
 
 ## Keeping up with upstream
 
