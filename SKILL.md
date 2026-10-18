@@ -18,7 +18,7 @@ Terms (Orchestrator, In-session subagent, External worker, Implement backend, Br
   - `pi`: External workers, headless `pi` processes on `GLM_MODEL`.
   - Override per run with an argument: `/implement-spec-split <spec> --impl codex` (or `--impl pi`, `--impl sonnet`).
 - `IMPLEMENT_MODEL` = `sonnet` — model for implementing roles when the backend is `sonnet`.
-- `CODEX_MODEL` = `glm-5.3` — model id for codex's `custom` provider, which points at the local Ferryman proxy (`127.0.0.1:15722`); the provider lives in `~/.codex/config.toml` and the key in Ferryman, never in this repo.
+- `CODEX_MODEL` = `glm-5.3` — model id for codex's `custom` provider in `~/.codex/config.toml`; the endpoint and key belong to the user's provider setup, never in this repo (author environment: Ferryman, `127.0.0.1:15722`).
 - `GLM_MODEL` = `glm/glm-5.3` — pi `provider/id`; the provider, key and model list live in `~/.pi/agent/models.json`, never in this repo.
 - `GLM_MAX_PARALLEL` = `2` — at most this many External workers at once. Override per run with an argument: `/implement-spec-split <spec> --impl codex --parallel 4`. The override replaces the default for that run only. Keep it small (2–3, at most 4 off-peak): Zhipu rate-limits during peak hours, and one quota/429 among the workers stops the whole run to ask the user.
 - `GLM_TIME_LIMIT_IMPL` = `3600` — Time limit (seconds, GLOSSARY.md) for implementer and fix External workers.
@@ -79,7 +79,7 @@ An External worker is a wrapper script (in this skill's directory) running one h
 | `<worker>` | `scripts/codex-worker.sh` | `scripts/pi-worker.sh` |
 | `<model>` | `CODEX_MODEL` | `GLM_MODEL` |
 | preflight | `scripts/selftest-codex.sh --only L1 --model <CODEX_MODEL>` | `scripts/selftest.sh --only L1 --model <GLM_MODEL>` |
-| usual preflight failure | Ferryman not running (port 15722), or its key/model | bad key or model id in `~/.pi/agent/models.json` |
+| usual preflight failure | local proxy not running (preflight address derived from the `base_url` in `config.toml`; author environment: Ferryman, `127.0.0.1:15722`), or its key/model | bad key or model id in `~/.pi/agent/models.json` |
 
 **Preflight** (once per run, step 0): run the backend's preflight command from the table (prefixed with `<skill dir>/`). If it fails, stop and show the user the error. Also note the local time: weekdays 14:00–18:00 Beijing time are GLM peak hours (GLM-5.x quota is charged 3x and 429s are more likely). Proceed anyway; just mention it in the final report.
 

@@ -67,9 +67,16 @@
 # Never trust "ok" alone: it only means codex emitted turn.completed. The caller must
 # still inspect the worktree and rerun acceptance tests.
 #
+# CODEX_WORKER_PREFLIGHT configures the TCP preflight, in priority order:
+# "off" skips it; "<host>:<port>" probes that explicit address; otherwise the target is
+# derived from CODEX_WORKER_BASE_URL or the custom provider base_url in
+# ${CODEX_HOME:-$HOME/.codex}/config.toml. A derived target is probed only when its host
+# is a loopback address (127.0.0.1, localhost, ::1, or another 127.* address), with the
+# URL scheme supplying port 80 for http and 443 for https when no port is present.
+# CODEX_WORKER_SKIP_PREFLIGHT=1 is the legacy alias for CODEX_WORKER_PREFLIGHT=off.
+#
 # Test hooks: CODEX_WORKER_CODEX swaps the codex executable; CODEX_WORKER_BASE_URL swaps
-# the provider endpoint; CODEX_WORKER_POLL overrides the watchdog interval; and
-# CODEX_WORKER_SKIP_PREFLIGHT=1 bypasses the TCP preflight. TEST ONLY:
+# the provider endpoint; CODEX_WORKER_POLL overrides the watchdog interval. TEST ONLY:
 # CODEX_WORKER_TEST_BREAK_FINGERPRINT_END=1 makes the end-of-segment fingerprint fail.
 
 set -u
@@ -522,19 +529,74 @@ write_status() {
 }
 
 BASE_URL="${CODEX_WORKER_BASE_URL:-}"
-PROXY_HOST=127.0.0.1; PROXY_PORT=15722
-if [ -n "$BASE_URL" ]; then
-  PROXY_ADDR=$(node -e 'let u;try{u=new URL(process.argv[1])}catch{process.exit(1)};console.log(u.hostname+":"+(u.port||80))' "$BASE_URL") || die "CODEX_WORKER_BASE_URL is not a valid URL"
-  PROXY_HOST=${PROXY_ADDR%%:*}; PROXY_PORT=${PROXY_ADDR##*:}
+PROXY_HOST=""; PROXY_PORT=""
+if [ -n "${CODEX_WORKER_PREFLIGHT:-}" ]; then
+  if [ "$CODEX_WORKER_PREFLIGHT" = off ]; then
+    PREFLIGHT_RESULT="skip"
+  else
+    PREFLIGHT_RESULT=$(node -e '
+      const value = process.argv[1];
+      const match = value.match(/^\[?([^\]]+?)\]?:(\d+)$/);
+      if (!match || !match[1] || !/^\d+$/.test(match[2]) || +match[2] < 1 || +match[2] > 65535) process.exit(1);
+      console.log(["target", match[1].replace(/^\[|\]$/g, ""), match[2]].join("\t"));
+    ' "$CODEX_WORKER_PREFLIGHT") || die "CODEX_WORKER_PREFLIGHT must be off or <host>:<port>"
+  fi
+elif [ "${CODEX_WORKER_SKIP_PREFLIGHT:-0}" = 1 ]; then
+  PREFLIGHT_RESULT="skip"
+elif [ -n "$BASE_URL" ]; then
+  PREFLIGHT_RESULT=$(node -e '
+    let url;
+    try { url = new URL(process.argv[1]); } catch { process.exit(2); }
+    const port = url.port || (url.protocol === "https:" ? 443 : 80);
+    const host = url.hostname.replace(/^\[|\]$/g, "");
+    const loopback = host === "localhost" || host === "::1" || host.startsWith("127.");
+    console.log([loopback ? "target" : "skip", host, String(port)].join("\t"));
+  ' "$BASE_URL") || die "CODEX_WORKER_BASE_URL is not a valid URL"
+else
+  PREFLIGHT_RESULT=$(CODEX_CONFIG="$(winpath "${CODEX_HOME:-$HOME/.codex}/config.toml")" node -e '
+    const fs = require("fs");
+    let text;
+    try { text = fs.readFileSync(process.env.CODEX_CONFIG, "utf8"); }
+    catch { console.log("skip\tno-base-url"); process.exit(0); }
+    const lines = text.split(/\r?\n/);
+    let inSection = false, value = null;
+    for (const line of lines) {
+      if (/^\s*\[/.test(line)) {
+        if (inSection) break;
+        inSection = line.trim() === "[model_providers.custom]";
+      } else if (inSection) {
+        const match = line.match(/^\s*base_url\s*=\s*(["'\''"])(.*?)\1\s*(?:#.*)?$/);
+        if (match) value = match[2];
+      }
+    }
+    if (value === null) { console.log("skip\tno-base-url"); process.exit(0); }
+    let url;
+    try { url = new URL(value); } catch { console.error("custom.base_url in config.toml is not a valid URL"); process.exit(1); }
+    const port = url.port || (url.protocol === "https:" ? 443 : 80);
+    const host = url.hostname.replace(/^\[|\]$/g, "");
+    const loopback = host === "localhost" || host === "::1" || host.startsWith("127.");
+    console.log([loopback ? "target" : "skip", host, String(port)].join("\t"));
+  ') || die "could not read the codex custom provider base_url"
 fi
-if [ "${CODEX_WORKER_SKIP_PREFLIGHT:-0}" != 1 ]; then
+IFS=$'\t' read -r PREFLIGHT_ACTION PREFLIGHT_HOST PREFLIGHT_PORT <<< "$PREFLIGHT_RESULT"
+case "$PREFLIGHT_ACTION" in
+  target)
+    PROXY_HOST="$PREFLIGHT_HOST"; PROXY_PORT="$PREFLIGHT_PORT"
+    ;;
+  skip)
+    if [ "$PREFLIGHT_HOST" = "no-base-url" ]; then echo "preflight skipped: no base_url found" >> "$STDERR"
+    elif [ -n "$PREFLIGHT_HOST" ]; then echo "preflight skipped: remote endpoint $PREFLIGHT_HOST" >> "$STDERR"; fi
+    ;;
+  *) die "invalid preflight result" ;;
+esac
+if [ -n "$PROXY_HOST" ]; then
   PROXY_HOST="$PROXY_HOST" PROXY_PORT="$PROXY_PORT" node -e '
     const net = require("net"), s = net.connect({host: process.env.PROXY_HOST, port: +process.env.PROXY_PORT});
     const done = ok => { s.destroy(); process.exit(ok ? 0 : 1); };
     s.once("connect", () => done(true)); s.once("error", () => done(false));
     setTimeout(() => done(false), 3000).unref();
   ' || {
-    STATUS=transient; ERROR="proxy not listening on $PROXY_HOST:$PROXY_PORT (is Ferryman running?)"; EXIT_CODE=4; SALVAGED=false
+    STATUS=transient; ERROR="local proxy at $PROXY_HOST:$PROXY_PORT is not listening"; EXIT_CODE=4; SALVAGED=false
     END=$(date +%s); START=$END; write_status; exit "$EXIT_CODE"
   }
 fi
@@ -589,7 +651,9 @@ while :; do
     STATUS=stalled; EXIT_CODE=7; break
   fi
   if [ "$WATCHDOG" = proxy ]; then
-    STATUS=transient; ERROR="proxy unreachable ($PROXY_HOST:$PROXY_PORT Ferryman): codex keeps waiting for network"; EXIT_CODE=4
+    if [ -n "$PROXY_HOST" ]; then ERROR="endpoint unreachable ($PROXY_HOST:$PROXY_PORT): codex keeps waiting for network"
+    else ERROR="endpoint unreachable: codex keeps waiting for network"; fi
+    STATUS=transient; EXIT_CODE=4
     if [ "$SEG_ATTEMPT" -le "$RETRIES" ]; then sleep "$((RETRY_WAIT * SEG_ATTEMPT))"; continue; fi
     break
   fi

@@ -103,7 +103,7 @@
    - 有进展：`type` 以 `item.` 或 `turn.` 开头的行。
    - 没有进展：`type: "error"` 的 `Reconnecting...` 行。只看文件变大会被 F4 的重连行一直骗下去，永远判不出卡死。
    - 默认值仍是 600s：大于 E12 观察到的 208s 空档，也大于约 6 分钟的流空闲上限（约束 5）。
-7. **识别"代理断了"，提前结束。** 连续 3 条 `waiting for network`（约 90s）就杀掉，状态记为 `transient`。错误信息里写明"代理 15722 不通"。
+7. **识别“端点不可达”，提前结束。** 连续 3 条 `waiting for network`（约 90s）就杀掉，状态记为 `transient`。错误信息写明预检得到的端点地址；没有预检目标时只报告端点不可达。
 8. **错误分类改看 `turn.failed.error.message`。** 规则如下：
 
    | 条件 | 状态 |
@@ -122,7 +122,7 @@
    - 会话文件在全局 `~/.codex/sessions/`，不在 run dir 里。坏 Resume 的检查改成"`~/.codex/sessions` 下能找到包含该 thread_id 的 rollout 文件"，找不到就退出 64；
    - 不能用 `--ephemeral`。
 10. **对外契约与 pi-worker 保持一致：** 参数、run dir 文件、`status.json` 字段（`session_id` 字段放 thread_id）、退出码 0/2/3/4/5/6/7/64、Resume 规则。SKILL.md 的编排逻辑不分叉，只换脚本名和 Config。唯一 codex 专属扩展是 `--read-only`：只读调查模式把第一段开跑前的 workspace 指纹存进 run dir 的 `fingerprint-start.json`，每段结束时把当前指纹写入 `fingerprint-end.json`；`resume.json` 只记录 `read_only: true|false`，Resume 校验基线指纹文件后继承只读设置。`status.json` 只在只读模式额外写 `read_only`、`read_only_violation`、`changed_paths`。违规把原本的 `ok` 改成 `violation` 并退出 8；其他状态保留原退出码；取指纹或比较失败一律判违规。指纹覆盖 HEAD、已跟踪文件的二进制 diff、未跟踪且未被忽略文件的对象哈希；被 `.gitignore` 忽略的文件不检测。`pi-worker.sh` 不支持该参数，退出码 8 也只属于 codex-worker。
-11. **Preflight：** 检查 15722 端口在监听，再跑 L1（让模型回一个词）。端口不通直接报"Ferryman 没开"。
+11. **Preflight：** 目标按优先级取自 `CODEX_WORKER_PREFLIGHT=off`（或旧别名 `CODEX_WORKER_SKIP_PREFLIGHT=1`）、显式 `<host>:<port>`、`CODEX_WORKER_BASE_URL`、`config.toml` 的 `[model_providers.custom].base_url`。从 URL 推导时 http/https 缺省端口为 80/443，且只探测本地回环地址；远程端点跳过探测并交给 codex 自己报错。没有配置也跳过。端口不通时报本地代理未监听，再跑 L1（让模型回一个词）。
 12. **测试钩子：** `CODEX_WORKER_CODEX` 可以换成假的 codex 可执行文件（同 `PI_WORKER_PI` 的思路），`CODEX_WORKER_BASE_URL` 可以把 provider 指向假服务器。
 13. **挽救"答完了却不收尾"的情况**（插件 #391）。触发条件：Idle timeout 触发时，已经出现过 `agent_message` 而没有 `turn.completed`。处理：
     - 照样杀掉；
@@ -165,7 +165,7 @@
 | `turn.failed` 401 | 退出 2，不重试 |
 | `turn.failed` 429 两次后成功 | 重试后退出 0，`attempts` = 3 |
 | `turn.failed` 429 一直失败 | 退出 4，错误信息提到可能是额度 |
-| 只吐 `Reconnecting... waiting for network` | 约 90s 内退出 4，信息提到代理 |
+| 只吐 `Reconnecting... waiting for network` | 约 90s 内退出 4，信息提到端点不可达 |
 | 只吐 `Reconnecting n/5` 行、无进展（idle 设 20s） | 退出 7（证明 error 行不重置 Idle 计时） |
 | 完全不吐事件（idle 设 20s） | 退出 7 |
 | 一直有进展但超过 Time limit | 退出 5，`resume.json` 可用 |
