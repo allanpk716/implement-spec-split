@@ -109,6 +109,7 @@
 
 ## 安装方式
 
+- 面向 AI Agent 的安装/调用快速入口见 `docs/ai-agents.md`。
 - 技能目录 `~/.claude/skills/implement-spec-split` 是这个仓库的 git 克隆。
 - 如果在别的地方的克隆里改（比如 `~/orca/implement-spec-split`），commit 之后要在技能目录里执行 `git pull --ff-only <那个克隆的路径> main` 同步过去。
 - 不用软链接，因为 Windows 上软链接很麻烦。

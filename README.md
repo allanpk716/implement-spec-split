@@ -34,6 +34,8 @@ git clone https://github.com/allanpk716/implement-spec-split ~/.claude/skills/im
 
 Invoke manually with `/implement-spec-split [spec ref] [--impl codex|pi|sonnet] [--parallel n]`. Change the defaults in the "Config" section of `SKILL.md`.
 
+AI agents installing or operating the skill should read [docs/ai-agents.md](docs/ai-agents.md) first: it gives the quick start, backend requirements, preflight commands, progress inspection, and agent-specific safety rules.
+
 ## Keeping up with upstream
 
 Read [MAINTAINING.md](MAINTAINING.md) (中文) before syncing or editing: it records the design decisions and pitfalls.
