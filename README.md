@@ -9,6 +9,8 @@ The original skill lets every subagent inherit the session model, so you pay top
 
 > Status: `--impl pi` exercised end-to-end on a scratch repo (2026-10-11); `--impl codex` end-to-end on the same repo (2026-10-18); `--impl sonnet` and the draft-PR flow not yet. Report problems via issues.
 
+**Setup guide (中文): [docs/setup.md](docs/setup.md)** — staged setup for the three uses of this repo: parallel spec implementation, the codex (GLM) backend, and the global Opus / codex division of labour for everyday sessions (`templates/global-claude-md.md` + the `hooks/delegate-guard.js` PreToolUse hook).
+
 ## Requirements
 
 - Claude Code with the `mattpocock-skills` plugin installed (uses its `tdd` and `code-review` skills, and its `docs/agents/issue-tracker.md` setup via `/setup-matt-pocock-skills`).
