@@ -43,7 +43,7 @@ This division of labour is optimized for one specific situation: **Claude quota 
 
 | Item | Status |
 |---|---|
-| Platform | Windows 11 + Git Bash: fully verified. macOS / Linux: unverified (process management has a non-Windows branch, but it has not been run) |
+| Platform | Windows 11 + Git Bash: fully verified, including real GLM end to end. Ubuntu 24.04: all model-free self-tests pass (`selftest-codex.sh --only V1`, hook tests, doctor tests), but it has not been run with a real codex and GLM. macOS: unverified (process management uses the same POSIX branch as Linux). Known limitation: the alternate pi backend (`pi-worker.sh`) only kills the root process on Linux/macOS; use the codex backend on those platforms |
 | codex-cli | 0.163.0. Other versions are unverified; after changing versions, first run `scripts/selftest-codex.sh --only V1` |
 | Model | GLM-5.3, through a local proxy |
 | Stage 1 | `--impl codex` and `--impl pi` verified end-to-end in a scratch repo; `--impl sonnet` unverified |

@@ -7,7 +7,7 @@ A Claude Code skill: [Matt Pocock's `implement-spec`](https://github.com/mattpoc
 
 The original skill lets every subagent inherit the session model, so you pay top-tier prices for coding or get a weaker review. This version passes `model` explicitly on every subagent call. It also auto-discovers open, unfinished specs when invoked without an argument.
 
-> Status: verified on **Windows 11 + Git Bash only** (macOS / Linux untested) with codex-cli 0.163.0. `--impl pi` exercised end-to-end on a scratch repo (2026-10-11); `--impl codex` end-to-end on the same repo (2026-10-18); `--impl sonnet` and the draft-PR flow not yet. Report problems via issues.
+> Status: fully verified on **Windows 11 + Git Bash** with codex-cli 0.163.0; Ubuntu 24.04 passes all model-free self-tests (not yet run against a real model); macOS untested. On Linux/macOS use `--impl codex` (the pi backend does not kill process trees there). `--impl pi` exercised end-to-end on a scratch repo (2026-10-11); `--impl codex` end-to-end on the same repo (2026-10-18); `--impl sonnet` and the draft-PR flow not yet. Report problems via issues.
 
 > **Security:** codex workers run with `--dangerously-bypass-approvals-and-sandbox` — full read/write/exec access to your machine — and everything they read is sent to your model provider. Read the security section of [docs/setup.md](docs/setup.md) before use.
 >

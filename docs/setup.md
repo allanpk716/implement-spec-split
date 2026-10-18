@@ -42,7 +42,7 @@ English: [setup.en.md](setup.en.md)
 
 | 项目 | 状态 |
 |---|---|
-| 平台 | Windows 11 + Git Bash：完整验证。macOS / Linux：未验证（进程管理有非 Windows 分支，但没有跑过） |
+| 平台 | Windows 11 + Git Bash：完整验证（含真实 GLM 端到端）。Ubuntu 24.04：无模型的自测全部通过（`selftest-codex.sh --only V1`、hook 测试、doctor 测试），但没有用真实 codex 和 GLM 跑过。macOS：未验证（进程管理走和 Linux 相同的 POSIX 分支）。已知限制：备用的 pi 后端（`pi-worker.sh`）在 Linux/macOS 上杀进程时只杀根进程，在这两个平台上请用 codex 后端 |
 | codex-cli | 0.163.0。其他版本未验证，换版本后先跑 `scripts/selftest-codex.sh --only V1` |
 | 模型 | GLM-5.3，经本地代理 |
 | 阶段 1 | `--impl codex`、`--impl pi` 在试验仓库端到端验证过；`--impl sonnet` 未验证 |
