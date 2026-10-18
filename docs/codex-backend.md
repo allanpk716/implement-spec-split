@@ -121,7 +121,7 @@
    - 参数顺序见 E5；
    - 会话文件在全局 `~/.codex/sessions/`，不在 run dir 里。坏 Resume 的检查改成"`~/.codex/sessions` 下能找到包含该 thread_id 的 rollout 文件"，找不到就退出 64；
    - 不能用 `--ephemeral`。
-10. **对外契约与 pi-worker 保持一致：** 参数、run dir 文件、`status.json` 字段（`session_id` 字段放 thread_id）、退出码 0/2/3/4/5/6/7/64、Resume 规则。SKILL.md 的编排逻辑不分叉，只换脚本名和 Config。
+10. **对外契约与 pi-worker 保持一致：** 参数、run dir 文件、`status.json` 字段（`session_id` 字段放 thread_id）、退出码 0/2/3/4/5/6/7/64、Resume 规则。SKILL.md 的编排逻辑不分叉，只换脚本名和 Config。唯一 codex 专属扩展是 `--read-only`：只读调查模式把第一段开跑前的 workspace 指纹存进 run dir 的 `fingerprint-start.json`，每段结束时把当前指纹写入 `fingerprint-end.json`；`resume.json` 只记录 `read_only: true|false`，Resume 校验基线指纹文件后继承只读设置。`status.json` 只在只读模式额外写 `read_only`、`read_only_violation`、`changed_paths`。违规把原本的 `ok` 改成 `violation` 并退出 8；其他状态保留原退出码；取指纹或比较失败一律判违规。指纹覆盖 HEAD、已跟踪文件的二进制 diff、未跟踪且未被忽略文件的对象哈希；被 `.gitignore` 忽略的文件不检测。`pi-worker.sh` 不支持该参数，退出码 8 也只属于 codex-worker。
 11. **Preflight：** 检查 15722 端口在监听，再跑 L1（让模型回一个词）。端口不通直接报"Ferryman 没开"。
 12. **测试钩子：** `CODEX_WORKER_CODEX` 可以换成假的 codex 可执行文件（同 `PI_WORKER_PI` 的思路），`CODEX_WORKER_BASE_URL` 可以把 provider 指向假服务器。
 13. **挽救"答完了却不收尾"的情况**（插件 #391）。触发条件：Idle timeout 触发时，已经出现过 `agent_message` 而没有 `turn.completed`。处理：
@@ -176,6 +176,12 @@
 | 吐出 `agent_message` 后既不发 `turn.completed` 也不退出（idle 设 20s） | 退出 7，`result.md` 是那条回复，`error` 里注明已有最终回复 |
 | 运行中途 wrapper 自身被 `taskkill` 杀掉 | `progress.sh` 报 `dead`，不是 running |
 | 杀进程树后确认 | `stderr.log` 记录了确认结果，pid 不在了 |
+| `--read-only` 干净运行 | 退出 0；`read_only_violation` 为 false；prompt 开头有只读声明 |
+| `--read-only` 改已跟踪文件 / 新建未跟踪文件 / 在已脏文件上再改 / 偷偷 commit | 退出 8；`changed_paths` 报对应路径，commit 另报 `<HEAD>` |
+| `--read-only` 指向非 Git 目录；Resume 再传 `--read-only` | 退出 64 |
+| 只读运行到 Time limit 后 Resume，Resume 期间违规 | 退出 8；沿用第一段指纹判定 |
+| 只读工作区有大量未跟踪文件；结束取指纹失败 | 分别正常判定；取指纹失败记录 `<fingerprint>` 并判违规 |
+| 只读 Resume 缺少 `fingerprint-start.json` | 退出 64：read-only baseline fingerprint missing or invalid |
 
 ### V2 真 codex + 假服务器（不花 GLM）
 用 `CODEX_WORKER_BASE_URL` 指向 `mock.js`，覆盖第一节 F1、F3、F4、F6：

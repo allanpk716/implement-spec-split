@@ -36,6 +36,25 @@ const finish = (text = "done") => [
   {type: "item.completed", item: {id: "item_3", type: "agent_message", text}},
   {type: "turn.completed", usage: {input_tokens: 100, cached_input_tokens: 0, output_tokens: 10, reasoning_output_tokens: 0}},
 ];
+const cwdArg = (() => { for (let i = 0; i < args.length; i++) if (args[i] === "-C" && args[i + 1]) return args[++i]; return ""; })();
+const mutationTarget = process.env.FAKE_CODEX_TARGET || "tracked.txt";
+const mutateWorkspace = kind => {
+  if (!cwdArg) throw new Error("fake codex mutation scenario requires -C");
+  const target = path.join(cwdArg, mutationTarget);
+  if (kind === "untracked") fs.writeFileSync(target, "untracked\n");
+  else {
+    fs.appendFileSync(target, "changed by fake codex\n");
+    if (kind === "commit") {
+      const git = (commandArgs, check = true) => {
+        const result = require("child_process").spawnSync("git", commandArgs, {cwd: cwdArg, encoding: "utf8"});
+        if (check && result.status !== 0) throw new Error(result.stderr);
+        return result;
+      };
+      git(["add", "--", mutationTarget]);
+      git(["commit", "-m", "fake codex commit"]);
+    }
+  }
+};
 const failed = message => ({type: "turn.failed", error: {message}});
 const rollout = () => {
   const home = process.env.CODEX_HOME || path.join(process.env.HOME || ".", ".codex");
@@ -87,6 +106,18 @@ if (scenario === "ok") {
 } else if (scenario === "stdin-echo") {
   rollout(); emit([thread, warning, {type: "item.completed", item: {id: "item_3", type: "agent_message", text: stdin}}, ...finish(stdin)]);
   fs.writeFileSync(output, stdin);
+} else if (scenario === "read-only-clean") {
+  rollout(); emit([thread, warning, ...command(4), ...finish()]);
+  fs.writeFileSync(output, "done\n");
+} else if (scenario === "read-only-tracked" || scenario === "read-only-dirty-more") {
+  mutateWorkspace("tracked"); rollout(); emit([thread, warning, ...finish()]);
+  fs.writeFileSync(output, "done\n");
+} else if (scenario === "read-only-untracked") {
+  mutateWorkspace("untracked"); rollout(); emit([thread, warning, ...finish()]);
+  fs.writeFileSync(output, "done\n");
+} else if (scenario === "read-only-commit") {
+  mutateWorkspace("commit"); rollout(); emit([thread, warning, ...finish()]);
+  fs.writeFileSync(output, "done\n");
 } else {
   console.error(`unknown FAKE_CODEX_SCENARIO: ${scenario}`); process.exit(2);
 }

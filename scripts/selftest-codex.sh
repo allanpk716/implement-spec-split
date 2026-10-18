@@ -37,6 +37,7 @@ fail() { echo "  FAIL $*"; FAILS=$((FAILS + 1)); }
 check() { local d="$1"; shift; if "$@" >/dev/null 2>&1; then pass "$d"; else fail "$d"; fi; }
 json() { node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(s[process.argv[2]])' "$(cygpath -m "$1" 2>/dev/null || echo "$1")" "$2"; }
 status_is() { local run="$1" want="$2"; [ "$(json "$run/status.json" status)" = "$want" ]; }
+changed_has() { local run="$1" want="$2"; CHANGED_FILE="$(cygpath -m "$run/status.json" 2>/dev/null || echo "$run/status.json")" CHANGED_WANT="$want" node -e 'const s=JSON.parse(require("fs").readFileSync(process.env.CHANGED_FILE,"utf8"));process.exit(s.changed_paths.includes(process.env.CHANGED_WANT)?0:1)'; }
 alive() { PID_W="$1" node -e 'try{process.kill(+process.env.PID_W,0);process.exit(0)}catch{process.exit(1)}'; }
 cleanup() {
   for p in ${CLEAN_WIN[@]+"${CLEAN_WIN[@]}"}; do taskkill //T //F //PID "$p" >/dev/null 2>&1 || true; done
@@ -91,6 +92,97 @@ if [ -z "$ONLY" ] || [ "$ONLY" = V1 ]; then
   check "resume segments = 2" test "$(json "$ROOT/time-run/status.json" segments)" -eq 2
   RESUME_ID="$OLD_SESSION" node -e 'const a=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));const id=process.env.RESUME_ID,r=a.indexOf("resume");if(r<0||a[r+1]!==id||a.slice(r+2).join(" ")!=="-")process.exit(1);for(const f of ["--json","-m","-o","-C","--dangerously-bypass-approvals-and-sandbox","--disable"])if(a.indexOf(f)>r)process.exit(1)' "$ROOT/resume-args.jsonl"
   check "resume argv order and thread are valid" test $? -eq 0
+
+  new_readonly_repo() {
+    local repo="$ROOT/$1"
+    mkdir -p "$repo"
+    git -C "$repo" init -q -b main
+    git -C "$repo" config user.name selftest
+    git -C "$repo" config user.email selftest@example.invalid
+    printf 'tracked\n' > "$repo/tracked.txt"
+    git -C "$repo" add tracked.txt
+    git -C "$repo" commit -q -m init
+  }
+  readonly_case() {
+    local scenario="$1" repo="$2" run="$3"; shift 3
+    FAKE_CODEX_SCENARIO="$scenario" "$WORKER" --cwd "$ROOT/$repo" --brief "$BRIEF" --run-dir "$ROOT/$run" \
+      --model "$MODEL" --retries 0 --time-limit 120 --idle-timeout 20 --read-only "$@" >/dev/null
+    RO_EXIT=$?
+  }
+
+  new_readonly_repo ro-clean-repo
+  readonly_case read-only-clean ro-clean-repo ro-clean-run
+  check "read-only clean exit code (got $RO_EXIT)" test "$RO_EXIT" -eq 0
+  check "read-only clean has no violation" test "$(json "$ROOT/ro-clean-run/status.json" read_only_violation)" = false
+  check "read-only clean prompt starts with instruction" bash -c "head -1 '$ROOT/ro-clean-run/prompt-1.md' | grep -q '^本任务只读'"
+
+  new_readonly_repo ro-large-repo
+  for i in $(seq 1 2000); do
+    printf 'large workspace\n' > "$ROOT/ro-large-repo/$(printf 'untracked-with-a-fairly-long-name-%04d.txt' "$i")"
+  done
+  readonly_case read-only-clean ro-large-repo ro-large-clean-run
+  check "read-only large clean exit code (got $RO_EXIT)" test "$RO_EXIT" -eq 0
+  check "read-only large clean has no violation" test "$(json "$ROOT/ro-large-clean-run/status.json" read_only_violation)" = false
+  FAKE_CODEX_TARGET=created-by-fake.txt readonly_case read-only-untracked ro-large-repo ro-large-untracked-run
+  check "read-only large untracked change exits 8 (got $RO_EXIT)" test "$RO_EXIT" -eq 8
+  check "read-only large untracked path reported" changed_has "$ROOT/ro-large-untracked-run" created-by-fake.txt
+
+  new_readonly_repo ro-tracked-repo
+  readonly_case read-only-tracked ro-tracked-repo ro-tracked-run
+  check "read-only tracked change exits 8 (got $RO_EXIT)" test "$RO_EXIT" -eq 8
+  check "read-only tracked change status" status_is "$ROOT/ro-tracked-run" violation
+  check "read-only tracked path reported" changed_has "$ROOT/ro-tracked-run" tracked.txt
+
+  new_readonly_repo ro-untracked-repo
+  FAKE_CODEX_TARGET=untracked.txt readonly_case read-only-untracked ro-untracked-repo ro-untracked-run
+  check "read-only untracked change exits 8 (got $RO_EXIT)" test "$RO_EXIT" -eq 8
+  check "read-only untracked path reported" changed_has "$ROOT/ro-untracked-run" untracked.txt
+
+  new_readonly_repo ro-dirty-repo
+  printf 'pre-dirty\n' >> "$ROOT/ro-dirty-repo/tracked.txt"
+  readonly_case read-only-dirty-more ro-dirty-repo ro-dirty-run
+  check "read-only dirty-file change exits 8 (got $RO_EXIT)" test "$RO_EXIT" -eq 8
+  check "read-only dirty-file path reported" changed_has "$ROOT/ro-dirty-run" tracked.txt
+
+  new_readonly_repo ro-commit-repo
+  readonly_case read-only-commit ro-commit-repo ro-commit-run
+  check "read-only commit exits 8 (got $RO_EXIT)" test "$RO_EXIT" -eq 8
+  check "read-only commit reports HEAD" changed_has "$ROOT/ro-commit-run" "<HEAD>"
+
+  new_readonly_repo ro-break-repo
+  CODEX_WORKER_TEST_BREAK_FINGERPRINT_END=1 FAKE_CODEX_SCENARIO=read-only-clean \
+    "$WORKER" --cwd "$ROOT/ro-break-repo" --brief "$BRIEF" --run-dir "$ROOT/ro-break-run" \
+    --model "$MODEL" --retries 0 --time-limit 120 --idle-timeout 20 --read-only >/dev/null
+  RB=$?; check "read-only broken end fingerprint exits 8 (got $RB)" test "$RB" -eq 8
+  check "read-only broken end fingerprint is a violation" status_is "$ROOT/ro-break-run" violation
+  check "read-only broken end fingerprint path reported" changed_has "$ROOT/ro-break-run" "<fingerprint>"
+  check "read-only broken end fingerprint logs reason" bash -c "grep -q 'read-only fingerprint check failed' '$ROOT/ro-break-run/stderr.log'"
+
+  mkdir -p "$ROOT/ro-not-git"
+  "$WORKER" --cwd "$ROOT/ro-not-git" --brief "$BRIEF" --run-dir "$ROOT/ro-not-git-run" --read-only >/dev/null 2>&1
+  NG=$?; check "read-only non-git cwd exits 64 (got $NG)" test "$NG" -eq 64
+
+  new_readonly_repo ro-resume-repo
+  FAKE_CODEX_SCENARIO=busy-forever "$WORKER" --cwd "$ROOT/ro-resume-repo" --brief "$BRIEF" --run-dir "$ROOT/ro-resume-run" \
+    --model "$MODEL" --retries 0 --time-limit 2 --idle-timeout 20 --read-only >/dev/null
+  RT=$?; check "read-only timeout keeps exit 5 (got $RT)" test "$RT" -eq 5
+  check "read-only timeout records no violation" test "$(json "$ROOT/ro-resume-run/status.json" read_only_violation)" = false
+  FAKE_CODEX_SCENARIO=read-only-tracked "$WORKER" --resume --run-dir "$ROOT/ro-resume-run" --retries 0 --time-limit 30 --idle-timeout 20 >/dev/null
+  RR=$?; check "read-only resume violation exits 8 (got $RR)" test "$RR" -eq 8
+  check "read-only resume reports path" changed_has "$ROOT/ro-resume-run" tracked.txt
+  check "read-only resume prompt avoids commit instruction" bash -c "! grep -q 'commit the work' '$ROOT/ro-resume-run/prompt-2.md' && grep -q '继续完成调查，不要修改任何文件' '$ROOT/ro-resume-run/prompt-2.md'"
+  "$WORKER" --resume --run-dir "$ROOT/ro-resume-run" --read-only >/dev/null 2>&1
+  RRO=$?; check "resume rejects repeated read-only (got $RRO)" test "$RRO" -eq 64
+
+  new_readonly_repo ro-missing-baseline-repo
+  FAKE_CODEX_SCENARIO=busy-forever "$WORKER" --cwd "$ROOT/ro-missing-baseline-repo" --brief "$BRIEF" --run-dir "$ROOT/ro-missing-baseline-run" \
+    --model "$MODEL" --retries 0 --time-limit 2 --idle-timeout 20 --read-only >/dev/null
+  MB=$?; check "read-only missing-baseline timeout exits 5 (got $MB)" test "$MB" -eq 5
+  rm "$ROOT/ro-missing-baseline-run/fingerprint-start.json"
+  "$WORKER" --resume --run-dir "$ROOT/ro-missing-baseline-run" --retries 0 --time-limit 30 --idle-timeout 20 >/dev/null 2>&1
+  MR=$?; check "read-only resume without baseline exits 64 (got $MR)" test "$MR" -eq 64
+
+  check "non-read-only status omits fields" bash -c "node -e 'const s=JSON.parse(require(\"fs\").readFileSync(process.argv[1],\"utf8\"));process.exit([\"read_only\",\"read_only_violation\",\"changed_paths\"].some(k=>Object.hasOwn(s,k))?1:0)' \"\$(cygpath -m '$ROOT/ok-run/status.json')\""
 
   "$WORKER" --resume --run-dir "$ROOT/no-state" >/dev/null 2>&1; check "resume without state exits 64" test $? -eq 64
   "$WORKER" --resume --run-dir "$ROOT/no-such-run" >/dev/null 2>&1; check "resume missing run exits 64" test $? -eq 64
