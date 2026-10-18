@@ -37,8 +37,9 @@
 # attempt-<attempt>.jsonl; accumulated events.jsonl; stderr.log; resume.json; status.json;
 # result.md (codex -o output, or a salvaged final agent_message); fingerprint-start.json
 # and fingerprint-end.json in read-only mode (the first-segment baseline and each segment's
-# final fingerprint); pid (this wrapper's Windows pid and its process start ticks, so
-# progress.sh cannot mistake a recycled Windows pid for this worker); watch.json (live
+# final fingerprint); pid (this wrapper's Windows pid and Windows start ticks, or its POSIX
+# pid and process start identity, so progress.sh cannot mistake a recycled pid for this
+# worker); watch.json (live
 # watchdog state); and sessions/ for pi-worker run-dir compatibility (codex's authoritative
 # rollout stays under CODEX_HOME).
 #
@@ -57,8 +58,9 @@
 # Salvage applies only when the last progress event is a completed agent_message and no
 # command_execution remains in flight (#391). Otherwise an Idle timeout is a plain stall.
 # The wrapper launches codex through exec with no MSYS program in between (F9-F11), uses
-# event-based classification rather than codex's exit code (F1-F3), and confirms tree
-# kills by Windows pid liveness rather than localized taskkill output.
+# event-based classification rather than codex's exit code (F1-F3), and confirms tree kills
+# by liveness rather than localized taskkill output; POSIX kills collect the full descendant
+# set before signalling so re-parented children cannot escape.
 #
 # codex 0.163 still has a built-in command policy that can reject rm -rf and
 # Remove-Item -Recurse even with --dangerously-bypass-approvals-and-sandbox; Briefs
@@ -225,6 +227,19 @@ READ_ONLY_RESUME_PROMPT="你因为到达时间上限被暂停。请继续完成�
 
 winpid_alive() { PID_W="$1" node -e 'try{process.kill(+process.env.PID_W,0);process.exit(0)}catch{process.exit(1)}'; }
 
+posix_start_id() {
+  local pid="$1" stat="" rest start
+  if [ -r "/proc/$pid/stat" ]; then
+    stat=$(cat "/proc/$pid/stat" 2>/dev/null || true)
+    rest=${stat##*) }
+    read -r -a fields <<< "$rest"
+    start=${fields[19]}
+    [[ "$start" =~ ^[0-9]+$ ]] && echo "$start"
+  else
+    ps -o lstart= -p "$pid" 2>/dev/null | tr -d '[:space:]'
+  fi
+}
+
 kill_tree() {
   local winpid=""
   [ -r "/proc/$1/winpid" ] && winpid=$(cat "/proc/$1/winpid")
@@ -240,10 +255,49 @@ kill_tree() {
     if winpid_alive "$winpid"; then echo "kill FAILED: winpid $winpid still alive" >> "$STDERR"; return 1; fi
     echo "kill confirmed: winpid $winpid" >> "$STDERR"
   else
-    kill "$1" 2>/dev/null || true
-    local grace=0
-    while kill -0 "$1" 2>/dev/null && [ "$grace" -lt 6 ]; do sleep 5; grace=$((grace + 1)); done
-    kill -9 "$1" 2>/dev/null || true
+    local root="$1" pid_output child i alive
+    [[ "$root" =~ ^[0-9]+$ ]] || { echo "kill FAILED: pid $root still alive" >> "$STDERR"; return 1; }
+    # Resolve the entire tree before signalling: once a parent dies, its children are
+    # re-parented and can no longer be found through the original root.
+    pid_output=$(PID_ROOT="$root" node -e '
+      const {spawnSync} = require("child_process");
+      const table = spawnSync("ps", ["-A", "-o", "pid=", "-o", "ppid="], {encoding: "utf8"});
+      if (table.error || table.status !== 0) process.exit(1);
+      const children = new Map();
+      for (const line of String(table.stdout || "").split("\n")) {
+        const match = line.trim().match(/^(\d+)\s+(\d+)$/);
+        if (!match) continue;
+        const parent = +match[2], child = +match[1];
+        children.set(parent, [...(children.get(parent) || []), child]);
+      }
+      const root = +process.env.PID_ROOT, seen = new Set([root]), queue = [root], out = [root];
+      while (queue.length) {
+        for (const pid of children.get(queue.shift()) || []) {
+          if (seen.has(pid)) continue;
+          seen.add(pid); queue.push(pid); out.push(pid);
+        }
+      }
+      console.log(out.join(" "));
+    ' 2>/dev/null || true)
+    local pids=()
+    [ -n "$pid_output" ] && read -r -a pids <<< "$pid_output"
+    [ ${#pids[@]} -eq 0 ] && pids=("$root")  # ps failed: still kill and confirm the root
+    for child in ${pids[@]+"${pids[@]}"}; do kill -TERM "$child" 2>/dev/null || true; done
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+      alive=""
+      for child in ${pids[@]+"${pids[@]}"}; do kill -0 "$child" 2>/dev/null && alive=1; done
+      [ -z "$alive" ] && break
+      sleep 1
+    done
+    for child in ${pids[@]+"${pids[@]}"}; do kill -KILL "$child" 2>/dev/null || true; done
+    sleep 1
+    wait "$root" 2>/dev/null || true
+    alive=""
+    for child in ${pids[@]+"${pids[@]}"}; do kill -0 "$child" 2>/dev/null && alive=1; done
+    if [ -n "$alive" ]; then
+      echo "kill FAILED: pid $root still alive" >> "$STDERR"; return 1
+    fi
+    echo "kill confirmed: pid $root (+$((${#pids[@]} - 1)) descendants)" >> "$STDERR"
   fi
 }
 
@@ -494,7 +548,9 @@ if [ -r /proc/$$/winpid ]; then
   if [[ "$WORKER_START_TICKS" =~ ^[0-9]+$ ]]; then echo "$WORKER_WINPID $WORKER_START_TICKS" > "$RUN_DIR/pid"
   else echo "$WORKER_WINPID" > "$RUN_DIR/pid"; fi
 else
-  echo $$ > "$RUN_DIR/pid"
+  WORKER_START_ID=$(posix_start_id $$)
+  if [ -n "$WORKER_START_ID" ]; then echo "$$ $WORKER_START_ID" > "$RUN_DIR/pid"
+  else echo $$ > "$RUN_DIR/pid"; fi
 fi
 
 write_status() {

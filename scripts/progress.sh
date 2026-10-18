@@ -5,7 +5,8 @@
 #
 # state: finished is authoritative whenever status.json is at least as new as pid.
 # Otherwise running requires a live wrapper pid from the same process instance (the pid
-# file records its Windows start ticks); a merely recycled pid reports dead.
+# file records Windows start ticks or a POSIX process start identity); a merely
+# recycled pid reports dead.
 # Reads pid, status.json, watch.json, events.jsonl, and the latest/current attempt file.
 
 set -u
@@ -30,16 +31,30 @@ const pidFile = path.join(run, "pid");
 const pidParts = read(pidFile).trim().split(/\s+/).filter(Boolean);
 const pid = +pidParts[0] || 0;
 const recordedTicks = pidParts[1] || "";
+const windowsPid = process.platform === "win32";
 const pidAlive = pid > 0 && (() => { try { process.kill(pid, 0); return true; } catch { return false; } })();
 let state = "dead";
 if (status && pidParts.length && fs.existsSync(pidFile) && newer(statusPath, pidFile)) {
   state = `finished: ${status.status} (exit-equivalent)`;
 } else if (pidAlive) {
   if (!recordedTicks) state = "running";
-  else {
+  else if (windowsPid) {
     const query = spawnSync("powershell.exe", ["-NoProfile", "-Command",
       `(Get-Process -Id ${pid}).StartTime.ToUniversalTime().Ticks`], {encoding: "utf8"});
     state = String(query.stdout || "").trim() === recordedTicks ? "running" : "dead";
+  } else {
+    let currentTicks = "";
+    try {
+      if (fs.existsSync(`/proc/${pid}/stat`)) {
+        const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+        const fields = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/);
+        currentTicks = fields[19] || "";
+      } else {
+        currentTicks = String(spawnSync("ps", ["-o", "lstart=", "-p", String(pid)],
+          {encoding: "utf8"}).stdout || "").replace(/\s+/g, "");
+      }
+    } catch {}
+    state = currentTicks === recordedTicks ? "running" : "dead";
   }
 }
 console.log("state: " + state);

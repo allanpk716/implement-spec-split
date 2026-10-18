@@ -39,8 +39,64 @@ json() { node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1],
 status_is() { local run="$1" want="$2"; [ "$(json "$run/status.json" status)" = "$want" ]; }
 changed_has() { local run="$1" want="$2"; CHANGED_FILE="$(cygpath -m "$run/status.json" 2>/dev/null || echo "$run/status.json")" CHANGED_WANT="$want" node -e 'const s=JSON.parse(require("fs").readFileSync(process.env.CHANGED_FILE,"utf8"));process.exit(s.changed_paths.includes(process.env.CHANGED_WANT)?0:1)'; }
 alive() { PID_W="$1" node -e 'try{process.kill(+process.env.PID_W,0);process.exit(0)}catch{process.exit(1)}'; }
+start_identifier() {
+  local pid="$1" stat="" rest start
+  if [ -r "/proc/$pid/stat" ]; then
+    stat=$(cat "/proc/$pid/stat" 2>/dev/null || true)
+    rest=${stat##*) }
+    read -r -a fields <<< "$rest"
+    start=${fields[19]}
+    [[ "$start" =~ ^[0-9]+$ ]] && echo "$start"
+  else
+    ps -o lstart= -p "$pid" 2>/dev/null | tr -d '[:space:]'
+  fi
+}
+kill_tree_test() {
+  local pid="$1" winpid
+  if [ -r "/proc/$$/winpid" ] && command -v taskkill >/dev/null 2>&1; then
+    winpid="$pid"
+    taskkill //T //F //PID "$winpid" >/dev/null 2>&1 || true
+    return
+  fi
+  local pid_output child i alive=""
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  pid_output=$(PID_ROOT="$pid" node -e '
+    const {spawnSync} = require("child_process");
+    const table = spawnSync("ps", ["-A", "-o", "pid=", "-o", "ppid="], {encoding: "utf8"});
+    if (table.error || table.status !== 0) process.exit(1);
+    const children = new Map();
+    for (const line of String(table.stdout || "").split("\n")) {
+      const match = line.trim().match(/^(\d+)\s+(\d+)$/);
+      if (!match) continue;
+      children.set(+match[2], [...(children.get(+match[2]) || []), +match[1]]);
+    }
+    const root = +process.env.PID_ROOT, seen = new Set([root]), queue = [root], out = [root];
+    while (queue.length) {
+      for (const child of children.get(queue.shift()) || []) {
+        if (seen.has(child)) continue;
+        seen.add(child); queue.push(child); out.push(child);
+      }
+    }
+    console.log(out.join(" "));
+  ' 2>/dev/null || true)
+  local pids=()
+  [ -n "$pid_output" ] && read -r -a pids <<< "$pid_output"
+  for child in ${pids[@]+"${pids[@]}"}; do kill -TERM "$child" 2>/dev/null || true; done
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    alive=""
+    for child in ${pids[@]+"${pids[@]}"}; do kill -0 "$child" 2>/dev/null && alive=1; done
+    [ -z "$alive" ] && return 0
+    sleep 1
+  done
+  for child in ${pids[@]+"${pids[@]}"}; do kill -KILL "$child" 2>/dev/null || true; done
+  sleep 1
+  alive=""
+  for child in ${pids[@]+"${pids[@]}"}; do kill -0 "$child" 2>/dev/null && alive=1; done
+  [ -z "$alive" ]
+}
 cleanup() {
   for p in ${CLEAN_WIN[@]+"${CLEAN_WIN[@]}"}; do taskkill //T //F //PID "$p" >/dev/null 2>&1 || true; done
+  for p in ${CLEAN_PIDS[@]+"${CLEAN_PIDS[@]}"}; do kill_tree_test "$p" 2>/dev/null || true; done
 }
 trap cleanup EXIT
 
@@ -250,7 +306,7 @@ if [ -z "$ONLY" ] || [ "$ONLY" = V1 ]; then
   "$WORKER" --resume --run-dir "$ROOT/ro-missing-baseline-run" --retries 0 --time-limit 30 --idle-timeout 20 >/dev/null 2>&1
   MR=$?; check "read-only resume without baseline exits 64 (got $MR)" test "$MR" -eq 64
 
-  check "non-read-only status omits fields" bash -c "node -e 'const s=JSON.parse(require(\"fs\").readFileSync(process.argv[1],\"utf8\"));process.exit([\"read_only\",\"read_only_violation\",\"changed_paths\"].some(k=>Object.hasOwn(s,k))?1:0)' \"\$(cygpath -m '$ROOT/ok-run/status.json')\""
+  check "non-read-only status omits fields" bash -c "node -e 'const s=JSON.parse(require(\"fs\").readFileSync(process.argv[1],\"utf8\"));process.exit([\"read_only\",\"read_only_violation\",\"changed_paths\"].some(k=>Object.hasOwn(s,k))?1:0)' \"\$(cygpath -m '$ROOT/ok-run/status.json' 2>/dev/null || echo '$ROOT/ok-run/status.json')\""
 
   "$WORKER" --resume --run-dir "$ROOT/no-state" >/dev/null 2>&1; check "resume without state exits 64" test $? -eq 64
   "$WORKER" --resume --run-dir "$ROOT/no-such-run" >/dev/null 2>&1; check "resume missing run exits 64" test $? -eq 64
@@ -286,18 +342,26 @@ if [ -z "$ONLY" ] || [ "$ONLY" = V1 ]; then
   WPID=$!
   for _ in 1 2 3 4 5; do [ -s "$ROOT/dead-run/pid" ] && break; sleep 1; done
   WWIN=$(awk '{print $1}' "$ROOT/dead-run/pid" 2>/dev/null || echo 0)
-  taskkill //T //F //PID "$WWIN" >/dev/null 2>&1 || true
+  kill_tree_test "$WWIN"
   wait $WPID >/dev/null 2>&1
-  FWIN=$(tail -1 "$ROOT/fake-pids.log" 2>/dev/null || echo 0); taskkill //T //F //PID "$FWIN" >/dev/null 2>&1 || true
+  FWIN=$(tail -1 "$ROOT/fake-pids.log" 2>/dev/null || echo 0); kill_tree_test "$FWIN"
   sleep 1
   check "progress reports dead wrapper" bash -c "'$PROGRESS' '$ROOT/dead-run' | grep -q '^state: dead'"
 
-  node -e "setTimeout(()=>{},60000)" &
-  REUSE_PID=$!
-  for _ in 1 2 3 4 5; do [ -r /proc/$REUSE_PID/winpid ] && break; sleep 1; done
-  REUSE_WIN=$(cat "/proc/$REUSE_PID/winpid" 2>/dev/null || echo 0)
-  [ -n "$REUSE_WIN" ] && CLEAN_WIN+=("$REUSE_WIN")
-  REUSE_TICKS=$(powershell.exe -NoProfile -Command "(Get-Process -Id $REUSE_WIN).StartTime.ToUniversalTime().Ticks" 2>/dev/null | tr -d '\r')
+  if [ -r /proc/$$/winpid ]; then
+    node -e "setTimeout(()=>{},60000)" &
+    REUSE_PID=$!
+    for _ in 1 2 3 4 5; do [ -r /proc/$REUSE_PID/winpid ] && break; sleep 1; done
+    REUSE_WIN=$(cat "/proc/$REUSE_PID/winpid" 2>/dev/null || echo 0)
+    [ -n "$REUSE_WIN" ] && [ "$REUSE_WIN" != 0 ] && CLEAN_WIN+=("$REUSE_WIN")
+    REUSE_TICKS=$(powershell.exe -NoProfile -Command "(Get-Process -Id $REUSE_WIN).StartTime.ToUniversalTime().Ticks" 2>/dev/null | tr -d '\r')
+  else
+    sleep 300 &
+    REUSE_PID=$!
+    REUSE_WIN=$REUSE_PID
+    CLEAN_PIDS+=("$REUSE_PID")
+    REUSE_TICKS=$(start_identifier "$REUSE_PID")
+  fi
   printf '%s %s\n' "$REUSE_WIN" "$REUSE_TICKS" > "$ROOT/stdin-run/pid"
   touch "$ROOT/stdin-run/status.json"
   check "recycled live pid cannot override finished state" bash -c "'$PROGRESS' '$ROOT/stdin-run' | grep -q '^state: finished: ok'"
@@ -307,7 +371,7 @@ if [ -z "$ONLY" ] || [ "$ONLY" = V1 ]; then
   check "live pid with wrong start ticks is dead" bash -c "'$PROGRESS' '$ROOT/pid-reuse-run' | grep -q '^state: dead'"
   printf '%s %s\n' "$REUSE_WIN" "$REUSE_TICKS" > "$ROOT/pid-reuse-run/pid"
   check "live pid with matching start ticks is running" bash -c "'$PROGRESS' '$ROOT/pid-reuse-run' | grep -q '^state: running'"
-  taskkill //T //F //PID "$REUSE_WIN" >/dev/null 2>&1 || true
+  kill_tree_test "$REUSE_WIN"
 fi
 
 if [ -z "$ONLY" ] || [ "$ONLY" = V2 ]; then
