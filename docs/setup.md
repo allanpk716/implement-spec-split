@@ -68,6 +68,8 @@
 ls ~/.claude/skills/implement-spec-split/{SKILL.md,scripts,templates,hooks}
 ```
 
+装完任意阶段后都可以运行 `scripts/doctor.sh` 检查。
+
 ---
 
 ## 阶段 1：按 spec 并行实现（`/implement-spec-split`）
@@ -254,6 +256,24 @@ node -e 'console.log(JSON.stringify({tool_name:"Write",tool_input:{file_path:"C:
 - **分工规则更新**：仓库里的 `templates/global-claude-md.md` 改了之后，需要手动同步到 `~/.claude/CLAUDE.md`（全局文件不在仓库管理范围内）。
 - **暂停分工**：从 `settings.json` 删掉 delegate-guard 那一项，并从 CLAUDE.md 删掉分工一节。
 - **换机器**：要搬三样东西：克隆本仓库（阶段 0）、`~/.codex/config.toml` 与代理（阶段 2）、CLAUDE.md 分工一节和 `settings.json` 的 hook 注册（阶段 3）。只克隆仓库不够。
+
+## 自检
+
+`scripts/doctor.sh` 自身的检查只读取本机配置，不修改配置文件。它按"基础、阶段 1、阶段 2、阶段 3"报告当前状态：
+
+- `PASS`：检查通过。
+- `WARN`：该项可能影响对应阶段，但不阻塞其他阶段；按提示修复。
+- `FAIL`：该阶段必要配置缺失或已验证失效；按提示修复。
+- `INFO`：阶段未配置或按规则跳过的检查。
+
+参数：
+
+- `--lang zh|en`：输出中文或英文；也可用 `DOCTOR_LANG=en`。
+- `--json`：只输出一个 JSON 对象，便于脚本处理。
+- `--with-glm`：额外运行 `scripts/selftest-codex.sh --only L1`，会真实请求模型并消耗少量 token。
+- `--help`：查看帮助。
+
+有任何 `FAIL` 时脚本退出码为 1，否则为 0。
 
 ## 常见问题
 

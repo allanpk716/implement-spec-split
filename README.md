@@ -37,6 +37,7 @@ The original skill lets every subagent inherit the session model, so you pay top
 ```bash
 git clone https://github.com/allanpk716/implement-spec-split ~/.claude/skills/implement-spec-split
 ```
+Then run scripts/doctor.sh to check your setup.
 
 Invoke manually with `/implement-spec-split [spec ref] [--impl codex|pi|sonnet] [--parallel n]`. Change the defaults in the "Config" section of `SKILL.md`.
 
