@@ -1,4 +1,5 @@
 # 使用与配置指南
+English: [setup.en.md](setup.en.md)
 
 本仓库提供三种能力，彼此有依赖，按阶段配置即可：
 

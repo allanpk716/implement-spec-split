@@ -13,7 +13,7 @@ The original skill lets every subagent inherit the session model, so you pay top
 >
 > **Fit:** built for "Claude quota is tight, a cheaper model has plenty". Every hand-off costs Claude tokens for the Brief and the review, so it may not save money on pay-as-you-go API billing.
 
-**Setup guide (中文): [docs/setup.md](docs/setup.md)** — staged setup for the three uses of this repo: parallel spec implementation, the codex (GLM) backend, and the global Opus / codex division of labour for everyday sessions (`templates/global-claude-md.md` + the `hooks/delegate-guard.js` PreToolUse hook).
+**Setup guide: [English](docs/setup.en.md) · [中文](docs/setup.md)** — staged setup for the three uses of this repo: parallel spec implementation, the codex (GLM) backend, and the global Opus / codex division of labour for everyday sessions (`templates/global-claude-md.en.md` / `templates/global-claude-md.md` + the `hooks/delegate-guard.js` PreToolUse hook).
 
 ## Requirements
 
