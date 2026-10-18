@@ -21,6 +21,35 @@
 
 ---
 
+## 安全须知（开始前务必读）
+
+- **worker 拥有整机权限**：codex worker 以 `--dangerously-bypass-approvals-and-sandbox` 运行，能读写本机任意文件、执行任意命令，不受沙箱限制（Windows 上 codex 的只读、可写沙箱都不可用，见 [codex-backend.md](codex-backend.md) E8）。Brief 里的"禁区"只是给模型的指示，不是强制隔离。不要在存有敏感数据、且不能接受误操作的机器上使用；重要仓库请先确保有远端备份。
+- **代码会发给第三方模型服务**：Brief 内容，以及 worker 读到的源码、日志、命令输出，都会发送到你配置的模型服务（例如智谱 GLM）。公司或客户项目先确认合规要求。
+- **对外动作不交给 worker**：push、开 PR、远程服务器操作、删除数据都应该由 Claude 执行，或者由你确认。全局分工规则（阶段 3）里写的就是这条，但它是规则约束，不是技术隔离。
+- **hook 是失败放行的**：delegate-guard 出现任何异常都会放行，以免卡住会话。所以要定期用 `scripts/doctor.sh` 确认它确实在工作。
+
+## 适用前提与代价
+
+这套分工是为一种特定情况优化的：**Claude 额度紧张（例如订阅套餐的用量上限），同时另有便宜或额度充足的模型（例如 GLM 编程套餐）**。动手前先确认这个前提是否成立：
+
+- **交接有固定成本**：每交出去一个任务，Claude 都要写 Brief、读结果、审查 diff，不合格还要写返工 Brief。小任务交出去反而更贵，所以规则里设了"≤10 行自己改"的门槛。如果你用 API 按量计费，或者 Claude 额度很宽裕，这套流程可能并不省钱。
+- **质量取决于审查**：worker 用的模型通常比 Opus 弱。作者实际使用时遇到过 worker 的测试全部通过、报告也属实，但缺陷恰好落在测试覆盖之外的情况，最后是靠细审 diff 才发现的。审查松懈，问题就会混进代码。
+- **会变慢**：每轮 worker 要几分钟到几十分钟，交互式的快速试错体验会变差。
+- **成本数据**：目前还没有系统的对比数据，作者正在收集。
+
+## 验证状态
+
+| 项目 | 状态 |
+|---|---|
+| 平台 | Windows 11 + Git Bash：完整验证。macOS / Linux：未验证（进程管理有非 Windows 分支，但没有跑过） |
+| codex-cli | 0.163.0。其他版本未验证，换版本后先跑 `scripts/selftest-codex.sh --only V1` |
+| 模型 | GLM-5.3，经本地代理 |
+| 阶段 1 | `--impl codex`、`--impl pi` 在试验仓库端到端验证过；`--impl sonnet` 未验证 |
+| 阶段 3 | hook 单元测试和本机冒烟测试通过；真实会话里的规则遵守情况仍在验收 |
+| 安装命令 | 插件安装命令按本机已装的 marketplace 名（`mattpocock`）给出；`npm i -g @openai/codex` 是 codex 官方的安装方式。都没有在全新机器上重走一遍 |
+
+---
+
 ## 阶段 0：公共基础
 
 **安装**
@@ -92,7 +121,12 @@ spec 是一个 GitHub 父 issue，它的子 issue 就是 ticket，ticket 之间�
 **安装**
 
 1. 安装 codex CLI（已测试 0.163.0）：`npm i -g @openai/codex`，然后 `codex --version` 确认。
-2. 在 `~/.codex/config.toml` 配置一个名为 `custom` 的 provider，指向能提供 GLM 的 **Responses API** 端点。本机的写法（经本地 Ferryman 代理 `127.0.0.1:15722`，由代理负责对接智谱、注入真实 key）：
+2. **准备一个兼容 OpenAI Responses API 的端点**。codex 用 `wire_api = "responses"` 和模型通信，所以端点必须能处理 Responses API 请求（`POST /v1/responses`，流式 SSE）。只提供 Chat Completions 接口（`/v1/chat/completions`）的服务不能直接用。可选方案：
+   - **本地代理**：在本机跑一个代理，对外提供 Responses API，对内转发给模型服务并注入 key。作者用的是 [Ferryman](https://github.com/allanpk716/ferryman) 里的代理功能，监听 `127.0.0.1:15722`。注意这个功能目前没有作为 Ferryman 的公开功能写进文档。
+   - **原生支持 Responses API 的模型服务**：如果你的模型服务商直接提供 Responses API，把 `base_url` 指过去即可。
+   - **自建兼容网关**：一些开源 LLM 网关可以把 Responses API 转换成 Chat Completions。是否兼容 codex 要自己验证，可以用下面的 `--only L1` 测。
+
+3. 在 `~/.codex/config.toml` 配置一个名为 `custom` 的 provider，指向这个端点。作者环境的写法（本地代理 `127.0.0.1:15722`，由代理负责对接智谱、注入真实 key）：
 
    ```toml
    model_provider = "custom"
@@ -105,8 +139,14 @@ spec 是一个 GitHub 父 issue，它的子 issue 就是 ticket，ticket 之间�
    requires_openai_auth = true
    ```
 
-   provider 的名字必须是 `custom`：wrapper 用 `-c model_provider=custom -m glm-5.3` 钉死 provider 和模型。key 不要写进本仓库。
-3. 如果用代理，确保代理在跑（本机就是 Ferryman 开着）。
+   provider 的名字必须是 `custom`：wrapper 用 `-c model_provider=custom -m glm-5.3` 钉死 provider 和模型。模型不是 `glm-5.3` 时，调用 `codex-worker.sh` 要加 `--model <id>`，阶段 1 则修改 `SKILL.md` Config 里的 `CODEX_MODEL`。key 不要写进本仓库。
+
+4. **启动前预检**：每次启动 worker 前，`codex-worker.sh` 会先确认端点可达。预检地址按下面的优先级确定：
+   1. 环境变量 `CODEX_WORKER_PREFLIGHT=off`：不做预检。
+   2. 环境变量 `CODEX_WORKER_PREFLIGHT=<host>:<port>`：探测这个地址。
+   3. 否则读 `config.toml` 里 `[model_providers.custom]` 的 `base_url`。只有回环地址（`127.0.0.1`、`localhost`、`::1`）才会做 TCP 探测；远程地址跳过预检，交给 codex 自己报错。
+
+   本地代理没开时，worker 会立即以 `transient` 退出，错误信息是 `local proxy at <host>:<port> is not listening`。
 
 **验证**
 
@@ -136,6 +176,8 @@ scripts/selftest-codex.sh --only L1   # 真连一次 GLM，花极少 token；失
 1. **写入分工规则**：打开 [templates/global-claude-md.md](../templates/global-claude-md.md)，把分隔线以下的内容追加进 `~/.claude/CLAUDE.md`。如果原来有旧版"写代码交给 codex/PI"的段落，替换掉。先改两处占位：
    - `<GLM 代理说明>`：本机 codex 怎么连 GLM，例如"本机 Ferryman 代理 `127.0.0.1:15722` 上的 GLM"；
    - 技能路径：如果没克隆到 `~/.claude/skills/implement-spec-split`，全部替换成实际路径。
+
+   保留 `<!-- opus-codex-division: vN -->` 这一行版本标记。以后模板更新时，`scripts/doctor.sh` 会比较你 CLAUDE.md 里的标记和模板里的标记，不一致就提醒你同步。
 
 2. **注册 hook**：在 `~/.claude/settings.json` 的 `hooks.PreToolUse` 数组里**追加**一项（不要覆盖已有的 hook）：
 
@@ -217,7 +259,8 @@ node -e 'console.log(JSON.stringify({tool_name:"Write",tool_input:{file_path:"C:
 
 | 现象 | 原因与处理 |
 |---|---|
-| worker 状态是 `transient`，错误里有 `proxy not listening` | 代理（Ferryman）没开。开起来后让 Claude 重跑 |
+| worker 状态是 `transient`，错误是 `local proxy at <host>:<port> is not listening` | 本地代理没开，或者 `config.toml` 的 `base_url` 端口写错。开起来后让 Claude 重跑；确实不需要预检就设 `CODEX_WORKER_PREFLIGHT=off` |
+| worker 状态是 `transient`，错误是 `endpoint unreachable` | codex 连不上模型端点（网络或远程服务问题）。先用 `scripts/selftest-codex.sh --only L1` 单独测连通性 |
 | `auth` / `quota` | GLM key 失效或额度用完。Claude 会停下来问你，不会自己换方案 |
 | hook 不拦截 | 检查 `settings.json` 里的路径；新开会话；用上面的冒烟命令测 hook 本身；看是否有未过期的 `allow-direct-edit` |
 | 某个项目里 Claude 不按分工走 | 项目级 CLAUDE.md 可能写了相反的规则，优先看项目规则是否冲突 |

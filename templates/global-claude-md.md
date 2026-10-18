@@ -4,11 +4,13 @@ your global CLAUDE.md (append it, or replace an older "交给 codex/PI 写代码
 Adjust the two placeholders first:
   - <GLM 代理说明>: how codex reaches GLM on this machine, e.g. "本机 Ferryman 代理 127.0.0.1:15722 上的 GLM"
   - the skill path, if the skill is not cloned to ~/.claude/skills/implement-spec-split
+Keep the version marker line: scripts/doctor.sh compares it with this template to detect drift.
 See docs/setup.md, stage 3.
 -->
 
 ---
 
+<!-- opus-codex-division: v1 -->
 ## Opus / codex 分工（控制费用）
 
 CC 原生套餐用量不够。Opus 的额度只花在判断上，体量大而判断少的执行交给 codex worker：`codex exec` 走 <GLM 代理说明>，额度充足，由 wrapper 脚本 `codex-worker.sh` 运行。这个 wrapper 能看到进度、会自动判断卡死。

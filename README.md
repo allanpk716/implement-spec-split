@@ -7,7 +7,11 @@ A Claude Code skill: [Matt Pocock's `implement-spec`](https://github.com/mattpoc
 
 The original skill lets every subagent inherit the session model, so you pay top-tier prices for coding or get a weaker review. This version passes `model` explicitly on every subagent call. It also auto-discovers open, unfinished specs when invoked without an argument.
 
-> Status: `--impl pi` exercised end-to-end on a scratch repo (2026-10-11); `--impl codex` end-to-end on the same repo (2026-10-18); `--impl sonnet` and the draft-PR flow not yet. Report problems via issues.
+> Status: verified on **Windows 11 + Git Bash only** (macOS / Linux untested) with codex-cli 0.163.0. `--impl pi` exercised end-to-end on a scratch repo (2026-10-11); `--impl codex` end-to-end on the same repo (2026-10-18); `--impl sonnet` and the draft-PR flow not yet. Report problems via issues.
+
+> **Security:** codex workers run with `--dangerously-bypass-approvals-and-sandbox` — full read/write/exec access to your machine — and everything they read is sent to your model provider. Read the security section of [docs/setup.md](docs/setup.md) before use.
+>
+> **Fit:** built for "Claude quota is tight, a cheaper model has plenty". Every hand-off costs Claude tokens for the Brief and the review, so it may not save money on pay-as-you-go API billing.
 
 **Setup guide (中文): [docs/setup.md](docs/setup.md)** — staged setup for the three uses of this repo: parallel spec implementation, the codex (GLM) backend, and the global Opus / codex division of labour for everyday sessions (`templates/global-claude-md.md` + the `hooks/delegate-guard.js` PreToolUse hook).
 
