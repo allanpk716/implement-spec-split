@@ -4,7 +4,7 @@
 
 ## 注册
 
-在 `~/.claude/settings.json` 中加入：
+完整的安装步骤（含全局分工规则）见 [docs/setup.md](../docs/setup.md) 第 3 阶段。把 `<you>` 换成你的用户名；macOS / Linux 换成脚本的绝对路径。在 `~/.claude/settings.json` 中加入：
 
 ```json
 {
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node C:/Users/allan716/orca/isp-delegate-guard/hooks/delegate-guard.js",
+            "command": "node C:/Users/<you>/.claude/skills/implement-spec-split/hooks/delegate-guard.js",
             "timeout": 5
           }
         ]
