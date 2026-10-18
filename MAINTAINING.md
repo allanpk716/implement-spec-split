@@ -27,7 +27,7 @@
      - 不读 `CLAUDE.md`：加 `-c 'project_doc_fallback_filenames=["CLAUDE.md"]'` 就读（E2）；
      - 加载不了 tdd 技能：在提示词里写"先读 `<tdd dir>/SKILL.md`"就行，wrapper 的 `--skill` 就是这么做的（E3）；
      - 沙箱拦 worktree commit：改用 `--dangerously-bypass-approvals-and-sandbox`，和 pi 一样无沙箱（E1、E8，约束 2）；
-     - 依赖本机代理：依然成立，现在是 Ferryman（`127.0.0.1:15722`）。所以 wrapper 先探端口，preflight 也会先探。
+     - 依赖模型端点：配置在 `~/.codex/config.toml`。wrapper 会从 `base_url` 推导预检地址，只探测本地回环端点（作者环境：Ferryman，`127.0.0.1:15722`）。
    - 换成 codex 的原因是**能看到进度**：pi 的 `-p` 模式外面看不出它在干什么，用户碰到过 worker 卡很久却没法判断。codex 的 `--json` 每个命令、改动、说明都有事件，`progress.sh` 能直接展示。
    - pi 后端保留，等 codex 后端用过一段时间再决定删不删。pi 不在智谱公布的 Coding Plan 支持工具名单里，有被风控的可能，用户已经知道并接受。
 10. **pi 的 JSON 模式出错时退出码也是 0。**
@@ -82,7 +82,7 @@
 - **codex 后端**：`scripts/selftest-codex.sh [--only L1|V1|V2|V3]`。各级的内容见脚本开头的注释和 `docs/codex-backend.md` 第三节：
   - V1：假 codex，确定性，不花 GLM；
   - V2：真 codex 连假服务器（`scripts/testing/mock-responses.js`），不花 GLM，要跑 6–7 分钟；
-  - L1、V3：真 GLM，要求 Ferryman 开着。V3 会跑 tdd 小 ticket、Resume，以及 2 个 worker 并发。
+  - L1、V3：真 GLM，要求配置的模型端点可用（作者环境：Ferryman）。V3 会跑 tdd 小 ticket、Resume，以及 2 个 worker 并发。
 
   改了 `codex-worker.sh` 或 `progress.sh`，或者升级了 codex，都要把 V1、V2、V3 全部重跑一遍。用 `--impl codex` 跑技能时，第 0 步会跑 L1。
 - **L1 连通性（pi）**：`scripts/selftest.sh --only L1`。用 `--impl pi` 跑技能时，第 0 步也会执行这个检查。

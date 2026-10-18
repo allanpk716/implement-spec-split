@@ -5,7 +5,7 @@
 #
 # V1 uses a deterministic fake codex and costs no tokens. V2 uses real codex-cli
 # against local mock Responses servers and costs no GLM tokens. L1 and V3 use real GLM
-# through Ferryman and do cost tokens. Scratch dirs live under
+# through the author's Ferryman proxy and do cost tokens. Scratch dirs live under
 # ~/.cache/implement-spec-split-selftest-codex/<timestamp> and are removed only after a
 # successful token-free level; a failed level keeps its artifacts for diagnosis.
 
@@ -63,6 +63,74 @@ if [ -z "$ONLY" ] || [ "$ONLY" = V1 ]; then
   check "ok progress finished" bash -c "'$PROGRESS' '$ROOT/ok-run' | grep -q '^state: finished: ok' && '$PROGRESS' '$ROOT/ok-run' | grep -q 'npm test'"
   check "ok progress unwraps command and prints it once" bash -c "test \"\$('$PROGRESS' '$ROOT/ok-run' 20 | grep -Fc '\$ npm test  -> exit 0')\" -eq 1"
 
+  free_port() {
+    node -e 'const n=require("net"),s=n.createServer();s.listen(0,"127.0.0.1",()=>{const p=s.address().port;s.close(()=>console.log(p))})'
+  }
+  start_listener() {
+    local marker="$1" pid port i
+    node -e 'const n=require("net"),s=n.createServer(c=>{});s.listen(0,"127.0.0.1",()=>console.log(s.address().port))' > "$marker" &
+    pid=$!
+    [ -r "/proc/$pid/winpid" ] && CLEAN_WIN+=("$(cat "/proc/$pid/winpid")")
+    LISTENER_PID=$pid
+    for i in 1 2 3 4 5; do [ -s "$marker" ] && break; sleep 1; done
+    port=$(cat "$marker" 2>/dev/null || echo "")
+    [ -n "$port" ]
+  }
+  write_config() {
+    local home="$1" url="$2" quote="${3:-\"}"
+    mkdir -p "$home"
+    printf '[model_providers.custom]\nbase_url = %s%s%s\n' "$quote" "$url" "$quote" > "$home/config.toml"
+  }
+  preflight_case() {
+    local name="$1" home="$2"; shift 2
+    env FAKE_CODEX_SCENARIO=ok CODEX_WORKER_SKIP_PREFLIGHT=0 CODEX_HOME="$home" "$@" \
+      "$WORKER" --cwd "$ROOT/v1" --brief "$BRIEF" --run-dir "$ROOT/$name" --model "$MODEL" \
+      --retries 0 --time-limit 120 --idle-timeout 20 >/dev/null
+    P_EXIT=$?
+  }
+
+  P1_HOME="$ROOT/p1-home"; write_config "$P1_HOME" "https://api.example.invalid/v1"
+  preflight_case p1-remote "$P1_HOME"
+  check "P1 remote endpoint skips probe and succeeds (got $P_EXIT)" bash -c "test $P_EXIT -eq 0 && grep -q 'preflight skipped: remote endpoint' '$ROOT/p1-remote/stderr.log'"
+  P2_PORT=$(free_port); P2_HOME="$ROOT/p2-home"; write_config "$P2_HOME" "http://127.0.0.1:$P2_PORT/v1"
+  preflight_case p2-closed "$P2_HOME"
+  check "P2 closed local port exits transient (got $P_EXIT)" bash -c "test $P_EXIT -eq 4 && grep -q '$P2_PORT.*is not listening' '$ROOT/p2-closed/status.json'"
+  check "P2 status is transient" status_is "$ROOT/p2-closed" transient
+  P3_HOME="$ROOT/p3-home"; write_config "$P3_HOME" "http://localhost:0/v1"
+  start_listener "$ROOT/p3.port" || fail "P3 could not start TCP listener"
+  P3_PORT=$(cat "$ROOT/p3.port")
+  sed -i "s/:0\/v1/:$P3_PORT\/v1/" "$P3_HOME/config.toml"
+  preflight_case p3-open "$P3_HOME"
+  check "P3 open local port succeeds (got $P_EXIT)" test "$P_EXIT" -eq 0
+  kill "$LISTENER_PID" 2>/dev/null || true; wait "$LISTENER_PID" 2>/dev/null || true
+  P4_PORT=$(free_port); P4_HOME="$ROOT/p4-home"; write_config "$P4_HOME" "https://api.example.invalid/v1"
+  preflight_case p4-explicit "$P4_HOME" CODEX_WORKER_PREFLIGHT="127.0.0.1:$P4_PORT"
+  check "P4 explicit address overrides config (got $P_EXIT)" test "$P_EXIT" -eq 4
+  P5_PORT=$(free_port); P5_HOME="$ROOT/p5-home"; write_config "$P5_HOME" "http://127.0.0.1:$P5_PORT/v1"
+  preflight_case p5-off "$P5_HOME" CODEX_WORKER_PREFLIGHT=off
+  check "P5 explicit off skips probe (got $P_EXIT)" test "$P_EXIT" -eq 0
+  P6_PORT=$(free_port); P6_HOME="$ROOT/p6-home"; write_config "$P6_HOME" "http://127.0.0.1:$P6_PORT/v1"
+  preflight_case p6-legacy-off "$P6_HOME" CODEX_WORKER_SKIP_PREFLIGHT=1
+  check "P6 legacy skip alias works (got $P_EXIT)" test "$P_EXIT" -eq 0
+  P7_HOME="$ROOT/p7-home"; write_config "$P7_HOME" "https://api.example.invalid/v1"
+  preflight_case p7-invalid "$P7_HOME" CODEX_WORKER_PREFLIGHT=nonsense
+  check "P7 invalid explicit address exits usage error (got $P_EXIT)" test "$P_EXIT" -eq 64
+  P8_HOME="$ROOT/p8-home"; mkdir -p "$P8_HOME"
+  env -u CODEX_WORKER_PREFLIGHT -u CODEX_WORKER_SKIP_PREFLIGHT CODEX_HOME="$P8_HOME" \
+    FAKE_CODEX_SCENARIO=ok "$WORKER" --cwd "$ROOT/v1" --brief "$BRIEF" --run-dir "$ROOT/p8-no-config" \
+    --model "$MODEL" --retries 0 --time-limit 120 --idle-timeout 20 >/dev/null
+  P_EXIT=$?
+  check "P8 no configuration skips probe and succeeds (got $P_EXIT)" bash -c "test $P_EXIT -eq 0 && grep -q 'preflight skipped: no base_url found' '$ROOT/p8-no-config/stderr.log'"
+  P9_HOME="$ROOT/p9-home"; write_config "$P9_HOME" "https://127.0.0.1/v1"
+  preflight_case p9-https "$P9_HOME"
+  check "P9 https defaults to local port 443 (got $P_EXIT)" bash -c "test $P_EXIT -eq 4 && grep -q '127.0.0.1:443' '$ROOT/p9-https/status.json'"
+  P10_PORT=$(free_port); P10_HOME="$ROOT/p10-home"; write_config "$P10_HOME" "https://api.example.invalid/v1"
+  preflight_case p10-base-url "$P10_HOME" CODEX_WORKER_BASE_URL="http://127.0.0.1:$P10_PORT/v1"
+  check "P10 BASE_URL overrides config (got $P_EXIT)" test "$P_EXIT" -eq 4
+  P11_PORT=$(free_port); P11_HOME="$ROOT/p11-home"; write_config "$P11_HOME" "http://127.0.0.1:$P11_PORT/v1" "'"
+  preflight_case p11-single-quote "$P11_HOME"
+  check "P11 single-quoted config URL is parsed (got $P_EXIT)" test "$P_EXIT" -eq 4
+
   run_case 401 401 auth-run
   check "401 exit code (got $CASE_EXIT)" test "$CASE_EXIT" -eq 2
   check "401 status auth" status_is "$ROOT/auth-run" auth
@@ -76,7 +144,7 @@ if [ -z "$ONLY" ] || [ "$ONLY" = V1 ]; then
   check "429 final error keeps original message" bash -c "grep -q '429 Too Many Requests' '$ROOT/quota-run/status.json'"
   run_case network network-wait network-run
   check "network wait exit code (got $CASE_EXIT)" test "$CASE_EXIT" -eq 4
-  check "network wait reports proxy" bash -c "grep -q 'proxy unreachable' '$ROOT/network-run/status.json'"
+  check "network wait reports endpoint" bash -c "grep -q 'endpoint unreachable' '$ROOT/network-run/status.json'"
   run_case reconnect reconnect-only reconnect-run
   check "reconnect exit code (got $CASE_EXIT)" test "$CASE_EXIT" -eq 7
   check "reconnect errors do not reset idle" test "$(json "$ROOT/reconnect-run/status.json" status)" = stalled
