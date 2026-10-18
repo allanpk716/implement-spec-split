@@ -211,12 +211,20 @@ scripts/selftest-codex.sh --only L1   # 真连一次 GLM，花极少 token；失
   mkdir -p ~/.claude/state && date -d '+60 min' -Iseconds > ~/.claude/state/allow-direct-edit
   ```
 
-- 任何异常都放行（fail-open），hook 坏了不会卡住会话，但也就不再拦截。
+- 任何异常都放行（fail-open），hook 坏了不会卡住会话，但也就不再拦截。异常会记进 `~/.claude/state/delegate-guard.log`，`scripts/doctor.sh` 会提示最近 7 天内的错误。
+
+**调整 hook**
+
+- **全局阈值**：环境变量 `DELEGATE_GUARD_LIMIT`（正整数，默认 10）。
+- **英文提示**：环境变量 `DELEGATE_GUARD_LANG=en`。
+- 这两个环境变量都可以写进 `~/.claude/settings.json` 的 `env` 字段，对所有会话生效。
+- **按项目调整**：在项目里放 `.claude/delegate-guard.json`，内容为 `{"limit": 30}`（这个项目的阈值改成 30），或者 `{"enabled": false}`（这个项目不拦截）。hook 从会话的当前目录开始逐级向上找，用最近的那个文件；项目配置的优先级高于环境变量。
+- 注意：任何仓库都可以自带这个文件把 hook 关掉。hook 是帮 Claude 守规则的自律工具，不是安全边界。
 
 **验证**
 
 ```bash
-# 1. hook 单元测试：应输出 Summary: 19 passed, 0 failed
+# 1. hook 单元测试：应输出 Summary: 35 passed, 0 failed
 node ~/.claude/skills/implement-spec-split/hooks/test-delegate-guard.js
 
 # 2. 冒烟：应输出一段 permissionDecision 为 deny 的 JSON
