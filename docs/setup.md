@@ -42,8 +42,8 @@ English: [setup.en.md](setup.en.md)
 
 | 项目 | 状态 |
 |---|---|
-| 平台 | Windows 11 + Git Bash：完整验证（含真实 GLM 端到端）。Ubuntu 24.04：无模型的自测全部通过（`selftest-codex.sh --only V1`、hook 测试、doctor 测试），但没有用真实 codex 和 GLM 跑过。macOS：未验证（进程管理走和 Linux 相同的 POSIX 分支）。已知限制：备用的 pi 后端（`pi-worker.sh`）在 Linux/macOS 上杀进程时只杀根进程，在这两个平台上请用 codex 后端 |
-| codex-cli | 0.163.0。其他版本未验证，换版本后先跑 `scripts/selftest-codex.sh --only V1` |
+| 平台 | Windows 11 + Git Bash：完整验证（含真实 GLM 端到端）。Ubuntu 24.04：无模型的自测全部通过（`selftest-codex.sh --only V1`、hook 测试、doctor 测试），但没有用真实 codex 和 GLM 跑过。macOS 27（系统自带 bash 3.2）：完整验证（codex-cli 0.164.0，含真实 GLM 端到端 V3，2026-10-24）。已知限制：备用的 pi 后端（`pi-worker.sh`）在 Linux/macOS 上杀进程时只杀根进程，在这两个平台上请用 codex 后端 |
+| codex-cli | 0.163.0、0.164.0。其他版本未验证，换版本后先跑 `scripts/selftest-codex.sh --only V1` |
 | 模型 | GLM-5.3，经本地代理 |
 | 阶段 1 | `--impl codex`、`--impl pi` 在试验仓库端到端验证过；`--impl sonnet` 未验证 |
 | 阶段 3 | hook 单元测试和本机冒烟测试通过；真实会话里的规则遵守情况仍在验收 |
@@ -123,7 +123,7 @@ spec 是一个 GitHub 父 issue，它的子 issue 就是 ticket，ticket 之间�
 
 **安装**
 
-1. 安装 codex CLI（已测试 0.163.0）：`npm i -g @openai/codex`，然后 `codex --version` 确认。
+1. 安装 codex CLI（已测试 0.163.0、0.164.0）：`npm i -g @openai/codex`，然后 `codex --version` 确认。
 2. **准备一个兼容 OpenAI Responses API 的端点**。codex 用 `wire_api = "responses"` 和模型通信，所以端点必须能处理 Responses API 请求（`POST /v1/responses`，流式 SSE）。只提供 Chat Completions 接口（`/v1/chat/completions`）的服务不能直接用。可选方案：
    - **本地代理**：在本机跑一个代理，对外提供 Responses API，对内转发给模型服务并注入 key。作者用的是 [Ferryman](https://github.com/allanpk716/ferryman) 里的代理功能，监听 `127.0.0.1:15722`。注意这个功能目前没有作为 Ferryman 的公开功能写进文档。
    - **原生支持 Responses API 的模型服务**：如果你的模型服务商直接提供 Responses API，把 `base_url` 指过去即可。
@@ -143,6 +143,8 @@ spec 是一个 GitHub 父 issue，它的子 issue 就是 ticket，ticket 之间�
    ```
 
    provider 的名字必须是 `custom`：wrapper 用 `-c model_provider=custom -m glm-5.3` 钉死 provider 和模型。模型不是 `glm-5.3` 时，调用 `codex-worker.sh` 要加 `--model <id>`，阶段 1 则修改 `SKILL.md` Config 里的 `CODEX_MODEL`。key 不要写进本仓库。
+
+   照智谱官方 Codex 教程配置、直连 `open.bigmodel.cn` 的话，教程里的 provider 叫 `ZAI`：把 `model_provider = "ZAI"` 和 `[model_providers.ZAI]` 都改成 `custom`，`name = "ZAI"` 可以保留（codex 0.164 起 `name` 不能为空）。否则 worker 会报 `model_providers.custom: provider name must not be empty`。支持其他 provider 名见 issue #6。
 
 4. **启动前预检**：每次启动 worker 前，`codex-worker.sh` 会先确认端点可达。预检地址按下面的优先级确定：
    1. 环境变量 `CODEX_WORKER_PREFLIGHT=off`：不做预检。

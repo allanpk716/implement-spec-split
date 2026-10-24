@@ -5,7 +5,7 @@ set -u
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 DOCTOR=$ROOT/scripts/doctor.sh
-NODE_DIR=$(cd "$(dirname "$(command -v node)")" && pwd)
+NODE_BIN=$(command -v node)
 WORK=$(mktemp -d)
 CASE_INDEX=0
 FAILED=0
@@ -29,7 +29,9 @@ new_case() {
   CASE_CLAUDE=$CASE_HOME/.claude
   CASE_CODEX=$CASE_HOME/.codex
   CASE_BIN=$CASE_DIR/bin
+  CASE_SAFE_BIN=$CASE_DIR/bin-without-codex
   mkdir -p "$CASE_CLAUDE/state" "$CASE_CLAUDE/plugins" "$CASE_CODEX" "$CASE_BIN"
+  mkdir -p "$CASE_SAFE_BIN"
   cat > "$CASE_BIN/codex" <<'EOF'
 #!/usr/bin/env bash
 if [ "${1:-}" = "--version" ]; then
@@ -39,9 +41,15 @@ fi
 exit 1
 EOF
   chmod +x "$CASE_BIN/codex"
+  cat > "$CASE_SAFE_BIN/node" <<'EOF'
+#!/usr/bin/env bash
+exec "$NODE_BIN" "$@"
+EOF
+  chmod +x "$CASE_SAFE_BIN/node"
   printf '%s\n' '{"version":1,"plugins":{"mattpocock-skills@mattpocock":[]}}' > "$CASE_CLAUDE/plugins/installed_plugins.json"
   printf '%s\n' 'model_provider = "custom"' > "$CASE_CODEX/config.toml"
   printf '\n%s\n' '[model_providers.custom]' >> "$CASE_CODEX/config.toml"
+  printf '%s\n' 'name = "custom"' >> "$CASE_CODEX/config.toml"
   printf '%s\n' 'base_url = "https://api.example.invalid/v1"' >> "$CASE_CODEX/config.toml"
   printf '%s\n' 'wire_api = "responses"' >> "$CASE_CODEX/config.toml"
   printf '<!-- opus-codex-division: v1 -->\n' > "$CASE_CLAUDE/CLAUDE.md"
@@ -49,7 +57,7 @@ EOF
 }
 
 hook_settings() {
-  HOOK_PATH=$1 MATCHER=$2 node - <<'NODE'
+  HOOK_PATH=$1 MATCHER=$2 NODE_CMD=${3:-node} node - <<'NODE'
 const path = require('path');
 const hookPath = process.env.HOOK_PATH;
 const normalized = process.platform === 'win32' && /^\/[A-Za-z]\//.test(hookPath)
@@ -59,7 +67,7 @@ process.stdout.write(JSON.stringify({
   hooks: {
     PreToolUse: [{
       matcher: process.env.MATCHER,
-      hooks: [{type: 'command', command: `node "${normalized}"`, timeout: 5}],
+      hooks: [{type: 'command', command: `${process.env.NODE_CMD} "${normalized}"`, timeout: 5}],
     }],
   },
 }, null, 2) + '\n');
@@ -75,8 +83,8 @@ run_doctor() {
 
 run_doctor_without_codex() {
   local args=("$@")
-  env HOME="$CASE_HOME" CLAUDE_CONFIG_DIR="$CASE_CLAUDE" CODEX_HOME="$CASE_CODEX" \
-    PATH="$CASE_BIN:$NODE_DIR:/mingw64/bin:/usr/bin:/bin" \
+  env HOME="$CASE_HOME" CLAUDE_CONFIG_DIR="$CASE_CLAUDE" CODEX_HOME="$CASE_CODEX" NODE_BIN="$NODE_BIN" \
+    PATH="$CASE_SAFE_BIN:/usr/bin:/bin" \
     bash "$DOCTOR" "${args[@]}" > "$CASE_DIR/doctor.out" 2> "$CASE_DIR/doctor.err"
   RUN_EXIT=$?
 }
@@ -169,6 +177,12 @@ run_doctor --json
 expect_exit 1 "Bash-only matcher exits 1"
 expect_has FAIL "未同时覆盖 Edit 和 Write" "Bash-only matcher reports FAIL"
 
+# 5b. Hook command runs node by absolute path (Homebrew on macOS).
+new_case
+hook_settings "$ROOT/hooks/delegate-guard.js" 'Edit|Write|NotebookEdit' /opt/homebrew/bin/node > "$CASE_CLAUDE/settings.json"
+run_doctor --json
+expect_has PASS "delegate-guard.js 存在" "absolute node path in hook command is parsed"
+
 # 6. Installed rule version is v0.
 new_case
 printf '<!-- opus-codex-division: v0 -->\n' > "$CASE_CLAUDE/CLAUDE.md"
@@ -203,6 +217,7 @@ new_case
 IDLE_PORT=$(free_port)
 printf '%s\n' "base_url = 'http://127.0.0.1:$IDLE_PORT/v1'" > "$CASE_CODEX/config.toml"
 printf '\n%s\n' '[model_providers.custom]' >> "$CASE_CODEX/config.toml"
+printf '%s\n' 'name = "custom"' >> "$CASE_CODEX/config.toml"
 printf '%s\n' "base_url = 'http://127.0.0.1:$IDLE_PORT/v1'" >> "$CASE_CODEX/config.toml"
 run_doctor --json
 expect_exit 1 "idle local proxy exits 1"
@@ -213,6 +228,7 @@ new_case
 LIVE_PORT=$(free_port)
 start_listener "$LIVE_PORT"
 printf '\n%s\n' '[model_providers.custom]' > "$CASE_CODEX/config.toml"
+printf '%s\n' 'name = "custom"' >> "$CASE_CODEX/config.toml"
 printf '%s\n' "base_url = 'http://127.0.0.1:$LIVE_PORT/v1'" >> "$CASE_CODEX/config.toml"
 run_doctor --json
 expect_exit 0 "listening local proxy exits 0"
@@ -227,7 +243,7 @@ expect_has INFO "预检已通过环境变量关闭" "disabled preflight reports 
 
 # 13. Unexpired override.
 new_case
-date -u -d '+60 minutes' +%s > "$CASE_CLAUDE/state/allow-direct-edit"
+node -e 'console.log(Math.floor((Date.now() + 60 * 60000) / 1000))' > "$CASE_CLAUDE/state/allow-direct-edit"
 run_doctor --json
 expect_exit 0 "active override exits 0"
 expect_has WARN "例外开关绕过" "active override reports WARN"

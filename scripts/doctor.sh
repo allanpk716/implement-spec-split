@@ -85,7 +85,9 @@ same_path() {
   fi
   a=${a//\\//}
   b=${b//\\//}
-  [ "${a,,}" = "${b,,}" ]
+  a=$(printf '%s' "$a" | tr '[:upper:]' '[:lower:]')
+  b=$(printf '%s' "$b" | tr '[:upper:]' '[:lower:]')
+  [ "$a" = "$b" ]
 }
 
 toml_custom_value() {
@@ -121,6 +123,7 @@ fi
 UNAME_S=$(uname -s)
 case "$UNAME_S" in
   MINGW*|MSYS*) add basic PASS "Git Bash" "Git Bash" ;;
+  Darwin) add basic PASS "macOS" "macOS" ;;
   *) add basic WARN "未验证的平台，进程管理路径可能有问题" "Unverified platform; process-management paths may not work" "优先使用 Windows + Git Bash" "Prefer Windows with Git Bash" ;;
 esac
 
@@ -172,10 +175,10 @@ CODEX_VERSION=""
 if [ -n "$CODEX_BIN" ]; then
   CODEX_VERSION=$(codex --version 2>/dev/null | head -n 1 | grep -o '[0-9][0-9.]*' | head -n 1 || true)
   if [ -n "$CODEX_VERSION" ]; then
-    if [[ $CODEX_VERSION == 0.163.* ]]; then
-      add stage2 PASS "codex 可用 ($CODEX_VERSION)" "codex is available ($CODEX_VERSION)"
+    if [[ "$CODEX_VERSION" == 0.163.* || "$CODEX_VERSION" == 0.164.* ]]; then
+      add stage2 PASS "codex 可用 (${CODEX_VERSION})" "codex is available (${CODEX_VERSION})"
     else
-      add stage2 WARN "codex 版本为 $CODEX_VERSION，未经验证" "codex version is $CODEX_VERSION and is unverified" "先跑 scripts/selftest-codex.sh --only V1" "First run scripts/selftest-codex.sh --only V1"
+      add stage2 WARN "codex 版本为 ${CODEX_VERSION}，未经验证" "codex version is ${CODEX_VERSION} and is unverified" "先跑 scripts/selftest-codex.sh --only V1" "First run scripts/selftest-codex.sh --only V1"
     fi
   elif [ "$STAGE3_CONFIGURED" -eq 1 ]; then
     add stage2 FAIL "codex --version 无法运行" "codex --version could not run" "重装 npm i -g @openai/codex" "Reinstall with npm i -g @openai/codex"
@@ -199,11 +202,14 @@ else
   [ -n "$BASE_URL" ] || CONFIG_PROBLEM="config.toml 缺少 base_url"
 fi
 if [ -n "$CONFIG_PROBLEM" ]; then
-  CONFIG_PROBLEM_EN=$(case "$CONFIG_PROBLEM" in
-    *"不存在"*) printf '%s' "config.toml does not exist" ;;
-    *"缺少 [model_providers.custom]"*) printf '%s' "config.toml is missing [model_providers.custom]" ;;
-    *) printf '%s' "config.toml is missing base_url" ;;
-  esac)
+  config_problem_en() {
+    case "$CONFIG_PROBLEM" in
+      *"不存在"*) printf '%s' "config.toml does not exist" ;;
+      *"缺少 [model_providers.custom]"*) printf '%s' "config.toml is missing [model_providers.custom]" ;;
+      *) printf '%s' "config.toml is missing base_url" ;;
+    esac
+  }
+  CONFIG_PROBLEM_EN=$(config_problem_en)
   if [ "$STAGE3_CONFIGURED" -eq 1 ]; then
     add stage2 FAIL "$CONFIG_PROBLEM" "$CONFIG_PROBLEM_EN" "按 docs/setup.md 阶段 2 配置 custom provider" "Configure the custom provider as described in docs/setup.md stage 2"
   else
@@ -291,7 +297,7 @@ else
       HOOK_COMMAND=$command
       HOOK_PATH=$(HOOK_COMMAND=$command node -e '
         const command = process.env.HOOK_COMMAND;
-        const match = command.match(/(?:^|[|;&\s])(?:node(?:\.exe)?)\s+(?:"([^"]+)"|\x27([^\x27]+)\x27|(\S+))/i);
+        const match = command.match(/(?:^|[|;&\s\/\\"])(?:node(?:\.exe)?)"?\s+(?:"([^"]+)"|\x27([^\x27]+)\x27|(\S+))/i);
         const path = match ? (match[1] || match[2] || match[3] || "") : "";
         console.log(path.includes("delegate-guard.js") ? path : "");
       ')

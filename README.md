@@ -7,7 +7,7 @@ A Claude Code skill: [Matt Pocock's `implement-spec`](https://github.com/mattpoc
 
 The original skill lets every subagent inherit the session model, so you pay top-tier prices for coding or get a weaker review. This version passes `model` explicitly on every subagent call. It also auto-discovers open, unfinished specs when invoked without an argument.
 
-> Status: fully verified on **Windows 11 + Git Bash** with codex-cli 0.163.0; Ubuntu 24.04 passes all model-free self-tests (not yet run against a real model); macOS untested. On Linux/macOS use `--impl codex` (the pi backend does not kill process trees there). `--impl pi` exercised end-to-end on a scratch repo (2026-10-11); `--impl codex` end-to-end on the same repo (2026-10-18); `--impl sonnet` and the draft-PR flow not yet. Report problems via issues.
+> Status: fully verified on **Windows 11 + Git Bash** with codex-cli 0.163.0; Ubuntu 24.04 passes all model-free self-tests (not yet run against a real model); macOS 27 (bash 3.2) fully verified with codex-cli 0.164.0, including real GLM (V3, 2026-10-24). On Linux/macOS use `--impl codex` (the pi backend does not kill process trees there). `--impl pi` exercised end-to-end on a scratch repo (2026-10-11); `--impl codex` end-to-end on the same repo (2026-10-18); `--impl sonnet` and the draft-PR flow not yet. Report problems via issues.
 
 > **Security:** codex workers run with `--dangerously-bypass-approvals-and-sandbox` — full read/write/exec access to your machine — and everything they read is sent to your model provider. Read the security section of [docs/setup.md](docs/setup.md) before use.
 >
@@ -18,7 +18,7 @@ The original skill lets every subagent inherit the session model, so you pay top
 ## Requirements
 
 - Claude Code with the `mattpocock-skills` plugin installed (uses its `tdd` and `code-review` skills, and its `docs/agents/issue-tracker.md` setup via `/setup-matt-pocock-skills`).
-- For `--impl codex` only: the `codex` CLI (tested with 0.163.0), Node.js, Git Bash (on Windows), and a `custom` model provider in `~/.codex/config.toml` serving GLM; the worker's TCP preflight is derived from that `base_url` and only probes loopback endpoints (author environment: a local proxy on `127.0.0.1:15722`). Check it with `scripts/selftest-codex.sh` (`--only V1` needs no model at all). Design notes and evidence: [docs/codex-backend.md](docs/codex-backend.md) (中文).
+- For `--impl codex` only: the `codex` CLI (tested with 0.163.0 and 0.164.0), Node.js, Git Bash (on Windows), and a `custom` model provider in `~/.codex/config.toml` serving GLM; the worker's TCP preflight is derived from that `base_url` and only probes loopback endpoints (author environment: a local proxy on `127.0.0.1:15722`). Check it with `scripts/selftest-codex.sh` (`--only V1` needs no model at all). Design notes and evidence: [docs/codex-backend.md](docs/codex-backend.md) (中文).
 - For `--impl pi` only: the `pi` CLI, Node.js, Git Bash (on Windows), and a GLM provider in `~/.pi/agent/models.json` with a valid Zhipu Coding Plan key, e.g.:
 
   ```json
