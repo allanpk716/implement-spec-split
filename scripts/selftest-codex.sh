@@ -100,6 +100,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
+write_config() {
+  local home="$1" url="$2" quote="${3:-\"}"
+  mkdir -p "$home"
+  printf '[model_providers.custom]\nname = "custom"\nbase_url = %s%s%s\n' "$quote" "$url" "$quote" > "$home/config.toml"
+}
+
 if [ -z "$ONLY" ] || [ "$ONLY" = V1 ]; then
   echo "V1 fake codex"
   CODEX_HOME="$ROOT/v1-home"; mkdir -p "$CODEX_HOME/sessions" "$ROOT/v1"
@@ -132,11 +138,6 @@ if [ -z "$ONLY" ] || [ "$ONLY" = V1 ]; then
     port=$(cat "$marker" 2>/dev/null || echo "")
     [ -n "$port" ]
   }
-  write_config() {
-    local home="$1" url="$2" quote="${3:-\"}"
-    mkdir -p "$home"
-    printf '[model_providers.custom]\nbase_url = %s%s%s\n' "$quote" "$url" "$quote" > "$home/config.toml"
-  }
   preflight_case() {
     local name="$1" home="$2"; shift 2
     env FAKE_CODEX_SCENARIO=ok CODEX_WORKER_SKIP_PREFLIGHT=0 CODEX_HOME="$home" "$@" \
@@ -155,7 +156,8 @@ if [ -z "$ONLY" ] || [ "$ONLY" = V1 ]; then
   P3_HOME="$ROOT/p3-home"; write_config "$P3_HOME" "http://localhost:0/v1"
   start_listener "$ROOT/p3.port" || fail "P3 could not start TCP listener"
   P3_PORT=$(cat "$ROOT/p3.port")
-  sed -i "s/:0\/v1/:$P3_PORT\/v1/" "$P3_HOME/config.toml"
+  P3_CONFIG="$P3_HOME/config.toml"
+  sed "s/:0\/v1/:$P3_PORT\/v1/" "$P3_CONFIG" > "$P3_CONFIG.tmp" && mv "$P3_CONFIG.tmp" "$P3_CONFIG"
   preflight_case p3-open "$P3_HOME"
   check "P3 open local port succeeds (got $P_EXIT)" test "$P_EXIT" -eq 0
   kill "$LISTENER_PID" 2>/dev/null || true; wait "$LISTENER_PID" 2>/dev/null || true
@@ -376,6 +378,10 @@ fi
 
 if [ -z "$ONLY" ] || [ "$ONLY" = V2 ]; then
   echo "V2 real codex + mock provider"
+  V2_HOME="$ROOT/v2-home"; write_config "$V2_HOME" "http://127.0.0.1:1/v1"
+  V2_CODEX_HOME="$V2_HOME"
+  if command -v cygpath >/dev/null 2>&1; then V2_CODEX_HOME=$(cygpath -m "$V2_HOME"); fi
+  export CODEX_HOME="$V2_CODEX_HOME"
   PORT=$(node -e 'const n=require("net");const s=n.createServer();s.listen(0,"127.0.0.1",()=>{console.log(s.address().port);s.close()})')
   MOCK="$ROOT/mock"; mkdir -p "$MOCK"
   start_mock() {

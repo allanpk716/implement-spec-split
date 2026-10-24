@@ -43,8 +43,8 @@ This division of labour is optimized for one specific situation: **Claude quota 
 
 | Item | Status |
 |---|---|
-| Platform | Windows 11 + Git Bash: fully verified, including real GLM end to end. Ubuntu 24.04: all model-free self-tests pass (`selftest-codex.sh --only V1`, hook tests, doctor tests), but it has not been run with a real codex and GLM. macOS: unverified (process management uses the same POSIX branch as Linux). Known limitation: the alternate pi backend (`pi-worker.sh`) only kills the root process on Linux/macOS; use the codex backend on those platforms |
-| codex-cli | 0.163.0. Other versions are unverified; after changing versions, first run `scripts/selftest-codex.sh --only V1` |
+| Platform | Windows 11 + Git Bash: fully verified, including real GLM end to end. Ubuntu 24.04: all model-free self-tests pass (`selftest-codex.sh --only V1`, hook tests, doctor tests), but it has not been run with a real codex and GLM. macOS 27 (stock bash 3.2): fully verified with codex-cli 0.164.0, including real GLM end to end (V3, 2026-10-24). Known limitation: the alternate pi backend (`pi-worker.sh`) only kills the root process on Linux/macOS; use the codex backend on those platforms |
+| codex-cli | 0.163.0, 0.164.0. Other versions are unverified; after changing versions, first run `scripts/selftest-codex.sh --only V1` |
 | Model | GLM-5.3, through a local proxy |
 | Stage 1 | `--impl codex` and `--impl pi` verified end-to-end in a scratch repo; `--impl sonnet` unverified |
 | Stage 3 | Hook unit tests and a local smoke test pass; rule adherence in real sessions is still being validated |
@@ -124,7 +124,7 @@ This makes `codex exec` do work with GLM. Both Stage 1's `--impl codex` and Stag
 
 **Install**
 
-1. Install the codex CLI (tested with 0.163.0): `npm i -g @openai/codex`, then confirm with `codex --version`.
+1. Install the codex CLI (tested with 0.163.0 and 0.164.0): `npm i -g @openai/codex`, then confirm with `codex --version`.
 2. **Prepare an endpoint compatible with the OpenAI Responses API**. codex uses `wire_api = "responses"` to communicate with the model, so the endpoint must handle Responses API requests (`POST /v1/responses`, streaming SSE). A service that only exposes Chat Completions (`/v1/chat/completions`) cannot be used directly. Options:
    - **Local proxy**: run a proxy on your machine that exposes the Responses API externally and forwards to the model service internally while injecting the key. The author uses the proxy feature in [Ferryman](https://github.com/allanpk716/ferryman), listening on `127.0.0.1:15722`. Note that this feature is not currently documented as a public Ferryman feature.
    - **Model service with native Responses API support**: if your model provider directly offers the Responses API, point `base_url` at it.
@@ -144,6 +144,8 @@ This makes `codex exec` do work with GLM. Both Stage 1's `--impl codex` and Stag
    ```
 
    The provider name must be `custom`: the wrappers pin the provider and model with `-c model_provider=custom -m glm-5.3`. If the model is not `glm-5.3`, add `--model <id>` when calling `codex-worker.sh`; in Stage 1, change `CODEX_MODEL` in the Config section of `SKILL.md`. Do not put the key in this repository.
+
+   If you follow Zhipu's official Codex recipe (direct to `open.bigmodel.cn`), its provider is named `ZAI`: rename both `model_provider = "ZAI"` and `[model_providers.ZAI]` to `custom`; `name = "ZAI"` can stay (codex 0.164+ requires a non-empty `name`). Otherwise the worker fails with `model_providers.custom: provider name must not be empty`. Support for other provider names is tracked in issue #6.
 
 4. **Preflight before startup**: before each worker starts, `codex-worker.sh` first confirms that the endpoint is reachable. The preflight address is determined in this priority order:
    1. Environment variable `CODEX_WORKER_PREFLIGHT=off`: do no preflight.
