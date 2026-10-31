@@ -109,6 +109,7 @@ A spec is a parent GitHub issue. Its child issues are tickets, and dependencies 
 - Merges happen serially: at any one time, only one merger merges completed tickets into the integration branch.
 - Concurrency limit: with `--impl sonnet`, it is governed by Claude subagent concurrency; with `--impl codex/pi`, it is governed by `GLM_MAX_PARALLEL` (default 2), and `--parallel n` overrides it for the current run only. A value of 2-3 is recommended, with 4 at most during quiet hours: Zhipu rate-limits at peak times, and any worker that hits a 429 stops the whole run to ask you.
 - After each ticket is complete, it must pass the verification gate and two Opus reviews (Standards and Spec) before it counts as done.
+- Several specs at once: open one session per Orca worktree of the same clone and run the skill in each. Without a spec number, the skill lists the candidates with their state (free / in progress / interrupted?) and lets you choose; once taken, it links the session's worktree to that issue and retitles the tab `spec-<n> …`. Choosing an in-progress or interrupted spec continues the unfinished work (Recovery). `--parallel` counts per run: the workers of parallel runs add up and share one GLM quota.
 
 Change defaults in the "Config" section of `SKILL.md`.
 

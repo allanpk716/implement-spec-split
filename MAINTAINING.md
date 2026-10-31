@@ -15,7 +15,7 @@
    - 同理，`tdd` 写成全名 `mattpocock-skills:tdd`。
 4. **编排的主代理跑在会话模型上。** 只有子代理的模型由本技能决定。主代理要判断 review 意见属于设计层面还是机械修复，所以会话不建议用太弱的模型。
 5. **draft PR 流程。** 如果 tracker 靠 PR 关单，第一次合并后开 draft PR，最后标成可以 review。原版有这一步，最早的 split 版漏了，后来补回。
-6. **自动找 spec（第 0 步）。** 原版没有这一步，是本技能加的。它用 GitHub issue API 的 `sub_issues_summary` 字段，判断哪些父 issue 还有没关的子 ticket。
+6. **找 spec（第 0 步）。** 原版没有这一步，是本技能加的。它用 GitHub issue API 的 `sub_issues_summary` 字段，判断哪些父 issue 还有没关的子 ticket。
 7. **push 和关单前先问用户。** 本技能加了这条，原版没有。
 8. **GLM 只能放到会话外面跑（External worker）。**
    - Agent 工具的 `model` 参数只能选 `sonnet`、`opus`、`haiku`、`fable`。
@@ -62,6 +62,12 @@
     - Windows 的 pid 会很快被复用。`pid` 文件记录"pid + 进程启动时间"；`progress.sh` 先看 `status.json` 是否比 `pid` 新，再核对启动时间（V3 实测碰到过）。
     - bypass 下 codex 仍有内置命令策略，会拒绝 `rm -rf` 和 `Remove-Item -Recurse`（E15）。Brief 里别让它递归删目录。
     - 不走 codex-plugin-cc：它没有卡死检测和 Time limit，后台任务会永远停在 running，在 Git Bash 下取消会失败，还依赖本地补丁（见文档第一节"参考"）。插件只留给临时手动用。
+18. **多个 Run 并行做不同 spec 时，靠"固定名 integration branch + 用户选择"协调，不做锁。**
+    - 第 0 步不再自动选 spec：总是列出候选及状态（空闲 / 进行中 / 疑似中断 / 被阻塞），由用户选。integration branch 名字固定为 `spec-<n>`，检出在独立 worktree `<repo>-wt/spec-<n>`；`git worktree add -b` 遇到已存在的分支会失败，这就是唯一的互斥，两个会话同时领同一个 spec 只有一个能成功。
+    - Orca 里用 `orca worktree set --issue <n> --workspace-status in-progress` 标记，并给标签页改名。判断"进行中"读的是 worktree 的 `linkedIssue`/`workspaceStatus`，加上该 worktree 里有没有活着的 claude 终端。别改成读标签页标题：`orca terminal rename` 设的标题 CLI 读不回来（`terminal list/show` 的 `title` 是 Claude Code 自己设的标题，2026-11-01 实测）。
+    - 用户选了已在进行或疑似中断的 spec，就是 Recovery（GLOSSARY.md）：复用分支，留下的 ticket worktree 按 worker 的 `status.json` 处理。会话是否还活着由用户判断，不做心跳、pid 检查、stale 判定或 GitHub label/评论占用。这些在 2026-11-01 讨论过，复杂度换来的只是"精确判死"，用户在 Orca 里一眼就能看到；接受的代价是用户若误选一个其实还活着的 spec，会有两个 Orchestrator 撞车（选择时会提醒）。
+    - ticket worktree/分支命名 `spec-<n>-t<m>`、run dir 以 spec 编号开头，Recovery 靠这两点找到上一个 Run 的残留。
+    - 只覆盖同一个 clone 的多个 worktree（分支是本地的）。`--parallel` 按 Run 计，并行的 Run 相加、共享 GLM 额度。
 
 ## 同步上游
 

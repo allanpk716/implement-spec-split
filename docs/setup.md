@@ -108,6 +108,7 @@ spec 是一个 GitHub 父 issue，它的子 issue 就是 ticket，ticket 之间�
 - 合并串行进行：同一时间只有一个 merger 把完成的 ticket 合进集成分支。
 - 并发上限：`--impl sonnet` 时由 Claude 子代理并发；`--impl codex/pi` 时由 `GLM_MAX_PARALLEL` 控制（默认 2），可以用 `--parallel n` 只对本次运行覆盖。建议 2–3，闲时最多 4：智谱高峰期会限流，任何一个 worker 撞上 429 都会让整个运行停下来问你。
 - 每个 ticket 完成后都要经过验证关口和两个 Opus 审查（Standards、Spec）才算完。
+- 多个 spec 同时做：在同一个 clone 的多个 Orca worktree 里各开一个会话、各跑一次技能。不带 spec 编号时，技能会列出候选和状态（空闲 / 进行中 / 疑似中断），由你选；领到后会把会话的 worktree 关联到该 issue、标签页改名为 `spec-<n> …`。选一个"进行中"或"疑似中断"的 spec 就是接着做上次没做完的（Recovery）。`--parallel` 按每个运行计，几个运行的 worker 数相加，共享 GLM 额度。
 
 默认值在 `SKILL.md` 的 "Config" 一节修改。
 
