@@ -10,6 +10,11 @@ Same goal and task-graph workflow as `mattpocock-skills:implement-spec`, with on
 
 Terms (Orchestrator, In-session subagent, External worker, Implement backend, Brief, ...) are defined in `GLOSSARY.md` next to this file.
 
+## Usage
+
+- `/implement-spec-split <spec ref> [backend options]`: implement or recover one Spec as described below.
+- `/implement-spec-split --status`: only run `<skill dir>/scripts/pipeline-status.sh`, relay its result, and stop. Do not take a Spec, run preflight, or dispatch a worker.
+
 ## Config (edit here to change the policy)
 
 - `IMPLEMENT_BACKEND` = `sonnet` — who runs the implementing roles (exploration, implementer, merger, fix):
@@ -37,16 +42,25 @@ With the `sonnet` backend, pass the `model` parameter explicitly on every Agent 
 
 ## Step 0: pick the spec and take it
 
-Several Runs may work at once, one Spec each, typically one Claude Code session per Orca worktree. The Spec's integration branch, always named exactly `spec-<n>`, is what marks a Spec as taken; Orca metadata only shows it to the user.
+Several Runs may work at once, one Spec each, typically one Claude Code session per Orca worktree. The Spec's integration branch, always named exactly `spec-<n>`, is what marks a Spec as taken; Orca metadata only shows it to the user. Here `<n>` is always the **Spec issue number**, not the number of a wayfinder map or map implementation ticket.
 
-1. **Candidates.** If the user passed a spec reference (number, URL, path), it is the only candidate. Otherwise discover them via the tracker doc (`docs/agents/issue-tracker.md`). For GitHub, list open parent issues that still have unfinished sub-issues:
+On GitHub, identify Specs structurally, not by a “规格：” title prefix:
+
+- A current Spec is an open issue whose body contains the to-spec template heading `## Problem Statement`.
+- A legacy Spec is an open parent issue without the `wayfinder:map` label and without that heading, but with unfinished sub-issues.
+
+Resolve a Spec to its Tickets in this order:
+
+1. If the Spec issue has its own sub-issues, those sub-issues are the Tickets.
+2. Otherwise, take the open wayfinder map implementation tickets referenced on an `实现票：#<n>` or `Implementation ticket(s): #<n>` line in the Spec body (only that line counts: specs also mention other map tickets as out of scope, and those must not be collected). to-spec does not write this line by itself, so the repo's tracker doc should require it. Such an implementation ticket has no `wayfinder:*` label and belongs to a `wayfinder:map` issue. If it has sub-issues, those sub-issues are the Tickets; if it has none, that implementation ticket is itself the one Ticket (a single-ticket Spec). Multiple referenced implementation tickets are all collected.
+
+1. **Candidates.** If the user passed a spec reference (number, URL, path), it is the only candidate; verify that it meets one of the Spec rules above. Otherwise discover candidates via the tracker doc (`docs/agents/issue-tracker.md`). For GitHub, run:
 
    ```bash
-   gh api "repos/{owner}/{repo}/issues?state=open&per_page=100" \
-     --jq '.[]|select(.sub_issues_summary.total>0 and .sub_issues_summary.completed<.sub_issues_summary.total)|"#\(.number) \(.sub_issues_summary.completed)/\(.sub_issues_summary.total) \(.title)"'
+   <skill dir>/scripts/pipeline-status.sh
    ```
 
-   Also look for open specs with no tickets yet (labelled e.g. `spec`/`prd`/`needs-triage` per the tracker doc, or a newly opened parent issue): those need ticketing first, so report them and suggest the repo's to-issues/triage skill instead of implementing. For non-GitHub trackers, do the equivalent per the tracker doc.
+   The script lists four stages: `可以实现` (the candidates), `有规格、未拆票` (suggest `to-tickets`), `缺规格` (suggest `to-spec`), and `地图仍在探索` (suggest `wayfinder`). When asking the user, append the three non-candidate groups after the candidate list as hints. For non-GitHub trackers, do the equivalent per the tracker doc.
 2. **State of each candidate.** "In Orca" means `ORCA_WORKTREE_ID` is set and `orca` is on PATH.
    - **free**: no local branch `spec-<n>` (nor a legacy `spec-<n>-*` from before this naming rule);
    - **in progress**: the branch exists and, in Orca, some worktree in `orca worktree list --json` has `linkedIssue` = n and `workspaceStatus` = `in-progress`, with a live Claude terminal in it (`orca terminal list --json`: same `worktreePath`, `agentIdentity` = `claude`);
@@ -73,7 +87,7 @@ Continue the Spec on its existing integration branch and integration worktree (`
 
 "Dispatch <role>" below means: with the `sonnet` backend, an In-session subagent with `model: IMPLEMENT_MODEL`; with the `codex` or `pi` backend, an External worker (see below).
 
-1. Read the spec and tickets; build the task graph / frontier. The issue tracker comes from the repo's `docs/agents/issue-tracker.md`; if missing, tell the user to run `/setup-matt-pocock-skills`.
+1. Read the spec and tickets; build the task graph / frontier. The issue tracker comes from the repo's `docs/agents/issue-tracker.md`; if missing, tell the user to run `/setup-matt-pocock-skills`. Use exactly the Spec-to-Ticket resolution rules in step 0 (including a single-ticket Spec whose only Ticket is the referenced map implementation ticket).
 2. (optional) Dispatch an exploration role. It saves its markdown notes in a directory outside the repo, accessible by all later roles, so implementers can focus on implementation. It must not modify the repo.
 3. The integration branch `spec-<n>` and its worktree were created in step 0; mergers and the final steps run in that worktree, never in the session's own directory. If the issue tracker closes work through PRs, or the user asks for one, open a draft PR after the first merge in step 5 (a branch with no commits ahead of main can't open one), marked as closing the spec and tickets.
 4. Dispatch one implementer per frontier ticket, each in its own worktree + branch named `spec-<n>-t<m>` (worktree at `<repo parent>/<repo>-wt/spec-<n>-t<m>`), in the background. If a git command fails on an existing `.lock` file (parallel Runs share one repository), wait a few seconds and retry, at most 3 times; never delete `.lock` files. Each one:
