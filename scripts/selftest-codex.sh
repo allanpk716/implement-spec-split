@@ -6,7 +6,7 @@
 # V1 uses a deterministic fake codex and costs no tokens. V2 uses real codex-cli
 # against local mock Responses servers and costs no GLM tokens. L1 and V3 use real GLM
 # through the author's Ferryman proxy and do cost tokens. Scratch dirs live under
-# ~/.cache/implement-spec-split-selftest-codex/<timestamp> and are removed only after a
+# ~/.cache/implement-spec-split-selftest-codex/<timestamp>-<pid> and are removed only after a
 # successful token-free level; a failed level keeps its artifacts for diagnosis.
 
 set -u
@@ -25,7 +25,7 @@ while [ $# -gt 0 ]; do
 done
 case "${ONLY:-all}" in L1|V1|V2|V3|all) ;; *) echo "--only must be L1, V1, V2, or V3" >&2; exit 64 ;; esac
 
-ROOT="$HOME/.cache/implement-spec-split-selftest-codex/$(date +%Y%m%d-%H%M%S)"
+ROOT="$HOME/.cache/implement-spec-split-selftest-codex/$(date +%Y%m%d-%H%M%S)-$$"
 mkdir -p "$ROOT"
 FAILS=0
 CLEAN_PIDS=()

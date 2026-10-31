@@ -36,6 +36,13 @@ _Avoid_: PRD, epic
 One child issue of a Spec; the unit an implementer works on.
 _Avoid_: task, sub-issue
 
+**Run**:
+One invocation of the skill, implementing one Spec from start to finish; several Runs may work on different Specs at the same time.
+
+**Recovery**:
+Continuing, in a new Run, a Spec that an earlier Run started but did not finish; triggered only by the user choosing that Spec.
+_Avoid_: takeover, Resume (that is continuing one External worker's own conversation)
+
 **Integration branch**:
 The single branch where every Ticket of a Spec is merged before review.
 

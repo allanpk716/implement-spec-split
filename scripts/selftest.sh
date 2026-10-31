@@ -11,7 +11,7 @@
 #       fake pi behind the PI_WORKER_PI hook.
 #
 # Usage: scripts/selftest.sh [--model glm/glm-5.3] [--only L1]
-# Scratch dir: ~/.cache/implement-spec-split-selftest/<timestamp>, deleted on success.
+# Scratch dir: ~/.cache/implement-spec-split-selftest/<timestamp>-<pid>, deleted on success.
 
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -27,7 +27,7 @@ while [ $# -gt 0 ]; do
 done
 
 TDD_SKILL=$(ls -d "$HOME"/.claude/plugins/cache/mattpocock/mattpocock-skills/*/skills/*/tdd 2>/dev/null | sort -V | tail -1)
-ROOT="$HOME/.cache/implement-spec-split-selftest/$(date +%Y%m%d-%H%M%S)"
+ROOT="$HOME/.cache/implement-spec-split-selftest/$(date +%Y%m%d-%H%M%S)-$$"
 mkdir -p "$ROOT"
 FAILS=0
 

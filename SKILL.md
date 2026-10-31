@@ -20,7 +20,7 @@ Terms (Orchestrator, In-session subagent, External worker, Implement backend, Br
 - `IMPLEMENT_MODEL` = `sonnet` — model for implementing roles when the backend is `sonnet`.
 - `CODEX_MODEL` = `glm-5.3` — model id for codex's `custom` provider in `~/.codex/config.toml`; the endpoint and key belong to the user's provider setup, never in this repo (author environment: Ferryman, `127.0.0.1:15722`).
 - `GLM_MODEL` = `glm/glm-5.3` — pi `provider/id`; the provider, key and model list live in `~/.pi/agent/models.json`, never in this repo.
-- `GLM_MAX_PARALLEL` = `2` — at most this many External workers at once. Override per run with an argument: `/implement-spec-split <spec> --impl codex --parallel 4`. The override replaces the default for that run only. Keep it small (2–3, at most 4 off-peak): Zhipu rate-limits during peak hours, and one quota/429 among the workers stops the whole run to ask the user.
+- `GLM_MAX_PARALLEL` = `2` — at most this many External workers at once. Override per run with an argument: `/implement-spec-split <spec> --impl codex --parallel 4`. The override replaces the default for that run only. It is per Run: parallel Runs on different Specs add up. Keep it small (2–3, at most 4 off-peak): Zhipu rate-limits during peak hours, and one quota/429 among the workers stops the whole run to ask the user.
 - `GLM_TIME_LIMIT_IMPL` = `3600` — Time limit (seconds, GLOSSARY.md) for implementer and fix External workers.
 - `GLM_TIME_LIMIT_SHORT` = `1200` — Time limit (seconds) for merger and exploration External workers.
 - `GLM_IDLE_TIMEOUT` = `600` — Idle timeout (seconds, GLOSSARY.md) for every External worker: no progress events from the worker for this long means it is stuck and is killed as `stalled`.
@@ -35,21 +35,39 @@ With the `sonnet` backend, pass the `model` parameter explicitly on every Agent 
 - Communication to and from subagents should be sparse. Communicate through **context pointers** (spec, tickets, research notes, previous commits); don't duplicate information already available via pointers.
 - Run implementer subagents in the background where possible for maximum concurrency.
 
-## Step 0: pick the spec
+## Step 0: pick the spec and take it
 
-- If the user passed a spec reference (number, URL, path), use it.
-- Otherwise discover candidates yourself via the tracker doc (`docs/agents/issue-tracker.md`). For GitHub, list open parent issues that still have unfinished sub-issues:
+Several Runs may work at once, one Spec each, typically one Claude Code session per Orca worktree. The Spec's integration branch, always named exactly `spec-<n>`, is what marks a Spec as taken; Orca metadata only shows it to the user.
 
-  ```bash
-  gh api "repos/{owner}/{repo}/issues?state=open&per_page=100" \
-    --jq '.[]|select(.sub_issues_summary.total>0 and .sub_issues_summary.completed<.sub_issues_summary.total)|"#\(.number) \(.sub_issues_summary.completed)/\(.sub_issues_summary.total) \(.title)"'
-  ```
+1. **Candidates.** If the user passed a spec reference (number, URL, path), it is the only candidate. Otherwise discover them via the tracker doc (`docs/agents/issue-tracker.md`). For GitHub, list open parent issues that still have unfinished sub-issues:
 
-  Also look for open specs with no tickets yet (labelled e.g. `spec`/`prd`/`needs-triage` per the tracker doc, or a newly opened parent issue): those need ticketing first, so report them and suggest the repo's to-issues/triage skill instead of implementing.
-- For non-GitHub trackers (local markdown etc.), do the equivalent per the tracker doc.
-- Exactly one candidate -> state it and proceed. Several -> list them (number, progress, title) and ask which one(s); implement one spec per run. None -> say so and stop.
-- For a partly-done spec, only the open tickets form the frontier; closed tickets count as already merged. If an integration branch for the spec already exists (e.g. `spec-<n>-*`), reuse it instead of creating a new one.
-- If the backend is `codex` or `pi`, run the preflight from "External workers" now, before any other work.
+   ```bash
+   gh api "repos/{owner}/{repo}/issues?state=open&per_page=100" \
+     --jq '.[]|select(.sub_issues_summary.total>0 and .sub_issues_summary.completed<.sub_issues_summary.total)|"#\(.number) \(.sub_issues_summary.completed)/\(.sub_issues_summary.total) \(.title)"'
+   ```
+
+   Also look for open specs with no tickets yet (labelled e.g. `spec`/`prd`/`needs-triage` per the tracker doc, or a newly opened parent issue): those need ticketing first, so report them and suggest the repo's to-issues/triage skill instead of implementing. For non-GitHub trackers, do the equivalent per the tracker doc.
+2. **State of each candidate.** "In Orca" means `ORCA_WORKTREE_ID` is set and `orca` is on PATH.
+   - **free**: no local branch `spec-<n>` (nor a legacy `spec-<n>-*` from before this naming rule);
+   - **in progress**: the branch exists and, in Orca, some worktree in `orca worktree list --json` has `linkedIssue` = n and `workspaceStatus` = `in-progress`, with a live Claude terminal in it (`orca terminal list --json`: same `worktreePath`, `agentIdentity` = `claude`);
+   - **interrupted?**: the branch exists but no such worktree + live terminal. Outside Orca, a Spec with a branch is shown as "in progress or interrupted".
+   - **blocked**: every open ticket is blocked by tickets outside this Spec that are not merged into the main branch yet (e.g. another Run's Spec); its frontier is empty.
+3. **Ask.** Without a spec reference, always list the candidates (number, progress, state, title; for in progress / interrupted also the worktree and when the branch last moved, `git log -1 --format=%cr spec-<n>`) and ask which one; implement one spec per run. None -> say so and stop. A blocked Spec can be listed but not taken: say what blocks it.
+4. **Take it.**
+   - free: create the integration branch in its own worktree, next to the repo: `git worktree add -b spec-<n> <repo parent>/<repo>-wt/spec-<n> <main branch>`. git refuses if the branch exists, so if this fails another Run just took the Spec: tell the user and ask again (Recovery or another Spec).
+   - in progress / interrupted: this is **Recovery** (GLOSSARY.md): see "Recovery" below. For in progress, first warn that the other session still looks alive and two Runs on one Spec will collide, and go on only if the user confirms.
+   - In Orca, mark the session: `orca worktree set --worktree current --issue <n> --workspace-status in-progress` and `orca terminal rename --title "spec-<n> <short title>"` (the title is for the user only; the worktree metadata is what step 2 reads).
+5. Exactly one Spec per Run. `--parallel` / `GLM_MAX_PARALLEL` counts this Run's External workers only; parallel Runs add up and share the same GLM quota, so a 429 tends to hit all of them at once.
+6. If the backend is `codex` or `pi`, run the preflight from "External workers" now, before any other work.
+
+### Recovery
+
+Continue the Spec on its existing integration branch and integration worktree (`git worktree list` shows where `spec-<n>` is checked out). Closed tickets count as already merged; only the open ones form the frontier. Then, for each leftover ticket worktree of this Spec (`spec-<n>-t<m>` in `git worktree list`), with its newest run dir under `~/.cache/implement-spec-split/runs/<n>-*/`:
+
+- its wrapper still running (`pgrep -f <run dir>`, or `progress.sh` says `running`): wait for it, never kill it;
+- `status.json` present: handle it by the exit-code rules under "External workers", as if this Run had launched it;
+- no `status.json` (the wrapper died with the old session): treat as `error`. If the ticket branch has commits, keep the worktree and re-brief in it with a fresh run dir; otherwise remove the worktree and dispatch the ticket afresh.
+- With the `sonnet` backend there are no run dirs: a ticket worktree with commits goes through the verification gate, one without is removed and redispatched.
 
 ## Steps
 
@@ -57,8 +75,8 @@ With the `sonnet` backend, pass the `model` parameter explicitly on every Agent 
 
 1. Read the spec and tickets; build the task graph / frontier. The issue tracker comes from the repo's `docs/agents/issue-tracker.md`; if missing, tell the user to run `/setup-matt-pocock-skills`.
 2. (optional) Dispatch an exploration role. It saves its markdown notes in a directory outside the repo, accessible by all later roles, so implementers can focus on implementation. It must not modify the repo.
-3. Create the integration branch. If the issue tracker closes work through PRs, or the user asks for one, open a draft PR after the first merge in step 5 (a branch with no commits ahead of main can't open one), marked as closing the spec and tickets.
-4. Dispatch one implementer per frontier ticket, each in its own worktree + branch, in the background. Each one:
+3. The integration branch `spec-<n>` and its worktree were created in step 0; mergers and the final steps run in that worktree, never in the session's own directory. If the issue tracker closes work through PRs, or the user asks for one, open a draft PR after the first merge in step 5 (a branch with no commits ahead of main can't open one), marked as closing the spec and tickets.
+4. Dispatch one implementer per frontier ticket, each in its own worktree + branch named `spec-<n>-t<m>` (worktree at `<repo parent>/<repo>-wt/spec-<n>-t<m>`), in the background. If a git command fails on an existing `.lock` file (parallel Runs share one repository), wait a few seconds and retry, at most 3 times; never delete `.lock` files. Each one:
    - confirms its worktree is based on the integration branch before starting, and resets onto it if not;
    - builds the ticket with the `mattpocock-skills:tdd` skill (In-session: via the Skill tool; External: loaded with `--skill`);
    - commits, leaves no uncommitted changes, and merges the integration branch tip into its own branch before reporting done.
@@ -67,8 +85,8 @@ With the `sonnet` backend, pass the `model` parameter explicitly on every Agent 
 6. If this changes the frontier, dispatch implementers for the newly unblocked tickets.
 7. **Review (the split point).** When all tickets are merged, call the Skill tool with `mattpocock-skills:code-review` (not the built-in `code-review`, which does not spawn the two axis sub-agents) on the integration branch, using the branch point from the main branch as the fixed point. When it spawns the Standards and Spec sub-agents, set `model: REVIEW_MODEL` on both. Do not skip this step, do not downgrade the model, and never hand review to an External worker.
 8. Save the review report to a file outside the repo and dispatch a single fix role with that file as its context pointer. If an item is a design-level or subtle correctness problem rather than a mechanical fix, tell the fix role to report it back instead of guessing, then resolve it yourself or ask the user.
-9. If a draft PR exists, mark it ready for review. Otherwise resolve each ticket the way the tracker closes work (e.g. merge with `Closes #n` and push) and report the integration branch. Confirm with the user before pushing/closing if they haven't already authorised it.
-10. Clean up all implementer worktrees.
+9. First merge the latest main branch into the integration branch and re-run the test suite (another Run may have landed a Spec meanwhile); on conflicts dispatch a merger to resolve them and tell the user, who decides whether conflicts in this Spec's core changes need another review. If a draft PR exists, mark it ready for review. Otherwise resolve each ticket the way the tracker closes work (e.g. merge with `Closes #n` and push) and report the integration branch. Confirm with the user before pushing/closing if they haven't already authorised it.
+10. Clean up all implementer worktrees. In Orca, set the session's worktree to `--workspace-status in-review` (PR open) or `completed`, and retitle the tab `spec-<n> ✓`.
 
 ## External workers (backends `codex` and `pi`)
 
@@ -85,7 +103,7 @@ An External worker is a wrapper script (in this skill's directory) running one h
 
 **Dispatching a role:**
 
-1. Make a run directory per worker: `~/.cache/implement-spec-split/runs/<spec>-<YYYYmmdd-HHMM>/<role>-<ticket>/`.
+1. Make a run directory per worker: `~/.cache/implement-spec-split/runs/<n>-<YYYYmmdd-HHMM>/<role>-<ticket>/` (`<n>` = the Spec number, so Recovery can find them).
 2. Write the Brief to a file, fresh for every worker: do not derive one Brief from another with `sed` or search-and-replace (ticket numbers and branch names get left behind). Keep it to pointers and rules:
    - who it is (role, ticket number, how to read the spec and ticket, e.g. `gh issue view <n>`), worktree path, branch, integration branch;
    - exploration notes dir and, for fix, the review report path;
