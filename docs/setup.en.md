@@ -47,6 +47,7 @@ This division of labour is optimized for one specific situation: **Claude quota 
 | codex-cli | 0.163.0, 0.164.0. Other versions are unverified; after changing versions, first run `scripts/selftest-codex.sh --only V1` |
 | Model | GLM-5.3, through a local proxy |
 | Stage 1 | `--impl codex` and `--impl pi` verified end-to-end in a scratch repo; `--impl sonnet` unverified |
+| find-next | Local markdown tracker: script unit tests pass, `--worker codex` run once on a real repo (2026-11-01). The GitHub path and `--worker pi` not yet run |
 | Stage 3 | Hook unit tests and a local smoke test pass; rule adherence in real sessions is still being validated |
 | Install commands | Plugin install commands are given using the marketplace name installed locally (`mattpocock`); `npm i -g @openai/codex` is codex's official installation method. Neither has been re-run on a fresh machine |
 
@@ -118,6 +119,32 @@ Change defaults in the "Config" section of `SKILL.md`.
 Run `/implement-spec-split <spec> --impl sonnet` once in a scratch repository that has a spec, and observe: tickets in the frontier start in parallel, merges are serial, and two review reports are produced at the end.
 
 ---
+
+## Finding the next step (`/find-next`)
+
+After a wayfinder discussion leaves you with a pile of tickets and no idea which one to take to to-spec, to-tickets or grilling, use `find-next` (the second skill in this repo, under `find-next/`). It scans the current repo's maps and tickets and recommends **one** next step with the command to type, plus up to 3 alternatives:
+
+| Priority | Situation | Command |
+|---|---|---|
+| 1 | A Spec with no execution tickets yet | `/to-tickets <Spec>` |
+| 2 | A map whose decisions are all made but not written up as a Spec | `/to-spec` |
+| 3 | A Decision ticket on a Map frontier (most downstream unblocked first) | `/wayfinder <map> <ticket>`; a ticket outside any map gets `/grill-with-docs` |
+
+Maps and tickets marked shelved (搁置) are skipped. The implementation stage is not scanned; that is `/implement-spec-split --status`.
+
+**Install**: symlink it into the skills directory (on Windows use `mklink /J`, or copy):
+
+```bash
+ln -s ~/.claude/skills/implement-spec-split/find-next ~/.claude/skills/find-next
+```
+
+**Use**: `/find-next [--worker codex|pi|self]`, or just ask "what's next".
+
+- Default `codex`: a script does the mechanical scan (`find-next/scripts/scan.py` for local markdown trackers, `scripts/pipeline-status.sh` for GitHub), and a read-only codex worker does the judgment; the session reads only its conclusion of at most 15 lines. Needs Stage 2.
+- `self`: the session judges on its own, no codex needed.
+- When the answer is to-spec or to-tickets, the material is first loaded into the session, because those skills synthesize only the current conversation; then you are told which command to type.
+
+Read-only throughout: no ticket edits, no claims. Design rationale: `MAINTAINING.md`, "find-next 设计要点".
 
 ## Stage 2: codex backend (GLM)
 

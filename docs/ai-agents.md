@@ -63,6 +63,10 @@ scripts/progress.sh <run directory>
 
 This reports state, recent commands and edits, time since the last progress event, and token use. Use it on request or for diagnosis; the wrapper's watchdog already handles stuck workers, so do not poll it continuously.
 
+## Find the next step (`find-next`)
+
+`find-next/` is a separate, read-only skill in this repo. Install it with `ln -s <clone>/find-next ~/.claude/skills/find-next`. When the user asks what to do next with their wayfinder maps, follow `find-next/SKILL.md`: run the scanner, judge (by default on a `--read-only` codex worker), and return one next step with the command. Never edit, claim or label tickets while doing so. `/to-spec` and `/to-tickets` cannot be invoked by the model; tell the user to type them.
+
 ## Agent operating rules
 
 - Never trust a worker's final report alone. Apply the verification gate in `SKILL.md`.

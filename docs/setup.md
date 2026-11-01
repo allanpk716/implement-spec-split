@@ -46,6 +46,7 @@ English: [setup.en.md](setup.en.md)
 | codex-cli | 0.163.0、0.164.0。其他版本未验证，换版本后先跑 `scripts/selftest-codex.sh --only V1` |
 | 模型 | GLM-5.3，经本地代理 |
 | 阶段 1 | `--impl codex`、`--impl pi` 在试验仓库端到端验证过；`--impl sonnet` 未验证 |
+| find-next | 本地 markdown 跟踪器：脚本单测通过，`--worker codex` 在真实仓库实跑过一次（2026-11-01）。GitHub 路径和 `--worker pi` 未实跑 |
 | 阶段 3 | hook 单元测试和本机冒烟测试通过；真实会话里的规则遵守情况仍在验收 |
 | 安装命令 | 插件安装命令按本机已装的 marketplace 名（`mattpocock`）给出；`npm i -g @openai/codex` 是 codex 官方的安装方式。都没有在全新机器上重走一遍 |
 
@@ -117,6 +118,32 @@ spec 是一个 GitHub 父 issue，它的子 issue 就是 ticket，ticket 之间�
 在一个有 spec 的试验仓库里跑一次 `/implement-spec-split <spec> --impl sonnet`，观察：前沿里的 ticket 并行开工，合并串行，最后有两份审查报告。
 
 ---
+
+## 找下一步（`/find-next`）
+
+用 wayfinder 讨论出一堆票之后，不知道下一步该对哪张做 to-spec、to-tickets 还是 grilling，就用 `find-next`（本仓库 `find-next/` 目录下的第二个技能）。它扫描当前仓库的地图和票，**只推荐一个下一步**，附上要敲的命令，外加最多 3 行备选：
+
+| 优先级 | 情形 | 推荐命令 |
+|---|---|---|
+| 1 | 有 Spec 但还没拆执行票 | `/to-tickets <Spec>` |
+| 2 | 地图的决策都已拍板，还没写成 Spec | `/to-spec` |
+| 3 | 地图上可以接着讨论的 Decision ticket（解锁下游最多的优先） | `/wayfinder <地图> <票>`；不在地图里的散票用 `/grill-with-docs` |
+
+被标成「搁置」的地图和票会跳过。实现阶段不扫，那是 `/implement-spec-split --status` 的事。
+
+**安装**：软链到技能目录（Windows 上用 `mklink /J`，或者直接复制）：
+
+```bash
+ln -s ~/.claude/skills/implement-spec-split/find-next ~/.claude/skills/find-next
+```
+
+**用法**：`/find-next [--worker codex|pi|self]`，也可以直接问「下一步做什么」。
+
+- 默认 `codex`：机械扫描交给脚本（本地 markdown 跟踪器用 `find-next/scripts/scan.py`，GitHub 用 `scripts/pipeline-status.sh`），判断交给一个只读的 codex worker，会话里只读它不超过 15 行的结论。需要先完成阶段 2。
+- `self`：会话自己判断，不依赖 codex。
+- 推荐 to-spec 或 to-tickets 时，会先把材料读进当前会话，因为这两个技能只综合当前对话，然后再提示你敲命令。
+
+全程只读，不改票、不认领。设计理由见 `MAINTAINING.md`「find-next 设计要点」。
 
 ## 阶段 2：codex 后端（GLM）
 

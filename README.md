@@ -43,6 +43,16 @@ Invoke manually with `/implement-spec-split [spec ref] [--impl codex|pi|sonnet] 
 
 AI agents installing or operating the skill should read [docs/ai-agents.md](docs/ai-agents.md) first: it gives the quick start, backend requirements, preflight commands, progress inspection, and agent-specific safety rules.
 
+## Companion skill: `find-next`
+
+`find-next/` is a second skill in this repo. It scans the current repo's wayfinder maps and tickets and recommends **one** next step with the command to type: `/to-tickets` for a Spec with no tickets yet, `/to-spec` for a map whose decisions are all made, or `/wayfinder <map> <ticket>` for the Decision ticket that unblocks the most. Read-only; the judgment runs on a read-only codex worker by default (`/find-next [--worker codex|pi|self]`). Local markdown trackers are scanned by `find-next/scripts/scan.py`, GitHub by `scripts/pipeline-status.sh`.
+
+Install it next to the main skill:
+
+```bash
+ln -s ~/.claude/skills/implement-spec-split/find-next ~/.claude/skills/find-next   # Windows: mklink /J, or copy
+```
+
 ## Keeping up with upstream
 
 Read [MAINTAINING.md](MAINTAINING.md) (中文) before syncing or editing: it records the design decisions and pitfalls.
