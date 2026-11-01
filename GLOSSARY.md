@@ -29,7 +29,7 @@ The Standards and Spec reviewers of `mattpocock-skills:code-review`; always In-s
 ## Work
 
 **Spec**:
-The issue describing the whole feature; implemented in one run. On GitHub this is an open issue using the to-spec template heading `## Problem Statement`; a legacy open parent issue with unfinished children is also treated as a Spec. The Spec number is the number of that issue, and the integration branch is `spec-<Spec number>`.
+The issue describing the whole feature; implemented in one run. On GitHub this is an open issue using the to-spec template heading `## Problem Statement`; a legacy open parent issue with unfinished children is also treated as a Spec. On a local-markdown tracker it is a ticket whose body uses `## Problem Statement`, or a closed Closing ticket. The Spec number is the number of that issue, and the integration branch is `spec-<Spec number>`.
 _Avoid_: PRD, epic
 
 **Ticket**:
@@ -39,6 +39,21 @@ _Avoid_: task, sub-issue
 **Map ticket**:
 An implementation child issue under a wayfinder map, without a `wayfinder:*` label; to-spec may turn it into an independent Spec.
 _Avoid_: map decision
+
+**Decision ticket**:
+A child issue of a wayfinder map whose resolution is a decision, typed research, prototype, grilling or task (a `wayfinder:<type>` label on GitHub, a `Type:` header line on a local tracker).
+_Avoid_: map ticket (that is an implementation child)
+
+**Closing ticket**:
+On a local-markdown tracker, the map's last task ticket, which writes the map's decisions into a chapter of `SPEC.md`; once closed it serves as the map's Spec.
+_Avoid_: spec ticket
+
+**Map frontier**:
+The open Decision tickets of a map whose blockers are all closed and that nobody has claimed.
+_Avoid_: Frontier (that is implementation Tickets)
+
+**Next step**:
+The single action find-next recommends: a stage (to-tickets, to-spec, or a Decision ticket), its target, and the command to type.
 
 **Run**:
 One invocation of the skill, implementing one Spec from start to finish; several Runs may work on different Specs at the same time.
@@ -52,6 +67,7 @@ The single branch where every Ticket of a Spec is merged before review.
 
 **Frontier**:
 The Tickets whose blockers are all merged, so they can be started now.
+_Avoid_: using it for a map's open decisions (that is the Map frontier)
 
 **Time limit**:
 The longest an External worker may run in one go, set per role; reaching it stops the worker but keeps its conversation so it can be Resumed.

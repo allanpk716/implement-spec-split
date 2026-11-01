@@ -69,6 +69,24 @@
     - ticket worktree/分支命名 `spec-<n>-t<m>`、run dir 以 spec 编号开头，Recovery 靠这两点找到上一个 Run 的残留。
     - 只覆盖同一个 clone 的多个 worktree（分支是本地的）。`--parallel` 按 Run 计，并行的 Run 相加、共享 GLM 额度。
 
+## find-next 设计要点（2026-11-01 grilling 定稿）
+
+`find-next/` 是放在本仓库里的另一个技能：扫描当前仓库的 wayfinder 地图与票，只给出一个 Next step（GLOSSARY.md）。起因：在手机上用 wayfinder 讨论出一大堆票后，不知道下一步该对哪张做 to-spec / to-tickets / grilling。原版技能都要人自己去找。
+
+1. **只给一个 Next step 和要敲的命令，外加最多 3 行备选。** 输出要适合在手机上读；没有候选时，说出最接近的一个和它还差什么。
+2. **一个技能覆盖所有阶段，不拆成 find-to-spec、find-issue-grill 等多个。** 拆开的话，同样的地图要扫好几遍，用户还得记住该先敲哪个命令，又回到了「人去找」。
+3. **阶段优先级：越靠近交付越靠前。** to-tickets > to-spec（完全就绪的排在部分就绪之前）> Map frontier 里的 Decision ticket（按下游解锁数排，数量相同时编号小的优先）。理由：已经花过讨论成本、却还没变成执行票的东西最该先收口。
+4. **候选单位是地图或 Spec，不是单张决策票。** 单张 Decision ticket 本身做不成 spec，spec 是对一片已经拍板的决策做综合。
+5. **地图内的 Decision ticket 推荐 `/wayfinder <地图> <票>`，不推荐裸 `/grill-with-docs`。** 后者不认领、不写 Resolution、不关票，下次扫描会再次推荐同一张票。只有不在任何地图里的散票，才推荐 `/grill-with-docs`。
+6. **to-spec / to-tickets 不能由模型调用（`disable-model-invocation`），而且只综合当前对话。** 所以 find-next 先把材料放进上下文（self 模式读原票，worker 模式读 `digest.md`），再提示用户敲命令。
+7. **对跟踪器只读**：不改票头、不认领、不打标签，以免和用户并发跑的 wayfinder 会话互相覆盖。
+8. **机械扫描用脚本，判断用模型。**
+   - 本地 markdown 跟踪器用 `find-next/scripts/scan.py`（只用 Python 标准库，输出 JSON），GitHub 复用 `scripts/pipeline-status.sh`，两套识别规则不分叉。对应关系：`needsTickets` → to-tickets，`missing` → to-spec，`exploring` → Decision ticket（具体哪张再用 `gh` 查），`implement` 不用。
+   - 两种跟踪器判断「该 to-spec」的口径不同。本地是地图的 Map frontier 已空，或只剩 Closing ticket；GitHub 是地图下的 Map ticket 还没被任何 Spec 覆盖。
+9. **判断部分默认交给 codex worker（`--worker codex`），带 `--read-only`。** 要读多张地图 Notes 和票正文，体量大但判断稀疏。worker 出错按全局 CLAUDE.md 的处理表，不自动降级为 `self`。
+10. **不扫「执行票已拆、可以开工」这一阶段**（`/implement-spec-split` 自己的第 0 步和 `--status` 已经覆盖），也不跨仓库汇总。
+11. **允许模型自动触发**（不设 `disable-model-invocation`）：它只读，误触发的代价只是一次扫描。
+
 ## 同步上游
 
 `upstream/` 里存着原版 `SKILL.md` 和对应的上游 commit（`upstream/COMMIT`）。
@@ -120,6 +138,7 @@
 - 技能目录 `~/.claude/skills/implement-spec-split` 是这个仓库的 git 克隆。
 - 如果在别的地方的克隆里改（比如 `~/orca/implement-spec-split`），commit 之后要在技能目录里执行 `git pull --ff-only <那个克隆的路径> main` 同步过去。
 - 不用软链接，因为 Windows 上软链接很麻烦。
+- `find-next` 是本仓库里的子目录技能，要单独让 Claude Code 发现：mac / Linux 上软链接 `ln -s <克隆>/find-next ~/.claude/skills/find-next`；Windows 上用目录联接 `mklink /J`，或者直接复制。
 
 ## 已验证（2026-10-11，临时仓库 `allanpk716/iss-e2e-test` 上的 L3 测试）
 
