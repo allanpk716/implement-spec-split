@@ -122,11 +122,17 @@ function unfinishedChildren(issue) {
 function bodyReferences(issue) {
   const refs = new Set();
   const body = String(issue.body || '');
-  const pattern = /#([0-9]+)/g;
+  const pattern = /(?:实现票(?:\s*(?:为|是))?|Implementation\s+tickets?)\s*[:：]?\s*#[0-9]+(?:\s*(?:[,，、和]|and)\s*#[0-9]+)*/gi;
+  const numberPattern = /#([0-9]+)/g;
   for (const line of body.split(/\r?\n/)) {
-    if (!/(实现票|Implementation tickets?)\s*[:：]/i.test(line)) continue;
     let match;
-    while ((match = pattern.exec(line)) !== null) refs.add(Number(match[1]));
+    while ((match = pattern.exec(line)) !== null) {
+      let numberMatch;
+      while ((numberMatch = numberPattern.exec(match[0])) !== null) {
+        refs.add(Number(numberMatch[1]));
+      }
+      numberPattern.lastIndex = 0;
+    }
     pattern.lastIndex = 0;
   }
   return [...refs].sort((a, b) => a - b);
@@ -198,15 +204,18 @@ if (mode === 'plan') {
   }
 
   const implementationValues = [...implementations.values()];
-  const problemSpecs = issues.filter((issue) => (
-    isOpen(issue) && !issue.pull_request && hasProblemStatement(issue)
+  const allProblemSpecs = issues.filter((issue) => (
+    !issue.pull_request && hasProblemStatement(issue)
   )).map((issue) => ({
     number: issue.number,
+    state: issue.state,
     title: issue.title || '',
     refs: bodyReferences(issue),
     ownChildren: Number(summary(issue).total || 0) > 0,
     ownChildCount: Number(summary(issue).total || 0),
   })).sort((a, b) => a.number - b.number);
+  const coveredRefs = uniqueNumbers(allProblemSpecs.flatMap((spec) => spec.refs));
+  const problemSpecs = allProblemSpecs.filter((spec) => isOpen(spec));
 
   const oldCandidates = issues.filter((issue) => (
     isOpen(issue) &&
@@ -242,6 +251,7 @@ if (mode === 'plan') {
     maps,
     implementations: implementationValues.sort((a, b) => a.number - b.number),
     specs: problemSpecs,
+    coveredRefs,
     oldCandidates,
     subRequests: requests,
   };
@@ -323,8 +333,8 @@ if (mode === 'collect') {
     .sort((a, b) => a.number - b.number);
 
   const referencedImplementations = new Set();
-  for (const spec of stage.specs) {
-    for (const ref of spec.refs) referencedImplementations.add(Number(ref));
+  for (const ref of stage.coveredRefs || []) {
+    referencedImplementations.add(Number(ref));
   }
   const missing = [];
   for (const map of stage.maps) {

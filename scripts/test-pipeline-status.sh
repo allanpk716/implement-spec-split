@@ -93,6 +93,10 @@ const issues = [
   issue(58, 'Single-ticket implementation', 'open', ['ready-for-agent'], ''),
   issue(59, 'Missing second client spec', 'open', ['ready-for-agent'], ''),
   issue(65, 'Missing server spec', 'open', ['ready-for-agent'], ''),
+  issue(66, 'Implementation covered by closed spec', 'open', ['ready-for-agent'], ''),
+  issue(67, 'Implementation mentioned outside spec ticket line', 'open', ['ready-for-agent'], ''),
+  issue(68, 'Implementation referenced with connector', 'open', ['ready-for-agent'], ''),
+  issue(69, 'Implementation mentioned before spec ticket phrase', 'open', ['ready-for-agent'], ''),
   issue(70, 'Legacy parent issue', 'open', [], 'Old parent shape', sub(2, 0)),
   issue(71, 'Legacy ticket one', 'open', [], ''),
   issue(72, 'Legacy ticket two', 'open', [], ''),
@@ -106,6 +110,8 @@ const issues = [
   issue(91, 'Client ticket two', 'closed', [], ''),
   issue(92, 'Client ticket three', 'open', [], ''),
   issue(93, 'Spec without tickets', 'open', [], '## Problem Statement\nNot split yet.'),
+  issue(94, 'Closed single-ticket spec', 'closed', [], '## Problem Statement\n背景提到地图票：#67。\n同线范围外：#69。决策来源：#100。实现票：#66，父地图为 #31。', sub(1, 1)),
+  issue(95, 'Spec using connector', 'open', [], '## Problem Statement\n实现票为 #68。'),
   issue(100, 'External blocker one', 'open', [], ''),
   issue(101, 'External blocker two', 'open', [], ''),
   issue(102, 'Closed external blocker', 'closed', [], ''),
@@ -124,6 +130,10 @@ const responses = {
   ],
   'sub-31': [
     issue(65, 'Missing server spec', 'open', ['ready-for-agent'], ''),
+    issue(66, 'Implementation covered by closed spec', 'open', ['ready-for-agent'], ''),
+    issue(67, 'Implementation mentioned outside spec ticket line', 'open', ['ready-for-agent'], ''),
+    issue(68, 'Implementation referenced with connector', 'open', ['ready-for-agent'], ''),
+    issue(69, 'Implementation mentioned before spec ticket phrase', 'open', ['ready-for-agent'], ''),
   ],
   'sub-56': [
     issue(90, 'Client ticket one', 'open', [], ''),
@@ -142,6 +152,7 @@ const responses = {
   'blocker-58': [
     issue(100, 'External blocker one', 'open', [], ''),
   ],
+  'blocker-68': [],
   'blocker-71': [],
   'blocker-72': [],
   'blocker-81': [
@@ -239,6 +250,14 @@ expect_has '地图 #22 Client map' 'missing specs are grouped by map' "$WORK/mai
 expect_has '#57 Missing client spec → to-spec' 'unreferenced map implementation needs to-spec' "$WORK/main.out"
 expect_has '地图 #31 Server map' 'second map group is shown' "$WORK/main.out"
 expect_has '#21 Exploration map' 'map with open decisions needs wayfinder' "$WORK/main.out"
+
+expect_without '#66 Implementation covered by closed spec → to-spec' 'closed spec coverage removes implementation from missing specs' "$WORK/main.out"
+expect_has '#67 Implementation mentioned outside spec ticket line → to-spec' 'incidental map reference does not cover implementation' "$WORK/main.out"
+expect_has '#69 Implementation mentioned before spec ticket phrase → to-spec' 'earlier reference on implementation line does not cover implementation' "$WORK/main.out"
+expect_without '#68 Implementation referenced with connector → to-spec' 'implementation ticket connector is recognized' "$WORK/main.out"
+expect_has '#95 0/1' 'spec with connector reference is implementable' "$WORK/main.out"
+expect_without '- #94 0/1 ' 'closed spec is not listed as implementable' "$WORK/main.out"
+expect_without '#94 Closed single-ticket spec → to-tickets' 'closed spec is not listed as needing tickets' "$WORK/main.out"
 
 run_status "$NOT_REPO" "$WORK/not-repo.out"
 expect_exit 0 "outside a git repository still scans issues"
