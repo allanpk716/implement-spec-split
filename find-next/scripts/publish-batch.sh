@@ -26,6 +26,7 @@ blocked_by and {{...}} body placeholders may refer to:
              published.json record next to it.
   S2/T1      A ticket in another passed manifest (or its record).
   #212       An existing issue in the target repository.
+Only these four formats are placeholders; other {{...}} text is preserved as-is.
 
 Execution tickets are created after all selected specs, in dependency order.
 Each is immediately attached as a sub-issue and given its blocked-by edges.
@@ -123,6 +124,7 @@ const externalIds = new Map();
 let manifests = [];
 let byKey = new Map();
 let selectedKeys = new Set();
+const PLACEHOLDER_PATTERN = /\{\{(#[0-9]+|S[0-9]+\/T[0-9]+|S[0-9]+|T[0-9]+)\}\}/g;
 
 function fail(message) {
   process.stderr.write(`publish-batch: ${message}\n`);
@@ -144,6 +146,23 @@ function unique(values) {
 
 function selected(manifest) {
   return selectedKeys.has(manifest.key);
+}
+
+function placeholderReferences(body) {
+  PLACEHOLDER_PATTERN.lastIndex = 0;
+  const references = [];
+  for (let match;
+       (match = PLACEHOLDER_PATTERN.exec(String(body || ''))) !== null;) {
+    references.push(match[1]);
+  }
+  return references;
+}
+
+function hasPlaceholder(body) {
+  PLACEHOLDER_PATTERN.lastIndex = 0;
+  const result = PLACEHOLDER_PATTERN.test(String(body || ''));
+  PLACEHOLDER_PATTERN.lastIndex = 0;
+  return result;
 }
 
 function issueFromRecord(value, key, type) {
@@ -404,13 +423,11 @@ function validateReferences() {
       refs.push([ticket.body, `${manifest.key}/${ticket.key} body`]);
     }
     for (const [body, where] of refs) {
-      const pattern = /\{\{([^{}]+)\}\}/g;
-      let match;
-      while ((match = pattern.exec(String(body || ''))) !== null) {
-        const reference = resolveReference(match[1], manifest, where);
+      for (const raw of placeholderReferences(body)) {
+        const reference = resolveReference(raw, manifest, where);
         if (reference) {
           requireResolvableReference(
-            reference, `${where} placeholder ${match[0]}`, manifest
+            reference, `${where} placeholder {{${raw}}}`, manifest
           );
         }
       }
@@ -490,10 +507,8 @@ function validateExistingIssues() {
   const numbers = new Set();
   for (const manifest of manifests) {
     const add = (body) => {
-      const pattern = /\{\{([^{}]+)\}\}/g;
-      let match;
-      while ((match = pattern.exec(String(body || ''))) !== null) {
-        const reference = referenceSyntax(match[1]);
+      for (const raw of placeholderReferences(body)) {
+        const reference = referenceSyntax(raw);
         if (reference && reference.kind === 'existing') numbers.add(reference.number);
       }
     };
@@ -559,7 +574,7 @@ function createIssue(manifest, key, title, body, labels, type) {
     `GitHub did not return number and id for ${manifest.key}/${key}`);
   if (!(Number(response.number) > 0)) fail('invalid issue response');
   rememberIssue(manifest, key, response, title);
-  manifest.record.issues[key].patchPending = body.includes('{{');
+  manifest.record.issues[key].patchPending = hasPlaceholder(body);
   saveRecord(manifest);
   process.stdout.write(
     `已新建${type === 'spec' ? '规格' : '执行票'} ${manifest.key}` +
@@ -580,7 +595,8 @@ function referenceNumber(reference) {
 }
 
 function renderBody(body, manifest) {
-  return String(body || '').replace(/\{\{([^{}]+)\}\}/g, (all, raw) => {
+  PLACEHOLDER_PATTERN.lastIndex = 0;
+  return String(body || '').replace(PLACEHOLDER_PATTERN, (all, raw) => {
     const reference = referenceSyntax(raw);
     if (!reference) return all;
     const resolved = resolveReference(reference.display, manifest, 'body render');
@@ -590,7 +606,7 @@ function renderBody(body, manifest) {
 }
 
 function bodyHasFutureReference(body, manifest) {
-  return renderBody(body, manifest).includes('{{');
+  return hasPlaceholder(renderBody(body, manifest));
 }
 
 function attachTicket(manifest, ticket) {
@@ -644,10 +660,8 @@ function printDryRun(graph) {
   const processedIssues = new Set();
   const pendingPatches = [];
   const unresolvedAtCreation = (body, manifest) => {
-    const pattern = /\{\{([^{}]+)\}\}/g;
-    let match;
-    while ((match = pattern.exec(String(body || ''))) !== null) {
-      const syntax = referenceSyntax(match[1]);
+    for (const raw of placeholderReferences(body)) {
+      const syntax = referenceSyntax(raw);
       if (!syntax || syntax.kind === 'existing') continue;
       const target = syntax.specKey ? byKey.get(syntax.specKey) : manifest;
       if (!target) continue;
@@ -744,7 +758,7 @@ function applyBatch(graph) {
       issue = createIssue(
         manifest, manifest.key, manifest.title, body, manifest.labels, 'spec'
       );
-      if (body.includes('{{')) pendingPatches.push({manifest, key: manifest.key});
+      if (hasPlaceholder(body)) pendingPatches.push({manifest, key: manifest.key});
     } else if (issue.patchPending) {
       pendingPatches.push({manifest, key: manifest.key});
     }
@@ -760,7 +774,7 @@ function applyBatch(graph) {
       issue = createIssue(
         manifest, ticket.key, ticket.title, body, ticket.labels, 'ticket'
       );
-      if (body.includes('{{')) pendingPatches.push({manifest, key: ticket.key});
+      if (hasPlaceholder(body)) pendingPatches.push({manifest, key: ticket.key});
     } else if (issue.patchPending) {
       pendingPatches.push({manifest, key: ticket.key});
     }
@@ -778,7 +792,7 @@ function applyBatch(graph) {
       : item.manifest.body;
     const issue = item.manifest.record.issues[item.key];
     const rendered = renderBody(body, item.manifest);
-    if (rendered.includes('{{')) {
+    if (hasPlaceholder(rendered)) {
       fail(`internal error: unresolved placeholder remains in ${identity}`);
     }
     patchIssue(item.manifest, item.key, issue.number, rendered);

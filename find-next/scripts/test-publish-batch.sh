@@ -419,6 +419,70 @@ expect_has '"dependency:S2/T1<-S1/T1"' 'ticket dependency is recorded' \
 expect_has '"dependency:S2/T1<-#212"' 'existing dependency is recorded' \
   "$WORK/retry/S2/published.json"
 
+make_case "$WORK/non-placeholder-braces"
+printf '%s\n' $'Literal secret {{sshmgr-secret:DB_PASSWORD}} and #{{S1}}.' \
+  > "$WORK/non-placeholder-braces/S1/spec.md"
+printf '%s\n' $'Ticket secret {{sshmgr-secret:DB_PASSWORD}} and #{{T1}}.' \
+  > "$WORK/non-placeholder-braces/S1/tickets/T1.md"
+: > "$LOG"
+run_publish "$WORK/non-placeholder-braces-dry.out" \
+  "$WORK/non-placeholder-braces/S1/manifest.json"
+expect_exit 0 "non-placeholder braces pass dry-run validation"
+expect_without 'invalid reference' \
+  'non-placeholder braces are not validated as references' \
+  "$WORK/non-placeholder-braces-dry.out.err"
+expect_without '"write":true' 'non-placeholder dry run sends no write' "$LOG"
+
+literal_spec=$(STATE="$STATE" node -e '
+  const fs = require("fs");
+  const state = JSON.parse(fs.readFileSync(process.env.STATE, "utf8"));
+  process.stdout.write(String(state.nextNumber));
+')
+literal_ticket=$((literal_spec + 1))
+: > "$LOG"
+run_publish "$WORK/non-placeholder-braces-apply.out" --apply \
+  "$WORK/non-placeholder-braces/S1/manifest.json"
+expect_exit 0 "non-placeholder braces pass apply validation"
+
+grep '"method":"POST"' "$LOG" | grep 'title=Spec one' \
+  > "$WORK/non-placeholder-spec-post.log"
+grep '"method":"POST"' "$LOG" | grep 'title=Ticket one' \
+  > "$WORK/non-placeholder-ticket-post.log"
+grep '"method":"PATCH"' "$LOG" > "$WORK/non-placeholder-patches.log"
+expect_has 'body=Literal secret {{sshmgr-secret:DB_PASSWORD}} and #{{S1}}.' \
+  'spec literal braces survive initial POST' "$WORK/non-placeholder-spec-post.log"
+expect_has 'body=Ticket secret {{sshmgr-secret:DB_PASSWORD}} and #' \
+  'ticket literal braces survive POST' "$WORK/non-placeholder-ticket-post.log"
+expect_has "body=Literal secret {{sshmgr-secret:DB_PASSWORD}} and #${literal_spec}." \
+  'spec literal braces and ticket number survive PATCH' \
+  "$WORK/non-placeholder-patches.log"
+expect_has "body=Ticket secret {{sshmgr-secret:DB_PASSWORD}} and #${literal_ticket}." \
+  'ticket literal braces and ticket number survive PATCH' \
+  "$WORK/non-placeholder-patches.log"
+expect_without '#{{S1}}' 'spec placeholder is replaced in PATCH' \
+  "$WORK/non-placeholder-patches.log"
+expect_without '#{{T1}}' 'ticket placeholder is replaced in PATCH' \
+  "$WORK/non-placeholder-patches.log"
+expect_count '"method":"PATCH"' 2 \
+  'bodies with real placeholders are patched once each' "$LOG"
+
+make_case "$WORK/only-non-placeholder-braces"
+printf '%s\n' 'Literal secret {{sshmgr-secret:X}}.' \
+  > "$WORK/only-non-placeholder-braces/S1/spec.md"
+printf '%s\n' 'Ticket literal secret {{sshmgr-secret:X}}.' \
+  > "$WORK/only-non-placeholder-braces/S1/tickets/T1.md"
+: > "$LOG"
+run_publish "$WORK/only-non-placeholder-braces.out" --apply \
+  "$WORK/only-non-placeholder-braces/S1/manifest.json"
+expect_exit 0 "literal-only bodies publish successfully"
+expect_count '"method":"PATCH"' 0 \
+  'literal-only bodies do not create backfill patches' "$LOG"
+expect_without '将回填正文' 'literal-only patch notice is absent' \
+  "$WORK/only-non-placeholder-braces.out"
+expect_without '"patchPending": true' \
+  'literal-only publish record has no pending patch' \
+  "$WORK/only-non-placeholder-braces/S1/published.json"
+
 if [ "$FAILED" -eq 0 ]; then
   printf 'Summary: %d passed, 0 failed\n' "$PASSED"
 else
