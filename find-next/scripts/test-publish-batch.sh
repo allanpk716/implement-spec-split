@@ -130,7 +130,18 @@ const logFile = process.env.PUBLISH_GH_LOG;
 const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
 const method = args.includes('-X') ? args[args.indexOf('-X') + 1] : 'GET';
 const endpoint = args.find((value) => value.startsWith('repos/'));
+const path = endpoint ? endpoint.split('?')[0] : endpoint;
 const write = ['POST', 'PATCH', 'PUT', 'DELETE'].includes(method);
+state.issues = state.issues || {
+  212: {number: 212, id: 10000212, title: 'Existing blocker', state: 'open', body: ''},
+  47: {number: 47, id: 10000047, title: 'Standalone blocker', state: 'open', body: ''},
+  48: {number: 48, id: 10000048, title: 'Existing spec', state: 'open', body: '## Problem Statement'},
+  49: {number: 49, id: 10000049, title: 'Closed blocker', state: 'closed', body: ''},
+  84: {number: 84, id: 10000084, title: 'Existing handoff', state: 'open', body: ''},
+};
+state.subIssues = state.subIssues || {};
+state.blockedBy = state.blockedBy || {};
+state.comments = state.comments || {};
 fs.appendFileSync(logFile, `${JSON.stringify({method, endpoint, args, write})}\n`);
 state.writeCount = (state.writeCount || 0) + (write ? 1 : 0);
 if (write && process.env.FAKE_GH_FAIL_WRITE &&
@@ -144,10 +155,22 @@ function field(name) {
   const value = args.find((arg) => arg.startsWith(prefix));
   return value === undefined ? undefined : value.slice(prefix.length);
 }
+function issueByDatabase(id) {
+  return Object.values(state.issues).find((issue) => issue.id === Number(id));
+}
+function numberFromIssueId(id) {
+  const issue = issueByDatabase(id);
+  return issue ? issue.number : Number(id) - 10000000;
+}
+function save() {
+  fs.writeFileSync(stateFile, JSON.stringify(state));
+}
 if (args[0] === 'repo' && args[1] === 'view') {
   process.stdout.write('test/repo\n');
-} else if (method === 'GET' && /^repos\/[^/]+\/[^/]+\/issues\/212$/.test(endpoint)) {
-  process.stdout.write(JSON.stringify({number: 212, id: 10000212, title: 'Existing blocker'}));
+} else if (method === 'GET' && /^repos\/[^/]+\/[^/]+\/issues\/[0-9]+$/.test(path)) {
+  const number = Number(path.split('/')[4]);
+  if (!state.issues[number]) process.exit(2);
+  process.stdout.write(JSON.stringify(state.issues[number]));
 } else if (method === 'POST' && endpoint.endsWith('/issues')) {
   const number = state.nextNumber++;
   const issue = {
@@ -157,17 +180,48 @@ if (args[0] === 'repo' && args[1] === 'view') {
     body: field('body'),
     labels: args.filter((arg) => arg.startsWith('labels[]=')).map((arg) => arg.slice(9)),
   };
-  fs.writeFileSync(stateFile, JSON.stringify(state));
+  issue.state = 'open';
+  state.issues[number] = issue;
+  save();
   process.stdout.write(JSON.stringify(issue));
 } else if (method === 'POST' && endpoint.endsWith('/sub_issues')) {
-  fs.writeFileSync(stateFile, JSON.stringify(state));
-  process.stdout.write(JSON.stringify({number: field('sub_issue_id')}));
+  const parent = Number(path.split('/')[4]);
+  const childNumber = numberFromIssueId(field('sub_issue_id'));
+  state.subIssues[parent] = state.subIssues[parent] || [];
+  if (childNumber > 0) state.subIssues[parent].push(childNumber);
+  save();
+  process.stdout.write(JSON.stringify(state.issues[childNumber] || {number: childNumber}));
 } else if (method === 'POST' && endpoint.endsWith('/dependencies/blocked_by')) {
-  fs.writeFileSync(stateFile, JSON.stringify(state));
-  process.stdout.write(JSON.stringify({number: field('issue_id')}));
+  const dependent = Number(path.split('/')[4]);
+  const blockerNumber = numberFromIssueId(field('issue_id'));
+  state.blockedBy[dependent] = state.blockedBy[dependent] || [];
+  if (blockerNumber > 0) state.blockedBy[dependent].push(blockerNumber);
+  save();
+  process.stdout.write(JSON.stringify(state.issues[blockerNumber] || {number: blockerNumber}));
+} else if (method === 'POST' && endpoint.endsWith('/comments')) {
+  const number = Number(path.split('/')[4]);
+  state.comments[number] = state.comments[number] || [];
+  state.comments[number].push(field('body'));
+  save();
+  process.stdout.write(JSON.stringify({id: 20000000 + state.comments[number].length}));
+} else if (method === 'GET' && endpoint.includes('/sub_issues?')) {
+  const parent = Number(path.split('/')[4]);
+  const numbers = state.subIssues[parent] || [];
+  const dropped = Number(process.env.FAKE_GH_DROP_SUB_ISSUE);
+  const shown = numbers.filter((number) => number !== dropped);
+  process.stdout.write(JSON.stringify(numbers.map((number) =>
+    shown.includes(number) ? (state.issues[number] || {number}) : null
+  )));
+} else if (method === 'GET' && endpoint.includes('/dependencies/blocked_by?')) {
+  const dependent = Number(path.split('/')[4]);
+  const numbers = state.blockedBy[dependent] || [];
+  process.stdout.write(JSON.stringify(numbers.map((number) =>
+    state.issues[number] || {number}
+  )));
 } else if (method === 'PATCH' && endpoint.includes('/issues/')) {
-  fs.writeFileSync(stateFile, JSON.stringify(state));
-  const number = Number(endpoint.split('/')[4]);
+  const number = Number(path.split('/')[4]);
+  state.issues[number].body = field('body');
+  save();
   process.stdout.write(JSON.stringify({number, id: 10000000 + number, body: field('body')}));
 } else {
   fs.writeFileSync(stateFile, JSON.stringify(state));
@@ -225,6 +279,8 @@ expect_without '"write":true' 'dry run sends no write request' "$LOG"
 run_publish "$WORK/base-apply.out" --apply "$WORK/base/S1/manifest.json" \
   "$WORK/base/S2/manifest.json"
 expect_exit 0 "base apply succeeds"
+expect_has '核对：子票与阻塞关系都对上了' \
+  'successful apply verifies relations' "$WORK/base-apply.out"
 expect_has '已发布 2 张规格、2 张执行票' 'apply summary' "$WORK/base-apply.out"
 expect_has 'S1 #300 Spec one' 'published spec number is listed' "$WORK/base-apply.out"
 expect_has 'S2/T1 #303 Ticket two' 'published ticket number is listed' "$WORK/base-apply.out"
@@ -305,8 +361,8 @@ run_publish "$WORK/missing-existing.out" --apply \
 expect_exit 1 "missing existing issue fails validation"
 expect_has 'issues/999' 'missing existing issue is named' \
   "$WORK/missing-existing.out.err"
-expect_has 'fake gh: unexpected arguments' 'gh error is surfaced' \
-  "$WORK/missing-existing.out.err"
+expect_has 'GitHub request failed at GET repos/test/repo/issues/999' \
+  'gh error is surfaced' "$WORK/missing-existing.out.err"
 expect_without '"write":true' 'missing existing issue sends no write' "$LOG"
 
 make_case "$WORK/unresolved"
@@ -319,6 +375,41 @@ expect_exit 1 "unresolved manifest fails validation"
 expect_has 'S2 has unresolved items: one question' 'unresolved items are named' \
   "$WORK/unresolved.out.err"
 expect_without '"write":true' 'unresolved manifest sends no write' "$LOG"
+
+make_case "$WORK/unresolved-format"
+mutate_manifest "$WORK/unresolved-format/S2/manifest.json" '
+  value.unresolved = [
+    "legacy question",
+    {question: "object question", proposal: "proposed answer", affects: "spec.md scope"}
+  ];
+'
+: > "$LOG"
+run_publish "$WORK/unresolved-format.out" \
+  "$WORK/unresolved-format/S1/manifest.json" \
+  "$WORK/unresolved-format/S2/manifest.json"
+expect_exit 0 "unresolved items do not fail dry run"
+expect_has 'S2 有 2 条未决（--apply 会拒绝这份）：' \
+  'unresolved section has header' "$WORK/unresolved-format.out"
+expect_has '- legacy question' 'legacy unresolved item is printed' \
+  "$WORK/unresolved-format.out"
+expect_has '- object question → 推荐：proposed answer（影响：spec.md scope）' \
+  'object unresolved item shows proposal' "$WORK/unresolved-format.out"
+expect_has '将新建规格 S2「Spec two」' \
+  'unresolved dry run still prints plan' "$WORK/unresolved-format.out"
+expect_without '"write":true' 'unresolved dry run sends no write' "$LOG"
+
+make_case "$WORK/unresolved-bad-object"
+mutate_manifest "$WORK/unresolved-bad-object/S2/manifest.json" '
+  value.unresolved = [{question: "object question", affects: "spec.md scope"}];
+'
+: > "$LOG"
+run_publish "$WORK/unresolved-bad-object.out" \
+  "$WORK/unresolved-bad-object/S1/manifest.json" \
+  "$WORK/unresolved-bad-object/S2/manifest.json"
+expect_exit 1 "malformed unresolved object fails validation"
+expect_has 'object items require non-empty string question, proposal, and affects' \
+  'missing unresolved proposal is named' "$WORK/unresolved-bad-object.out.err"
+expect_without '"write":true' 'malformed unresolved object sends no write' "$LOG"
 
 make_case "$WORK/bad-only"
 : > "$LOG"
@@ -419,6 +510,132 @@ expect_has '"dependency:S2/T1<-S1/T1"' 'ticket dependency is recorded' \
 expect_has '"dependency:S2/T1<-#212"' 'existing dependency is recorded' \
   "$WORK/retry/S2/published.json"
 
+make_case "$WORK/handoffs"
+mutate_manifest "$WORK/handoffs/S2/manifest.json" '
+  value.handoffs = [{issue: 84, note: "Please include #{{S2}} when writing #84."}];
+'
+: > "$LOG"
+run_publish "$WORK/handoffs-dry.out" \
+  "$WORK/handoffs/S1/manifest.json" "$WORK/handoffs/S2/manifest.json"
+expect_exit 0 "handoffs pass dry run"
+expect_has '将在 #84 留言（来自 S2）：Please include #{{S2}} when writing #84.…' \
+  'dry run previews handoff note' "$WORK/handoffs-dry.out"
+expect_without '"write":true' 'handoff dry run sends no write' "$LOG"
+
+: > "$LOG"
+run_publish "$WORK/handoffs-apply.out" --apply \
+  "$WORK/handoffs/S1/manifest.json" "$WORK/handoffs/S2/manifest.json"
+expect_exit 0 "handoffs apply succeeds"
+HANDOFF_SPEC=$(node -e '
+  const value = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  process.stdout.write(String(value.issues.S2.number));
+' "$WORK/handoffs/S2/published.json")
+grep '"endpoint":"repos/test/repo/issues/84/comments"' "$LOG" \
+  > "$WORK/handoff-comments.log"
+expect_has "body=Please include #${HANDOFF_SPEC} when" \
+  'handoff note renders spec number' "$WORK/handoff-comments.log"
+expect_has "（规格 #${HANDOFF_SPEC} 批量发布时留下）" \
+  'handoff note has source suffix' "$WORK/handoff-comments.log"
+expect_has '"handoff:0:84"' 'handoff is recorded' \
+  "$WORK/handoffs/S2/published.json"
+
+: > "$LOG"
+run_publish "$WORK/handoffs-rerun.out" --apply \
+  "$WORK/handoffs/S1/manifest.json" "$WORK/handoffs/S2/manifest.json"
+expect_exit 0 "handoff rerun succeeds"
+expect_without '"write":true' 'handoff rerun does not comment twice' "$LOG"
+
+make_case "$WORK/handoff-missing"
+mutate_manifest "$WORK/handoff-missing/S2/manifest.json" '
+  value.handoffs = [{issue: 999, note: "Missing target."}];
+'
+: > "$LOG"
+run_publish "$WORK/handoff-missing.out" --apply \
+  "$WORK/handoff-missing/S1/manifest.json" \
+  "$WORK/handoff-missing/S2/manifest.json"
+expect_exit 1 "missing handoff issue fails validation"
+expect_has 'GitHub request failed at GET repos/test/repo/issues/999' \
+  'missing handoff issue is named' "$WORK/handoff-missing.out.err"
+expect_without '"write":true' 'missing handoff issue sends no write' "$LOG"
+
+make_case "$WORK/start-order"
+mkdir -p "$WORK/start-order/S3/tickets"
+printf '%s\n' '{"key":"S1","title":"Ready spec","body":"spec.md","tickets":[{"key":"T1","title":"Ready ticket","body":"tickets/T1.md","blocked_by":[]}]}' \
+  > "$WORK/start-order/S1/manifest.json"
+printf '%s\n' '## Parent
+#{{S1}}
+Ready.' > "$WORK/start-order/S1/tickets/T1.md"
+printf '%s\n' '{"key":"S2","title":"Partial spec","body":"spec.md","tickets":[{"key":"T1","title":"Local ready","body":"tickets/T1.md","blocked_by":[]},{"key":"T2","title":"Other spec blocker","body":"tickets/T2.md","blocked_by":["S1"]},{"key":"T3","title":"Standalone blocker","body":"tickets/T3.md","blocked_by":["#47"]},{"key":"T4","title":"Indirect blocker","body":"tickets/T4.md","blocked_by":["T3"]},{"key":"T5","title":"Closed blocker ignored","body":"tickets/T5.md","blocked_by":["#49"]}]}' \
+  > "$WORK/start-order/S2/manifest.json"
+for ticket in T1 T2 T3 T4 T5; do
+  printf '## Parent\n#{{S2}}\nTicket %s.\n' "$ticket" \
+    > "$WORK/start-order/S2/tickets/$ticket.md"
+done
+printf '%s\n' '{"key":"S3","title":"Waiting spec","body":"spec.md","tickets":[{"key":"T1","title":"Other ticket blocker","body":"tickets/T1.md","blocked_by":["S2/T2"]},{"key":"T2","title":"Internal indirect","body":"tickets/T2.md","blocked_by":["T1"]},{"key":"T3","title":"Existing spec blocker","body":"tickets/T3.md","blocked_by":["#48"]}]}' \
+  > "$WORK/start-order/S3/manifest.json"
+for ticket in T1 T2 T3; do
+  printf '## Parent\n#{{S3}}\nTicket %s.\n' "$ticket" \
+    > "$WORK/start-order/S3/tickets/$ticket.md"
+done
+printf '%s\n' 'Ready spec body.' > "$WORK/start-order/S1/spec.md"
+printf '%s\n' 'Partial spec body.' > "$WORK/start-order/S2/spec.md"
+printf '%s\n' 'Waiting spec body.' > "$WORK/start-order/S3/spec.md"
+
+: > "$LOG"
+run_publish "$WORK/start-order-dry.out" \
+  "$WORK/start-order/S1/manifest.json" \
+  "$WORK/start-order/S2/manifest.json" \
+  "$WORK/start-order/S3/manifest.json"
+expect_exit 0 "start-order dry run succeeds"
+expect_has '- 现在可开：S1 Ready spec' \
+  'dry start order shows ready spec' "$WORK/start-order-dry.out"
+expect_has '- 部分可开：S2 Partial spec：可先做 S2/T1、S2/T5；S2/T2 要等 S1（同批规格）、S2/T3 要等 #47（单独的票，implement-spec-split 不会处理，需另行安排）、S2/T4 要等 #47（单独的票，implement-spec-split 不会处理，需另行安排）' \
+  'dry start order explains partial blockers' "$WORK/start-order-dry.out"
+expect_has '- 要等：S3 Waiting spec：全部执行票要等 S2（同批规格）、#48（已有规格）' \
+  'dry start order shows fully blocked spec' "$WORK/start-order-dry.out"
+expect_without 'S2/T5 要等' 'closed existing blocker is ignored' \
+  "$WORK/start-order-dry.out"
+
+: > "$LOG"
+run_publish "$WORK/start-order-apply.out" --apply \
+  "$WORK/start-order/S1/manifest.json" \
+  "$WORK/start-order/S2/manifest.json" \
+  "$WORK/start-order/S3/manifest.json"
+expect_exit 0 "start-order apply succeeds"
+ORDER_NUMBERS=$(node -e '
+  const fs = require("fs");
+  const root = process.argv[1];
+  const issue = (spec, key) => JSON.parse(
+    fs.readFileSync(`${root}/${spec}/published.json`, "utf8")
+  ).issues[key].number;
+  process.stdout.write([
+    issue("S1", "S1"), issue("S2", "S2"), issue("S2", "T1"),
+    issue("S2", "T2"), issue("S2", "T3"), issue("S2", "T4"),
+    issue("S2", "T5"), issue("S3", "S3"),
+  ].join(" "));
+' "$WORK/start-order")
+read S1_NUM S2_NUM S2T1_NUM S2T2_NUM S2T3_NUM S2T4_NUM S2T5_NUM S3_NUM <<EOF
+$ORDER_NUMBERS
+EOF
+expect_has "- 现在可开：#${S1_NUM} Ready spec" \
+  'apply start order uses ready spec number' "$WORK/start-order-apply.out"
+expect_has "- 部分可开：#${S2_NUM} Partial spec：可先做 #${S2T1_NUM}、#${S2T5_NUM}；#${S2T2_NUM} 要等 #${S1_NUM}（同批规格）、#${S2T3_NUM} 要等 #47（单独的票，implement-spec-split 不会处理，需另行安排）、#${S2T4_NUM} 要等 #47（单独的票，implement-spec-split 不会处理，需另行安排）" \
+  'apply start order explains real ticket numbers' "$WORK/start-order-apply.out"
+expect_has "- 要等：#${S3_NUM} Waiting spec：全部执行票要等 #${S2_NUM}（同批规格）、#48（已有规格）" \
+  'apply start order shows real waiting spec' "$WORK/start-order-apply.out"
+
+make_case "$WORK/unresolved-only"
+mutate_manifest "$WORK/unresolved-only/S2/manifest.json" \
+  'value.unresolved = [{question: "wait", proposal: "yes", affects: "scope"}];'
+printf '%s\n' 'Spec one.' > "$WORK/unresolved-only/S1/spec.md"
+: > "$LOG"
+run_publish "$WORK/unresolved-only.out" --apply --only S1 \
+  "$WORK/unresolved-only/S1/manifest.json" \
+  "$WORK/unresolved-only/S2/manifest.json"
+expect_exit 0 "only excludes manifest with unresolved items"
+expect_has '已发布 1 张规格、1 张执行票' \
+  'only publishes clean unresolved-free manifest' "$WORK/unresolved-only.out"
+
 make_case "$WORK/non-placeholder-braces"
 printf '%s\n' $'Literal secret {{sshmgr-secret:DB_PASSWORD}} and #{{S1}}.' \
   > "$WORK/non-placeholder-braces/S1/spec.md"
@@ -482,6 +699,27 @@ expect_without '将回填正文' 'literal-only patch notice is absent' \
 expect_without '"patchPending": true' \
   'literal-only publish record has no pending patch' \
   "$WORK/only-non-placeholder-braces/S1/published.json"
+
+make_case "$WORK/verify-missing-sub"
+VERIFY_SPEC=$(STATE="$STATE" node -e '
+  const state = JSON.parse(require("fs").readFileSync(process.env.STATE, "utf8"));
+  process.stdout.write(String(state.nextNumber));
+')
+VERIFY_SPEC=$((VERIFY_SPEC + 1))
+VERIFY_TICKET=$((VERIFY_SPEC + 2))
+FAKE_GH_DROP_SUB_ISSUE=$VERIFY_TICKET
+export FAKE_GH_DROP_SUB_ISSUE
+: > "$LOG"
+run_publish "$WORK/verify-missing-sub.out" --apply \
+  "$WORK/verify-missing-sub/S1/manifest.json" \
+  "$WORK/verify-missing-sub/S2/manifest.json"
+unset FAKE_GH_DROP_SUB_ISSUE
+expect_exit 1 "missing read-back sub-issue fails apply"
+expect_has "规格 #${VERIFY_SPEC} 缺子票 #${VERIFY_TICKET}" \
+  'missing read-back sub-issue is named' "$WORK/verify-missing-sub.out"
+expect_has 'publish-batch: publication verification failed' \
+  'read-back failure is surfaced' "$WORK/verify-missing-sub.out.err"
+expect_has '"write":true' 'read-back failure happens after writes' "$LOG"
 
 if [ "$FAILED" -eq 0 ]; then
   printf 'Summary: %d passed, 0 failed\n' "$PASSED"

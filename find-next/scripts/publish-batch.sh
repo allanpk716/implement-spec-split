@@ -17,8 +17,11 @@ Manifest fields:
   labels     Optional string array; defaults to ["ready-for-agent"].
   tickets    Array of execution tickets with T<number> keys, bodies, optional
              labels, and blocked_by references.
-  unresolved Optional human-facing array. A non-empty array rejects that
-             manifest unless it is outside --only.
+  unresolved Optional array of strings or objects with question, proposal,
+             and affects. Objects are recommended. Dry runs still print the
+             plan; --apply rejects a selected manifest containing any item.
+  handoffs   Optional array of {issue, note}. Existing issues receive the
+             rendered note after all issues, relations, and body patches.
 
 blocked_by and {{...}} body placeholders may refer to:
   T1         A ticket in the same manifest.
@@ -121,6 +124,7 @@ const onlyArgument = argv[2];
 const manifestPaths = argv.slice(argv.indexOf('--') + 1);
 const errors = [];
 const externalIds = new Map();
+const externalIssues = new Map();
 let manifests = [];
 let byKey = new Map();
 let selectedKeys = new Set();
@@ -180,7 +184,7 @@ function issueFromRecord(value, key, type) {
 
 function readRecord(manifest) {
   const file = path.join(manifest.dir, 'published.json');
-  if (!fs.existsSync(file)) return {issues: {}, relations: []};
+  if (!fs.existsSync(file)) return {issues: {}, relations: [], handoffs: []};
   let value;
   try {
     value = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -200,7 +204,15 @@ function readRecord(manifest) {
     const parsed = issueFromRecord(issue, key, type);
     if (parsed) issues[key] = parsed;
   }
-  return {issues, relations: value.relations.map(String), file};
+  if (value.handoffs !== undefined && !Array.isArray(value.handoffs)) {
+    throw new Error(`invalid publish record ${file}: handoffs must be an array`);
+  }
+  return {
+    issues,
+    relations: value.relations.map(String),
+    handoffs: Array.isArray(value.handoffs) ? value.handoffs.map(String) : [],
+    file,
+  };
 }
 
 function labelList(value, where) {
@@ -211,6 +223,10 @@ function labelList(value, where) {
     return [];
   }
   return value.slice();
+}
+
+function nonEmptyString(value) {
+  return typeof value === 'string' && value.trim() !== '';
 }
 
 function parseManifest(file) {
@@ -230,6 +246,8 @@ function parseManifest(file) {
     labels: labelList(value.labels, `manifest ${file} labels`),
     ticketDefinitions: Array.isArray(value.tickets) ? value.tickets : [],
     unresolved: Array.isArray(value.unresolved) ? value.unresolved : [],
+    unresolvedDefinitions: Array.isArray(value.unresolved) ? value.unresolved : [],
+    handoffDefinitions: Array.isArray(value.handoffs) ? value.handoffs : [],
     source: value,
   };
   return manifest;
@@ -324,14 +342,61 @@ function loadManifests() {
   }
   if (!onlyArgument) selectedKeys = new Set(manifests.map((manifest) => String(manifest.key)));
   for (const manifest of manifests) {
+    check(manifest.source.unresolved === undefined ||
+      Array.isArray(manifest.source.unresolved),
+    `manifest ${manifest.file}: unresolved must be an array`);
+    check(manifest.source.handoffs === undefined ||
+      Array.isArray(manifest.source.handoffs),
+    `manifest ${manifest.file}: handoffs must be an array`);
+    manifest.unresolved = [];
+    manifest.unresolvedDefinitions.forEach((item, index) => {
+      const where = `manifest ${manifest.file} unresolved ${index + 1}`;
+      if (nonEmptyString(item)) {
+        manifest.unresolved.push({question: item});
+        return;
+      }
+      if (!isPlainObject(item)) {
+        errors.push(`${where}: must be a non-empty string or object`);
+        return;
+      }
+      const valid = ['question', 'proposal', 'affects']
+        .every((name) => nonEmptyString(item[name]));
+      if (!valid) {
+        errors.push(
+          `${where}: object items require non-empty string question, proposal, and affects`
+        );
+        return;
+      }
+      manifest.unresolved.push({
+        question: item.question, proposal: item.proposal, affects: item.affects,
+      });
+    });
+    manifest.handoffs = [];
+    manifest.handoffDefinitions.forEach((item, index) => {
+      const where = `manifest ${manifest.file} handoff ${index + 1}`;
+      if (!isPlainObject(item)) {
+        errors.push(`${where}: must be an object`);
+        return;
+      }
+      if (!Number.isInteger(item.issue) || item.issue <= 0) {
+        errors.push(`${where}: issue must be a positive integer`);
+      }
+      if (!nonEmptyString(item.note)) {
+        errors.push(`${where}: note must be a non-empty string`);
+      }
+      if (Number.isInteger(item.issue) && item.issue > 0 && nonEmptyString(item.note)) {
+        manifest.handoffs.push({index, issue: item.issue, note: item.note});
+      }
+    });
     try {
       manifest.record = readRecord(manifest);
     } catch (error) {
       errors.push(error.message);
-      manifest.record = {issues: {}, relations: []};
+      manifest.record = {issues: {}, relations: [], handoffs: []};
     }
-    if (selected(manifest) && manifest.unresolved.length > 0) {
-      errors.push(`manifest ${manifest.key} has unresolved items: ${manifest.unresolved.join('、')}`);
+    if (apply && selected(manifest) && manifest.unresolved.length > 0) {
+      const questions = manifest.unresolved.map((item) => item.question);
+      errors.push(`manifest ${manifest.key} has unresolved items: ${questions.join('、')}`);
     }
   }
 }
@@ -421,6 +486,9 @@ function validateReferences() {
         }
       });
       refs.push([ticket.body, `${manifest.key}/${ticket.key} body`]);
+    }
+    for (const handoff of manifest.handoffs) {
+      refs.push([handoff.note, `${manifest.key} handoff #${handoff.issue} note`]);
     }
     for (const [body, where] of refs) {
       for (const raw of placeholderReferences(body)) {
@@ -520,6 +588,7 @@ function validateExistingIssues() {
       add(ticket.body);
     }
     add(manifest.body);
+    for (const handoff of manifest.handoffs) numbers.add(handoff.issue);
   }
   for (const number of [...numbers].sort((a, b) => a - b)) {
     let issue;
@@ -531,6 +600,15 @@ function validateExistingIssues() {
     check(Number(issue.id) > 0 && Number(issue.number) === number,
       `existing issue reference #${number} was not returned by GitHub`);
     if (Number(issue.id) > 0) externalIds.set(number, Number(issue.id));
+    if (Number(issue.id) > 0) {
+      externalIssues.set(number, {
+        number,
+        databaseId: Number(issue.id),
+        title: String(issue.title || `#${number}`),
+        state: String(issue.state || 'open'),
+        body: String(issue.body || ''),
+      });
+    }
   }
 }
 
@@ -539,6 +617,7 @@ function saveRecord(manifest) {
     repo,
     issues: manifest.record.issues,
     relations: unique(manifest.record.relations),
+    handoffs: unique(manifest.record.handoffs || []),
   };
   const temporary = path.join(manifest.dir, '.published.json.tmp');
   fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`);
@@ -564,6 +643,35 @@ function rememberRelation(manifest, relation) {
   if (manifest.record.relations.includes(relation)) return;
   manifest.record.relations.push(relation);
   saveRecord(manifest);
+}
+
+function rememberHandoff(manifest, handoff) {
+  const relation = `handoff:${handoff.index}:${handoff.issue}`;
+  if (manifest.record.handoffs.includes(relation)) return false;
+  manifest.record.handoffs.push(relation);
+  saveRecord(manifest);
+  return true;
+}
+
+function sendHandoffs() {
+  for (const manifest of manifests.filter(selected)) {
+    const spec = manifest.record.issues[manifest.key];
+    if (!spec) fail(`internal error: missing published spec ${manifest.key}`);
+    for (const handoff of manifest.handoffs) {
+      const relation = `handoff:${handoff.index}:${handoff.issue}`;
+      if (manifest.record.handoffs.includes(relation)) continue;
+      const note = renderBody(handoff.note, manifest);
+      if (hasPlaceholder(note)) {
+        fail(`internal error: unresolved placeholder remains in ${manifest.key} handoff #${handoff.issue}`);
+      }
+      const body = `${note}\n\n（规格 #${spec.number} 批量发布时留下）`;
+      ghApi(
+        `repos/${repo}/issues/${handoff.issue}/comments`, 'POST', [['-f', `body=${body}`]]
+      );
+      rememberHandoff(manifest, handoff);
+      process.stdout.write(`已在 #${handoff.issue} 留言（来自 ${manifest.key}）\n`);
+    }
+  }
 }
 
 function createIssue(manifest, key, title, body, labels, type) {
@@ -720,10 +828,190 @@ function printDryRun(graph) {
         : item.manifest.title
     }」\n`);
   }
+  printHandoffPreviews();
   printIssues();
   process.stdout.write(
     `试运行：将发布 ${newSpecs} 张规格、${newTickets} 张执行票，加 --apply 执行\n`
   );
+  printUnresolved();
+  printStartOrder();
+}
+
+function printHandoffPreviews() {
+  for (const manifest of manifests.filter(selected)) {
+    for (const handoff of manifest.handoffs) {
+      const note = renderBody(handoff.note, manifest).slice(0, 60);
+      process.stdout.write(
+        `将在 #${handoff.issue} 留言（来自 ${manifest.key}）：${note}…\n`
+      );
+    }
+  }
+}
+
+function printUnresolved() {
+  for (const manifest of manifests.filter(selected)) {
+    if (manifest.unresolved.length === 0) continue;
+    process.stdout.write(
+      `${manifest.key} 有 ${manifest.unresolved.length} 条未决（--apply 会拒绝这份）：\n`
+    );
+    for (const item of manifest.unresolved) {
+      if (item.proposal === undefined) {
+        process.stdout.write(`- ${item.question}\n`);
+      } else {
+        process.stdout.write(
+          `- ${item.question} → 推荐：${item.proposal}（影响：${item.affects}）\n`
+        );
+      }
+    }
+  }
+}
+
+function issueDisplay(issue, fallback) {
+  return issue ? `#${issue.number}` : fallback;
+}
+
+function isInternalTicketReference(manifest, reference) {
+  return reference.kind === 'ticket' &&
+    (!reference.specKey || reference.target === manifest);
+}
+
+function openExternalReference(reference) {
+  if (reference.kind === 'existing') {
+    const issue = externalIssues.get(reference.number);
+    return issue && issue.state === 'open' ? {reference, issue} : null;
+  }
+  return {reference};
+}
+
+function externalBlockerDescription(reference) {
+  const external = openExternalReference(reference);
+  if (!external) return null;
+  if (reference.kind === 'existing') {
+    const isSpec = /^## Problem Statement[ \t\r]*$/m.test(external.issue.body);
+    return `#${reference.number}（${isSpec ? '已有规格' : '单独的票，implement-spec-split 不会处理，需另行安排'}）`;
+  }
+  const target = reference.target;
+  if (!target) return null;
+  if (reference.kind === 'spec') {
+    const display = issueDisplay(target.record.issues[target.key], target.key);
+    return `${display}（同批规格）`;
+  }
+  const display = issueDisplay(target.record.issues[target.key], target.key);
+  return `${display}（同批规格）`;
+}
+
+function reachableExternalBlockers(manifest, ticket, seen = new Set()) {
+  const identity = `${manifest.key}/${ticket.key}`;
+  if (seen.has(identity)) return [];
+  seen.add(identity);
+  const blockers = [];
+  for (const raw of ticket.blockedBy) {
+    const reference = resolveReference(raw, manifest, 'start order');
+    if (!reference) continue;
+    if (isInternalTicketReference(manifest, reference)) {
+      const internal = reference.target.tickets.find((item) => item.key === reference.ticketKey);
+      if (internal) blockers.push(...reachableExternalBlockers(manifest, internal, seen));
+    } else {
+      const description = externalBlockerDescription(reference);
+      if (description) blockers.push(description);
+    }
+  }
+  return unique(blockers);
+}
+
+function printStartOrder() {
+  const groups = manifests.filter(selected).map((manifest) => {
+    const tickets = manifest.tickets.map((ticket) => ({
+      ticket,
+      display: issueDisplay(manifest.record.issues[ticket.key], `${manifest.key}/${ticket.key}`),
+      blockers: reachableExternalBlockers(manifest, ticket),
+    }));
+    return {
+      manifest,
+      ready: tickets.filter((ticket) => ticket.blockers.length === 0),
+      waiting: tickets.filter((ticket) => ticket.blockers.length > 0),
+    };
+  });
+  const categories = [
+    ['现在可开', groups.filter((group) => group.waiting.length === 0)],
+    ['部分可开', groups.filter((group) =>
+      group.waiting.length > 0 && group.ready.length > 0)],
+    ['要等', groups.filter((group) =>
+      group.waiting.length > 0 && group.ready.length === 0)],
+  ];
+  process.stdout.write('开工顺序（同时做的规格不超过 2 份，几个会话共用 GLM 额度）\n');
+  for (const [label, selectedGroups] of categories) {
+    if (selectedGroups.length === 0) continue;
+    for (const group of selectedGroups) {
+      const display = issueDisplay(
+        group.manifest.record.issues[group.manifest.key], group.manifest.key
+      );
+      let line = `- ${label}：${display} ${group.manifest.title}`;
+      if (label === '部分可开') {
+        const ready = group.ready.map((ticket) => ticket.display).join('、');
+        const waiting = group.waiting.map((ticket) =>
+          `${ticket.display} 要等 ${ticket.blockers.join('、')}`).join('、');
+        line += `：可先做 ${ready}；${waiting}`;
+      } else if (label === '要等') {
+        const blockers = unique(group.waiting.flatMap((ticket) => ticket.blockers));
+        line += `：全部执行票要等 ${blockers.join('、')}`;
+      }
+      process.stdout.write(`${line}\n`);
+    }
+  }
+}
+
+function returnedIssueNumbers(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => {
+    if (Number.isInteger(item)) return item;
+    const nested = item && (item.blocked_by_issue || item.issue || item.blocked_by);
+    return Number(item && (item.number !== undefined ? item.number : nested && nested.number));
+  }).filter((number) => Number.isInteger(number) && number > 0);
+}
+
+function verifyPublication() {
+  const problems = [];
+  for (const manifest of manifests.filter(selected)) {
+    const spec = manifest.record.issues[manifest.key];
+    if (!spec) {
+      problems.push(`${manifest.key} has no published spec number`);
+      continue;
+    }
+    const actual = new Set(returnedIssueNumbers(JSON.parse(
+      ghApi(`repos/${repo}/issues/${spec.number}/sub_issues?per_page=100`)
+    )));
+    for (const ticket of manifest.tickets) {
+      const issue = manifest.record.issues[ticket.key];
+      if (issue && !actual.has(issue.number)) {
+        problems.push(`规格 #${spec.number} 缺子票 #${issue.number}`);
+      }
+    }
+  }
+  for (const manifest of manifests.filter(selected)) {
+    for (const ticket of manifest.tickets) {
+      const dependent = manifest.record.issues[ticket.key];
+      if (!dependent) continue;
+      const actual = new Set(returnedIssueNumbers(JSON.parse(
+        ghApi(`repos/${repo}/issues/${dependent.number}/dependencies/blocked_by?per_page=100`)
+      )));
+      for (const raw of ticket.blockedBy) {
+        const reference = resolveReference(raw, manifest, 'verify dependency');
+        const blocker = reference && referenceNumber(reference);
+        if (blocker && !actual.has(blocker.number)) {
+          problems.push(
+            `执行票 #${dependent.number} 缺阻塞 #${blocker.number}`
+          );
+        }
+      }
+    }
+  }
+  if (problems.length === 0) {
+    process.stdout.write('核对：子票与阻塞关系都对上了\n');
+    return true;
+  }
+  for (const problem of unique(problems)) process.stdout.write(`${problem}\n`);
+  return false;
 }
 
 function printIssues() {
@@ -798,11 +1086,15 @@ function applyBatch(graph) {
     patchIssue(item.manifest, item.key, issue.number, rendered);
   }
 
+  sendHandoffs();
+  const verified = verifyPublication();
   printIssues();
   const specs = manifests.filter(selected).length;
   const tickets = manifests.filter(selected)
     .reduce((total, manifest) => total + manifest.tickets.length, 0);
   process.stdout.write(`已发布 ${specs} 张规格、${tickets} 张执行票\n`);
+  printStartOrder();
+  if (!verified) fail('publication verification failed');
 }
 
 if (mode !== 'run') {
