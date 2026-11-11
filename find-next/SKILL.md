@@ -1,17 +1,18 @@
 ---
 name: find-next
-description: 扫描当前仓库的 wayfinder 地图与票，只挑出一个下一步（该 /to-tickets、该 /to-spec、还是该 grilling/research 哪张票）并给出要敲的命令；加 --list 时改为列出全部待办清单。用户问"下一步做什么""该推哪张票""哪个该 to-spec / to-tickets / grill 了""还有什么没做完""给我待办清单"，或输入 /find-next 时使用。参数 --list、--worker codex|pi|self。
+description: 扫描当前仓库的 wayfinder 地图与票，只挑出一个下一步（该 /to-tickets、该 /to-spec、还是该 grilling/research 哪张票）并给出要敲的命令；加 --list 时改为列出全部待办清单；加 --batch 时批量起草缺规格的票的规格与执行票，用户确认一轮后发布。用户问"下一步做什么""该推哪张票""哪个该 to-spec / to-tickets / grill 了""还有什么没做完""给我待办清单""批量写规格 / 批量拆票"，或输入 /find-next 时使用。参数 --list、--batch、--worker codex|pi|self。
 ---
 
 # find-next
 
-在当前仓库里扫描跟踪器，**只给出一个 Next step**和要敲的命令，外加最多 3 行备选。术语（Spec、Closing ticket、Decision ticket、Map frontier、Next step）见 implement-spec-split 的 `GLOSSARY.md`，设计理由见其 `MAINTAINING.md`「find-next 设计要点」。对跟踪器只读：不改票头、不认领、不打标签、不写地图。
+在当前仓库里扫描跟踪器，**只给出一个 Next step**和要敲的命令，外加最多 3 行备选。术语（Spec、Closing ticket、Decision ticket、Map frontier、Next step）见 implement-spec-split 的 `GLOSSARY.md`，设计理由见其 `MAINTAINING.md`「find-next 设计要点」。对跟踪器只读：不改票头、不认领、不打标签、不写地图。唯一例外是 `--batch` 的发布步骤，它在用户确认后新建规格票和执行票。
 
 ## 用法
 
 - `/find-next`：等同于 `--worker codex`
 - `/find-next --worker codex|pi|self`：判断部分交给谁做（见「流程」）
 - `/find-next --list`：不挑一个，列出当前仓库的全部待办清单（见「清单模式」）。总是我自己做，不派 worker，`--worker` 被忽略
+- `/find-next --batch [地图号或实现票号…]`：把「缺规格」的票批量起草成规格和执行票，用户确认一轮后发布（见「批量模式」）。不带参数时处理全部缺规格的票。只支持 GitHub 跟踪器；起草总是交给 codex worker，`--worker` 被忽略
 
 只扫当前仓库，不跨仓库汇总。
 
@@ -91,6 +92,70 @@ F. 散票（bug / needs-triage 等，含疑似重复标注）
 
    称呼票时写「#编号 标题」。清单最后给出单个 Next step 的结论，口径与默认模式一致。
 4. 仓库里另有自由格式的 backlog 文档（如 `docs/backlog.md`）时，不机械解析，只在末尾提醒一句「另有 backlog 文档未纳入，建议把仍有效的条目迁成 issue」。
+
+## 批量模式（`--batch`）
+
+用途：把「缺规格」的票一次性起草成规格和执行票，代替逐张走「`/to-spec` → `/to-tickets` → `/clear`」。用户只敲一条命令，中间确认一轮。读材料、写长文都在 worker 那边做，我只花在分组、审稿和发布上。
+
+不能调用 `/to-spec`、`/to-tickets` 本身（`disable-model-invocation`），所以起草 worker 直接读这两个上游技能的 `SKILL.md`，照它们的模板和规则写。两个技能里「问用户」的步骤合并成下面第 5 步的一轮。
+
+1. **扫描**：`pipeline-status.sh --all`，取「缺规格」段；带参数时只留参数里的地图或实现票。所在地图还在「地图仍在探索」段、并且决策票会影响这张实现票的，不进批量，在输出里说明还差哪张决策票。
+2. **分组（我做）**：看标题，必要时 `gh issue view` 实现票正文（不读决策票全文），把同一地图里紧密相关的实现票合成一份规格，其余一张一份。每组编号 `S1`、`S2`…。分组原则：一份规格是一个可独立交付、可独立验收的竖切；明显串行依赖的（如整体验收册依赖所有功能）单独成组，靠阻塞关系衔接。
+3. **起草（worker 并行）**：
+   - 运行目录 `~/.cache/codex-runs/<仓库名>-<YYYYmmdd-HHMM>-spec-batch/`，每组一个子目录 `S<k>/`，它就是那个 worker 的运行目录。
+   - 每组从 [templates/brief-spec-batch.md](templates/brief-spec-batch.md) 填一份 `brief.md`。to-spec、to-tickets 的路径取最新的 `~/.claude/plugins/cache/mattpocock/mattpocock-skills/*/skills/engineering/{to-spec,to-tickets}/SKILL.md`；「同批的其他组」一节列出所有组的范围，用来写跨规格阻塞。
+   - 后台运行，最多 3 个同时跑，组更多就分批派：
+
+     ```bash
+     ~/.claude/skills/implement-spec-split/scripts/codex-worker.sh --cwd <仓库> --brief <运行目录>/S<k>/brief.md \
+       --run-dir <运行目录>/S<k> --read-only --time-limit 2400 --idle-timeout 600
+     ```
+
+     草稿写在运行目录里，不在仓库内，所以用 `--read-only` 守住仓库。出错按全局 CLAUDE.md 的处理表。
+4. **审稿（我做）**：读每组的 `result.md`、`manifest.json`、`spec.md` 和执行票正文，逐份检查：
+   - 实现决定都注明了出处，并且出处里确实这么定了（抽查几条）；
+   - `实现票：`、`地图：` 两行正确；
+   - 执行票是竖切、粒度合适，阻塞边合理，跨组阻塞两边对得上（A 写了被 S2 挡住，S2 的范围确实提供 A 需要的东西）；
+   - 用 `publish-batch.sh <全部 manifest.json>` 试运行，确认校验通过、顺序正确。
+
+   小问题我直接改草稿文件；需要重读材料的大问题，写意见进新 Brief、换新运行目录重派那一组。
+5. **问用户一轮**：一次性列出，适合手机阅读：
+
+   ```
+   批量起草 · <仓库名> · N 份规格、M 张执行票
+
+   S1 <规格标题>（覆盖 #62、#63）
+   摘要：<一两句>
+   测试切入点：<一句>，对吗？
+   执行票：
+   1. <标题> — 交付：<一句>；被挡：无
+   2. <标题> — 交付：<一句>；被挡：1、S2
+   未决：<没有写「无」>
+
+   S2 …
+
+   请确认：各份的测试切入点、拆分粒度、阻塞关系；有「未决」的那份我先不发布。
+   确认后我发布（会新建 N + M 张 issue）。
+   ```
+
+   用户改了某份的测试切入点或拆分：小改我直接改草稿；大改那份退回 worker 重写，其他份照常发布。`unresolved` 非空的那份不发布，留给用户讨论（通常是 `/wayfinder` 或 `/grill-with-docs`）。
+6. **发布（我做，用户确认后）**：
+
+   ```bash
+   <本技能目录>/scripts/publish-batch.sh --apply [--only S1,S3] <运行目录>/S*/manifest.json
+   ```
+
+   先建规格票，再按阻塞顺序建执行票、挂成规格的子票、加原生阻塞边，占位符换成真实票号。每一步记进各组的 `published.json`，中途失败修好后直接重跑，不会重复建票。
+7. **收尾输出**：每份规格的票号与执行票票号，再加一张开工顺序表，供用户在 Orca 里逐个开会话跑 `/implement-spec-split <规格号>`：
+
+   ```
+   开工顺序（同时做的规格不超过 2 份，几个会话共用 GLM 额度）
+   - 现在可开：#301 <标题>、#305 <标题>
+   - 等 #301 合并后：#310 <标题>（被它挡住）
+   - 建议错开：#312 <标题>（和 #305 改同一块代码）
+   ```
+
+   「改同一块代码」靠各组 `spec.md` 的模块描述判断，拿不准就不写。最后提醒用户 `/clear`。
 
 ## 输出（适合手机阅读）
 

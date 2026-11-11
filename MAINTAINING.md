@@ -82,13 +82,22 @@
 4. **候选单位是地图或 Spec，不是单张决策票。** 单张 Decision ticket 本身做不成 spec，spec 是对一片已经拍板的决策做综合。
 5. **地图内的 Decision ticket 推荐 `/wayfinder <地图> <票>`，不推荐裸 `/grill-with-docs`。** 后者不认领、不写 Resolution、不关票，下次扫描会再次推荐同一张票。只有不在任何地图里的散票，才推荐 `/grill-with-docs`。
 6. **to-spec / to-tickets 不能由模型调用（`disable-model-invocation`），而且只综合当前对话。** 所以 find-next 先把材料放进上下文（self 模式读原票，worker 模式读 `digest.md`），再提示用户敲命令。
-7. **对跟踪器只读**：不改票头、不认领、不打标签，以免和用户并发跑的 wayfinder 会话互相覆盖。
+7. **对跟踪器只读**：不改票头、不认领、不打标签，以免和用户并发跑的 wayfinder 会话互相覆盖。唯一例外是 `--batch` 的发布步骤（见第 12 条）：只新建票，不改已有的票，并且要用户先确认。
 8. **机械扫描用脚本，判断用模型。**
    - 本地 markdown 跟踪器用 `find-next/scripts/scan.py`（只用 Python 标准库，输出 JSON），GitHub 复用 `scripts/pipeline-status.sh`，两套识别规则不分叉。对应关系：`needsTickets` → to-tickets，`missing` → to-spec，`exploring` → Decision ticket（具体哪张再用 `gh` 查），`implement` 不用。
    - 两种跟踪器判断「该 to-spec」的口径不同。本地是地图的 Map frontier 已空，或只剩 Closing ticket；GitHub 是地图下的 Map ticket 还没被任何 Spec 覆盖。
 9. **判断部分默认交给 codex worker（`--worker codex`），带 `--read-only`。** 要读多张地图 Notes 和票正文，体量大但判断稀疏。worker 出错按全局 CLAUDE.md 的处理表，不自动降级为 `self`。
 10. **默认模式不推荐「执行票已拆、可以开工」这一阶段**（`/implement-spec-split` 自己的第 0 步和 `--status` 已经覆盖），也不跨仓库汇总。
 11. **允许模型自动触发**（不设 `disable-model-invocation`）：它只读，误触发的代价只是一次扫描。
+12. **`--batch` 批量模式（2026-11-11 加）：批量起草规格和执行票，用户确认一轮后发布。**
+    - 起因：缺规格的票一多（ssh-manager-mcp 一次 9 张），逐张走「to-spec → 确认 → to-tickets → 确认 → clear」要几十次操作，每轮我还要重读同一张地图的材料。
+    - 不改、不调用上游 `to-spec` / `to-tickets`：它们是插件技能，改了升级会被覆盖，而且不能由模型调用。起草 worker 直接读它们最新的 `SKILL.md`，照模板和规则写，所以上游更新会自动跟上。
+    - 一个 worker 同时写一份规格和它的执行票：拆票主要依赖规格内容，分两轮确认要多问用户一次；用户大改某份规格时只重写那一份。
+    - 分组在我：哪些实现票合成一份规格、跨规格的阻塞，都要看全批才判断得了，这是逐张走 to-spec 时做不到的。
+    - 每条实现决定必须注明出处（决策票结论、地图 Notes、实现票正文），找不到出处的写进 `unresolved`，那份不发布。防止 worker 把推断写成决定。
+    - 发布是对外写操作，由我在用户确认后用 `publish-batch.sh --apply` 执行，默认试运行。发布记录 `published.json` 让中途失败可以直接重跑、不重复建票。
+    - 只支持 GitHub 跟踪器：本地 markdown 跟踪器的规格写进 `SPEC.md` 章节，形态不同，需求出现再做。
+    - 不自动开 `/implement-spec-split` 会话（2026-11-11 用户定，先不做）：只输出开工顺序表，同时做的规格不超过 2 份，因为几个会话共用 GLM 额度。
 
 ## 同步上游
 
@@ -106,6 +115,7 @@
 
 ## 自测
 
+- **批量发布**：`bash find-next/scripts/test-publish-batch.sh`。用假 `gh` 测校验、试运行、发布顺序、占位符回填、`--only` 与中途失败后重跑，不访问网络。
 - **流水线状态**：`bash scripts/test-pipeline-status.sh`。它用假 `gh` 和临时 git 仓库测独立规格、单票规格、原版父规格、旧父 issue 形状、缺规格分组、探索中的地图、分支接手、外部阻塞和 gh 失败，不访问网络。
 - **codex 后端**：`scripts/selftest-codex.sh [--only L1|V1|V2|V3]`。各级的内容见脚本开头的注释和 `docs/codex-backend.md` 第三节：
   - V1：假 codex，确定性，不花 GLM；

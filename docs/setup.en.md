@@ -138,7 +138,7 @@ Maps and tickets marked shelved (搁置) are skipped. The implementation stage i
 ln -s ~/.claude/skills/implement-spec-split/find-next ~/.claude/skills/find-next
 ```
 
-**Use**: `/find-next [--worker codex|pi|self]`, or just ask "what's next". For the whole picture use `/find-next --list` (or ask "what is left"): it lists every to-do (in progress, needs tickets, needs a spec, open decisions, unfinished bookkeeping, loose issues) without a worker.
+**Use**: `/find-next [--worker codex|pi|self]`, or just ask "what's next". For the whole picture use `/find-next --list` (or ask "what is left"): it lists every to-do (in progress, needs tickets, needs a spec, open decisions, unfinished bookkeeping, loose issues) without a worker. To write every missing spec at once use `/find-next --batch`: codex workers draft a spec plus its tickets per group, you confirm once, then they are published and you get a start order for `/implement-spec-split`.
 
 - Default `codex`: a script does the mechanical scan (`find-next/scripts/scan.py` for local markdown trackers, `scripts/pipeline-status.sh` for GitHub), and a read-only codex worker does the judgment; the session reads only its conclusion of at most 15 lines. Needs Stage 2.
 - `self`: the session judges on its own, no codex needed.

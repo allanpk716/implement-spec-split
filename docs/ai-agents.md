@@ -65,7 +65,7 @@ This reports state, recent commands and edits, time since the last progress even
 
 ## Find the next step (`find-next`)
 
-`find-next/` is a separate, read-only skill in this repo. Install it with `ln -s <clone>/find-next ~/.claude/skills/find-next`. When the user asks what to do next with their wayfinder maps, follow `find-next/SKILL.md`: run the scanner, judge (by default on a `--read-only` codex worker), and return one next step with the command. When the user wants the whole picture ("what is left", "give me a to-do list"), use `--list`: run `scripts/pipeline-status.sh --all` yourself and print the grouped list, no worker. Never edit, claim or label tickets while doing so. `/to-spec` and `/to-tickets` cannot be invoked by the model; tell the user to type them.
+`find-next/` is a separate, read-only skill in this repo. Install it with `ln -s <clone>/find-next ~/.claude/skills/find-next`. When the user asks what to do next with their wayfinder maps, follow `find-next/SKILL.md`: run the scanner, judge (by default on a `--read-only` codex worker), and return one next step with the command. When the user wants the whole picture ("what is left", "give me a to-do list"), use `--list`: run `scripts/pipeline-status.sh --all` yourself and print the grouped list, no worker. Never edit, claim or label tickets while doing so. When the user wants all missing specs written at once, use `--batch`: group the tickets, draft each group on a `--read-only` codex worker with `find-next/templates/brief-spec-batch.md`, review, ask the user once, and only after their confirmation publish with `find-next/scripts/publish-batch.sh --apply`. `/to-spec` and `/to-tickets` cannot be invoked by the model; tell the user to type them.
 
 ## Agent operating rules
 
