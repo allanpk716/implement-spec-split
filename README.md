@@ -45,7 +45,7 @@ AI agents installing or operating the skill should read [docs/ai-agents.md](docs
 
 ## Companion skill: `find-next`
 
-`find-next/` is a second skill in this repo. It scans the current repo's wayfinder maps and tickets and recommends **one** next step with the command to type: `/to-tickets` for a Spec with no tickets yet, `/to-spec` for a map whose decisions are all made, or `/wayfinder <map> <ticket>` for the Decision ticket that unblocks the most. Read-only; the judgment runs on a read-only codex worker by default (`/find-next [--worker codex|pi|self]`). Local markdown trackers are scanned by `find-next/scripts/scan.py`, GitHub by `scripts/pipeline-status.sh`.
+`find-next/` is a second skill in this repo. It scans the current repo's wayfinder maps and tickets and recommends **one** next step with the command to type: `/to-tickets` for a Spec with no tickets yet, `/to-spec` for a map whose decisions are all made, or `/wayfinder <map> <ticket>` for the Decision ticket that unblocks the most. Read-only; the judgment runs on a read-only codex worker by default (`/find-next [--worker codex|pi|self]`). `/find-next --list` instead prints the full to-do list (in progress, needs tickets, needs a spec, open decisions, unfinished bookkeeping, loose issues) from `pipeline-status.sh --all`, without a worker. Local markdown trackers are scanned by `find-next/scripts/scan.py`, GitHub by `scripts/pipeline-status.sh`.
 
 Install it next to the main skill:
 

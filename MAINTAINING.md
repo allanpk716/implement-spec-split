@@ -74,6 +74,9 @@
 `find-next/` 是放在本仓库里的另一个技能：扫描当前仓库的 wayfinder 地图与票，只给出一个 Next step（GLOSSARY.md）。起因：在手机上用 wayfinder 讨论出一大堆票后，不知道下一步该对哪张做 to-spec / to-tickets / grilling。原版技能都要人自己去找。
 
 1. **只给一个 Next step 和要敲的命令，外加最多 3 行备选。** 输出要适合在手机上读；没有候选时，说出最接近的一个和它还差什么。
+   - **例外：`--list` 清单模式（2026-11-11 加）。** 起因：一个项目讨论了好几张地图、做了不少之后，用户想看「还剩什么」的全貌，单个 Next step 回答不了。清单主体来自 `pipeline-status.sh --all` 的机械输出，模型只补「疑似重复」「等 #N」这类轻量标注，所以不派 worker。清单末尾仍给出一个 Next step，口径与默认模式一致。
+   - `--all` 比默认输出多三块：探索中地图的决策票、「状态没收尾」（规格已关闭但执行票还开着；实现票只被已关闭的规格覆盖）、「散票」（不属于任何地图或规格的 open issue）。不加 `--all` 时输出不变，`implement-spec-split --status` 不受影响。
+   - 自由格式的 backlog 文档不机械解析：格式不统一，误判代价大于收益。清单只提醒用户把仍有效的条目迁成 issue。
 2. **一个技能覆盖所有阶段，不拆成 find-to-spec、find-issue-grill 等多个。** 拆开的话，同样的地图要扫好几遍，用户还得记住该先敲哪个命令，又回到了「人去找」。
 3. **阶段优先级：越靠近交付越靠前。** to-tickets > to-spec（完全就绪的排在部分就绪之前）> Map frontier 里的 Decision ticket（按下游解锁数排，数量相同时编号小的优先）。理由：已经花过讨论成本、却还没变成执行票的东西最该先收口。
 4. **候选单位是地图或 Spec，不是单张决策票。** 单张 Decision ticket 本身做不成 spec，spec 是对一片已经拍板的决策做综合。
@@ -84,7 +87,7 @@
    - 本地 markdown 跟踪器用 `find-next/scripts/scan.py`（只用 Python 标准库，输出 JSON），GitHub 复用 `scripts/pipeline-status.sh`，两套识别规则不分叉。对应关系：`needsTickets` → to-tickets，`missing` → to-spec，`exploring` → Decision ticket（具体哪张再用 `gh` 查），`implement` 不用。
    - 两种跟踪器判断「该 to-spec」的口径不同。本地是地图的 Map frontier 已空，或只剩 Closing ticket；GitHub 是地图下的 Map ticket 还没被任何 Spec 覆盖。
 9. **判断部分默认交给 codex worker（`--worker codex`），带 `--read-only`。** 要读多张地图 Notes 和票正文，体量大但判断稀疏。worker 出错按全局 CLAUDE.md 的处理表，不自动降级为 `self`。
-10. **不扫「执行票已拆、可以开工」这一阶段**（`/implement-spec-split` 自己的第 0 步和 `--status` 已经覆盖），也不跨仓库汇总。
+10. **默认模式不推荐「执行票已拆、可以开工」这一阶段**（`/implement-spec-split` 自己的第 0 步和 `--status` 已经覆盖），也不跨仓库汇总。
 11. **允许模型自动触发**（不设 `disable-model-invocation`）：它只读，误触发的代价只是一次扫描。
 
 ## 同步上游

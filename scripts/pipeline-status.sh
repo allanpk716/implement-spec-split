@@ -5,13 +5,15 @@ set -u
 
 usage() {
   cat <<'EOF'
-Usage: pipeline-status.sh [--repo <owner/name>] [-h|--help]
+Usage: pipeline-status.sh [--repo <owner/name>] [--all] [-h|--help]
 
 Scan GitHub issues and local git branches, then list unfinished pipeline work by
 stage. Without --repo, the repository is detected with `gh repo view`.
 
 Only GitHub is supported. For other issue trackers, follow that repository's
 tracker documentation instead.
+
+  --all                  Also list exploring decisions, ticket-hygiene candidates, and loose issues.
 EOF
 }
 
@@ -21,12 +23,17 @@ die() {
 }
 
 REPO=
+ALL=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --repo)
       [ $# -ge 2 ] || die "--repo requires <owner/name>"
       REPO=$2
       shift 2
+      ;;
+    --all)
+      ALL=1
+      shift
       ;;
     -h|--help)
       usage
@@ -122,7 +129,7 @@ function unfinishedChildren(issue) {
 function bodyReferences(issue) {
   const refs = new Set();
   const body = String(issue.body || '');
-  const pattern = /(?:实现票(?:\s*(?:为|是))?|Implementation\s+tickets?)\s*[:：]?\s*#[0-9]+(?:\s*(?:[,，、和]|and)\s*#[0-9]+)*/gi;
+  const pattern = /(?:实现票\s*(?:[:：]|为|是)|Implementation\s+tickets?\s*[:：])\s*#[0-9]+(?:\s*(?:[,，、和]|and)\s*#[0-9]+)*/gi;
   const numberPattern = /#([0-9]+)/g;
   for (const line of body.split(/\r?\n/)) {
     let match;
@@ -175,6 +182,7 @@ if (mode === 'map-requests') {
 if (mode === 'plan') {
   const issues = readJson(args[0]).filter((issue) => !issue.pull_request);
   const endpointDir = args[1];
+  const all = args[2] === '1';
   const byNumber = new Map(issues.map((issue) => [Number(issue.number), issue]));
   const mapIssues = issues.filter(isMap).sort((a, b) => a.number - b.number);
   const maps = [];
@@ -213,6 +221,7 @@ if (mode === 'plan') {
     refs: bodyReferences(issue),
     ownChildren: Number(summary(issue).total || 0) > 0,
     ownChildCount: Number(summary(issue).total || 0),
+    ownChildCompleted: Number(summary(issue).completed || 0),
   })).sort((a, b) => a.number - b.number);
   const coveredRefs = uniqueNumbers(allProblemSpecs.flatMap((spec) => spec.refs));
   const problemSpecs = allProblemSpecs.filter((spec) => isOpen(spec));
@@ -247,13 +256,21 @@ if (mode === 'plan') {
   for (const oldSpec of oldCandidates) request(oldSpec.number);
   requests.sort((a, b) => a - b);
 
+  const closedSpecs = all ? allProblemSpecs.filter((spec) => (
+    !isOpen(spec) && spec.ownChildren &&
+    spec.ownChildCompleted < spec.ownChildCount
+  )) : [];
+
   const output = {
     maps,
     implementations: implementationValues.sort((a, b) => a.number - b.number),
     specs: problemSpecs,
+    allProblemSpecs: all ? allProblemSpecs : [],
     coveredRefs,
     oldCandidates,
     subRequests: requests,
+    closedSpecs,
+    closedSpecRequests: closedSpecs.map((spec) => spec.number),
   };
   process.stdout.write(JSON.stringify(output, null, 2));
   process.exit(0);
@@ -263,6 +280,7 @@ if (mode === 'collect') {
   const issues = readJson(args[0]).filter((issue) => !issue.pull_request);
   const stage = readJson(args[1]);
   const endpointDir = args[2];
+  const all = args[3] === '1';
   const byNumber = new Map(issues.map((issue) => [Number(issue.number), issue]));
   const implementations = new Map(stage.implementations.map((impl) => [Number(impl.number), impl]));
 
@@ -354,6 +372,124 @@ if (mode === 'collect') {
   }
   missing.sort((a, b) => a.number - b.number);
 
+  const exploring = stage.maps
+    .filter((map) => map.openDecisionCount > 0)
+    .map((map) => {
+      const record = {
+        number: map.number,
+        title: map.title,
+        openDecisionCount: map.openDecisionCount,
+      };
+      if (all) {
+        record.decisions = readEndpoint(endpointDir, 'map', map.number)
+          .filter((decision) => isOpen(decision) && hasWayfinderLabel(decision))
+          .map((decision) => {
+            const dependencies = decision.issue_dependencies_summary || {};
+            const assignees = Array.isArray(decision.assignees) ? decision.assignees : [];
+            return {
+              number: Number(decision.number),
+              title: decision.title || '',
+              label: issueLabels(decision).find((label) => label.startsWith('wayfinder:')) || '',
+              blockedBy: Number(dependencies.blocked_by || 0),
+              assignees: assignees.map((assignee) => (
+                typeof assignee === 'string' ? assignee : assignee.login
+              )).filter(Boolean),
+            };
+          })
+          .sort((a, b) => a.number - b.number);
+      }
+      return record;
+    })
+    .sort((a, b) => a.number - b.number);
+
+  const hygiene = [];
+  if (all) {
+    for (const spec of stage.closedSpecs || []) {
+      const tickets = readEndpoint(endpointDir, 'sub', spec.number)
+        .filter((ticket) => isOpen(ticket))
+        .map((ticket) => ({
+          number: Number(ticket.number),
+          state: ticket.state,
+          title: ticket.title || '',
+        }))
+        .sort((a, b) => a.number - b.number);
+      if (tickets.length > 0) {
+        hygiene.push({
+          kind: 'closed-spec',
+          number: spec.number,
+          title: spec.title,
+          tickets,
+        });
+      }
+    }
+
+    const openReferences = new Set(stage.specs.flatMap((spec) => spec.refs));
+    const closedReferences = new Map();
+    for (const spec of stage.allProblemSpecs) {
+      if (isOpen(spec)) continue;
+      for (const ref of spec.refs) {
+        const number = Number(ref);
+        if (!closedReferences.has(number)) closedReferences.set(number, []);
+        closedReferences.get(number).push(spec.number);
+      }
+    }
+    for (const impl of implementations.values()) {
+      const specNumbers = uniqueNumbers(closedReferences.get(Number(impl.number)) || []);
+      if (
+        impl.childTotal === 0 &&
+        specNumbers.length > 0 &&
+        !openReferences.has(Number(impl.number))
+      ) {
+        hygiene.push({
+          kind: 'implementation',
+          number: impl.number,
+          title: impl.title,
+          specNumbers,
+        });
+      }
+    }
+  }
+
+  const loose = [];
+  if (all) {
+    const knownChildren = new Set();
+    const mapChildren = new Set();
+    for (const map of stage.maps) {
+      for (const child of readEndpoint(endpointDir, 'map', map.number)) {
+        knownChildren.add(Number(child.number));
+        mapChildren.add(Number(child.number));
+      }
+    }
+    const endpointNumbers = uniqueNumbers([
+      ...(stage.subRequests || []),
+      ...(stage.closedSpecRequests || []),
+    ]);
+    for (const number of endpointNumbers) {
+      for (const child of readEndpoint(endpointDir, 'sub', number)) {
+        knownChildren.add(Number(child.number));
+      }
+    }
+    for (const oldSpec of stage.oldCandidates || []) {
+      knownChildren.add(Number(oldSpec.number));
+    }
+    for (const issue of issues) {
+      if (
+        isOpen(issue) &&
+        !isMap(issue) &&
+        !mapChildren.has(Number(issue.number)) &&
+        !hasProblemStatement(issue) &&
+        !knownChildren.has(Number(issue.number))
+      ) {
+        loose.push({
+          number: Number(issue.number),
+          title: issue.title || '',
+          labels: issueLabels(issue),
+        });
+      }
+    }
+    loose.sort((a, b) => a.number - b.number);
+  }
+
   const blockerRequests = uniqueNumbers(implement.flatMap((spec) => (
     spec.tickets.filter((ticket) => ticket.state === 'open').map((ticket) => ticket.number)
   )));
@@ -361,15 +497,10 @@ if (mode === 'collect') {
     implement,
     needsTickets,
     missing,
-    exploring: stage.maps
-      .filter((map) => map.openDecisionCount > 0)
-      .map((map) => ({
-        number: map.number,
-        title: map.title,
-        openDecisionCount: map.openDecisionCount,
-      }))
-      .sort((a, b) => a.number - b.number),
+    exploring,
     blockerRequests,
+    hygiene: all ? hygiene : [],
+    loose: all ? loose : [],
   };
   process.stdout.write(JSON.stringify(output, null, 2));
   process.exit(0);
@@ -379,6 +510,7 @@ if (mode === 'render') {
   const issues = readJson(args[0]);
   const pipeline = readJson(args[1]);
   const blockerDir = args[2];
+  const all = args[3] === '1';
   const byNumber = new Map(issues.map((issue) => [Number(issue.number), issue]));
 
   function clean(value) {
@@ -515,6 +647,45 @@ if (mode === 'render') {
   } else {
     for (const map of pipeline.exploring) {
       lines.push(`- #${map.number} ${clean(map.title)}（开着决策票 ${map.openDecisionCount} 张） → wayfinder`);
+      if (all) {
+        for (const decision of map.decisions || []) {
+          let state = '';
+          if (decision.blockedBy > 0) state += '（有未关阻塞）';
+          if (Array.isArray(decision.assignees) && decision.assignees.length > 0) {
+            state += `（已认领：${decision.assignees.join('、')}）`;
+          }
+          lines.push(`  - #${decision.number} [${decision.label}] ${clean(decision.title)}${state}`);
+        }
+      }
+    }
+  }
+
+  if (all) {
+    lines.push('');
+    lines.push('状态没收尾');
+    if ((pipeline.hygiene || []).length === 0) {
+      lines.push('（无）');
+    } else {
+      for (const item of pipeline.hygiene) {
+        if (item.kind === 'closed-spec') {
+          const tickets = item.tickets.map((ticket) => `#${ticket.number}`).join(' ');
+          lines.push(`- 规格 #${item.number} ${clean(item.title)} 已关闭，执行票还开着：${tickets} → 核对后关票`);
+        } else if (item.kind === 'implementation') {
+          const specs = item.specNumbers.map((number) => `#${number}`).join('、');
+          lines.push(`- 实现票 #${item.number} ${clean(item.title)} 的规格 ${specs} 已关闭，票还开着 → 核对后关票`);
+        }
+      }
+    }
+
+    lines.push('');
+    lines.push('散票');
+    if ((pipeline.loose || []).length === 0) {
+      lines.push('（无）');
+    } else {
+      for (const issue of pipeline.loose) {
+        const labels = issue.labels.length > 0 ? ` [${issue.labels.join(',')}]` : '';
+        lines.push(`- #${issue.number}${labels} ${clean(issue.title)}`);
+      }
     }
   }
 
@@ -539,7 +710,7 @@ for number in $MAP_REQUESTS; do
   fi
 done
 
-if ! pipeline_node plan "$ISSUES_FILE" "$WORK/endpoints" > "$STAGE_FILE"; then
+if ! pipeline_node plan "$ISSUES_FILE" "$WORK/endpoints" "$ALL" > "$STAGE_FILE"; then
   die "could not analyze the first issue-graph stage"
 fi
 
@@ -553,7 +724,19 @@ for number in $SUB_REQUESTS; do
   fi
 done
 
-if ! pipeline_node collect "$ISSUES_FILE" "$STAGE_FILE" "$WORK/endpoints" > "$PIPELINE_FILE"; then
+CLOSED_SPEC_REQUESTS=$(node -e '
+  const value = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  process.stdout.write(value.closedSpecRequests.join("\n"));
+' "$STAGE_FILE") || die "could not determine closed-spec sub-issue requests"
+if [ "$ALL" -eq 1 ]; then
+  for number in $CLOSED_SPEC_REQUESTS; do
+    if ! gh_api --paginate "repos/$REPO/issues/$number/sub_issues" > "$WORK/endpoints/sub-$number.json"; then
+      die "gh api failed while loading closed-spec sub-issues for issue #$number"
+    fi
+  done
+fi
+
+if ! pipeline_node collect "$ISSUES_FILE" "$STAGE_FILE" "$WORK/endpoints" "$ALL" > "$PIPELINE_FILE"; then
   die "could not analyze specs and tickets"
 fi
 
@@ -567,6 +750,6 @@ for number in $BLOCKER_REQUESTS; do
   fi
 done
 
-if ! pipeline_node render "$ISSUES_FILE" "$PIPELINE_FILE" "$WORK/blockers"; then
+if ! pipeline_node render "$ISSUES_FILE" "$PIPELINE_FILE" "$WORK/blockers" "$ALL"; then
   die "could not render pipeline status"
 fi

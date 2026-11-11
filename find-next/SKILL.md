@@ -1,6 +1,6 @@
 ---
 name: find-next
-description: 扫描当前仓库的 wayfinder 地图与票，只挑出一个下一步（该 /to-tickets、该 /to-spec、还是该 grilling/research 哪张票）并给出要敲的命令。用户问"下一步做什么""该推哪张票""哪个该 to-spec / to-tickets / grill 了"，或输入 /find-next 时使用。参数 --worker codex|pi|self。
+description: 扫描当前仓库的 wayfinder 地图与票，只挑出一个下一步（该 /to-tickets、该 /to-spec、还是该 grilling/research 哪张票）并给出要敲的命令；加 --list 时改为列出全部待办清单。用户问"下一步做什么""该推哪张票""哪个该 to-spec / to-tickets / grill 了""还有什么没做完""给我待办清单"，或输入 /find-next 时使用。参数 --list、--worker codex|pi|self。
 ---
 
 # find-next
@@ -11,6 +11,7 @@ description: 扫描当前仓库的 wayfinder 地图与票，只挑出一个下�
 
 - `/find-next`：等同于 `--worker codex`
 - `/find-next --worker codex|pi|self`：判断部分交给谁做（见「流程」）
+- `/find-next --list`：不挑一个，列出当前仓库的全部待办清单（见「清单模式」）。总是我自己做，不派 worker，`--worker` 被忽略
 
 只扫当前仓库，不跨仓库汇总。
 
@@ -25,7 +26,7 @@ description: 扫描当前仓库的 wayfinder 地图与票，只挑出一个下�
    地图 Destination 写了「可直接 `/to-tickets`」，算佐证信号。→ `/to-tickets <spec 票或 SPEC 章名>`
 2. **该 to-spec**：→ `/to-spec`
    - 本地跟踪器：地图的 Destination 是 spec 或某个章节，Map frontier 已空（子票全部 closed，或只剩 Closing ticket 而且它的阻塞都已关闭），并且还没有产出（`SPEC.md` 没有这一章，也没有 spec 票指回这张地图）
-   - GitHub：地图下有还没被任何 Spec 覆盖的 Map ticket（`pipeline-status.sh` 的 `missing` 段）。开着或已关闭的 Spec 都算覆盖，但脚本只认 Spec 正文里的 `实现票：#N` 行；判断时先用 `gh issue list --state all --search "#N in:title"` 查一下，有没有标题带 `(#N)` 却漏写这一行的 Spec，有就不是候选，并在输出里提醒用户补这一行、关掉这张实现票
+   - GitHub：地图下有还没被任何 Spec 覆盖的 Map ticket（`pipeline-status.sh` 的 `missing` 段）。开着或已关闭的 Spec 都算覆盖，但脚本只认 Spec 正文里的 `实现票：#N` 行（分隔符必须是冒号或「为」「是」，正文叙述里的「（实现票 #N）」不算）；判断时先用 `gh issue list --state all --search "#N in:title"` 查一下，有没有标题带 `(#N)` 却漏写这一行的 Spec，有就不是候选，并在输出里提醒用户补这一行、关掉这张实现票
    - 部分就绪：前沿没清空，但已关闭的决策足以撑起一个可独立交付的竖切。排在完全就绪之后，并标注「还剩 X、Y 没关」
 3. **Map frontier 里的 Decision ticket**：open、阻塞全部已关闭、无 Assignee。按解锁的下游票数排序，数量相同时编号小的优先。
    - 在地图里的票 → `/wayfinder <地图> <票名>`（wayfinder 会认领、写 Resolution、关票、更新地图）
@@ -34,7 +35,7 @@ description: 扫描当前仓库的 wayfinder 地图与票，只挑出一个下�
 
 跳过：Notes、标题或状态行里标了「搁置」的地图和票。
 
-**不做**：不扫「执行票已拆、可以开工」这一阶段（`/implement-spec-split`）；不跨仓库汇总。
+**不做**：默认模式不推荐「执行票已拆、可以开工」这一阶段（`/implement-spec-split`），`--list` 会列出但不作为 Next step；不跨仓库汇总。
 
 ## 流程
 
@@ -60,6 +61,36 @@ description: 扫描当前仓库的 wayfinder 地图与票，只挑出一个下�
      `pi` 用同目录的 `pi-worker.sh`。结束后只读 `status.json`、`result.md`（worker 的最终回复，≤15 行结论），结论是 to-spec 或 to-tickets 时再读 `digest.md`。
    - worker 出错时按全局 CLAUDE.md 的处理表：`auth` / `quota` / `transient` → 告诉用户，问他们是等一会儿、换 `pi`，还是 `--worker self`，**不自动降级**；`stalled` / `error` → 把失败原因补进 Brief，换新运行目录重跑一次；`violation` → 报告作废，把 `changed_paths` 交给用户。
 4. **交接**：结论是 to-spec 或 to-tickets 时，那两个技能只能综合当前对话，所以要先把材料放进上下文。`self` 模式读地图和已关闭票的 Resolution；worker 模式读 `digest.md`。然后用几句话讲清要点，提示用户敲命令。结论是决策票时，只报票名和命令。
+
+## 清单模式（`--list`）
+
+用户要「全貌」而不是「下一步」时用。对跟踪器同样只读。
+
+1. **机械扫描**：
+   - GitHub：`~/.claude/skills/implement-spec-split/scripts/pipeline-status.sh --all`。比默认输出多三块：「地图仍在探索」下列出每张地图开着的决策票；「状态没收尾」（规格已关闭但执行票还开着、实现票只被已关闭的规格覆盖）；「散票」（不属于任何地图或规格的 open issue，带标签）。
+   - 本地 markdown 跟踪器：`scan.py` 的 JSON 已含全部票，按下面的分组自己归类。
+2. **轻量判断**（我自己做，只看标题和标签，必要时 `gh issue view` 一两张）：
+   - 散票里标题相近、描述同一现象的，标「疑似重复」。
+   - 「缺规格」里明显依赖别的票的（比如 Web UI 票依赖还在实现的后端规格、整体验收册票依赖所有功能），注明「等 #N」。
+   - 不逐张读正文，不派 worker；脚本输出就是清单主体。
+3. **输出**，按分组列出，空的组写「（无）」：
+
+```
+待办清单 · <仓库名> · <日期>
+
+A. 正在实现 / 可以实现
+- #212 规格名 0/9 已接手（分支 spec-212） → /implement-spec-split 212
+B. 有规格、未拆票 → /to-tickets
+C. 缺规格 → /to-spec（按地图分组）
+D. 待讨论的决策票 → /wayfinder <地图> <票>
+E. 状态没收尾（核对后关票，由用户确认）
+F. 散票（bug / needs-triage 等，含疑似重复标注）
+
+建议先做：<一两句，按「阶段与优先级」挑出的那一个>
+```
+
+   称呼票时写「#编号 标题」。清单最后给出单个 Next step 的结论，口径与默认模式一致。
+4. 仓库里另有自由格式的 backlog 文档（如 `docs/backlog.md`）时，不机械解析，只在末尾提醒一句「另有 backlog 文档未纳入，建议把仍有效的条目迁成 issue」。
 
 ## 输出（适合手机阅读）
 

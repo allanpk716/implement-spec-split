@@ -60,6 +60,22 @@ expect_without() {
   fi
 }
 
+expect_section_without() {
+  heading=$1
+  text=$2
+  name=$3
+  file=$4
+  if LC_ALL=C awk -v heading="$heading" '
+    $0 == heading { in_section = 1; next }
+    in_section && NF == 0 { exit }
+    in_section { print }
+  ' "$file" | grep -Fq -- "$text"; then
+    record FAIL "$name" "unexpected in [$heading]: [$text]"
+  else
+    record PASS "$name"
+  fi
+}
+
 mkdir -p "$FIXTURE" "$BIN" "$REPO" "$NOT_REPO" || exit 1
 
 FIXTURE=$FIXTURE node > /dev/null <<'NODE'
@@ -70,8 +86,8 @@ function sub(total, completed = total) {
   return {total, completed, percent_completed: total ? Math.round(100 * completed / total) : 0};
 }
 
-function issue(number, title, state, labels, body, children = sub(0)) {
-  return {
+function issue(number, title, state, labels, body, children = sub(0), extras = {}) {
+  return Object.assign({
     number,
     title,
     state,
@@ -79,7 +95,8 @@ function issue(number, title, state, labels, body, children = sub(0)) {
     body,
     sub_issues_summary: children,
     issue_dependencies_summary: {blocked_by: 0, total_blocked_by: 0, blocking: 0, total_blocking: 0},
-  };
+    assignees: [],
+  }, extras);
 }
 
 const issues = [
@@ -112,14 +129,22 @@ const issues = [
   issue(93, 'Spec without tickets', 'open', [], '## Problem Statement\nNot split yet.'),
   issue(94, 'Closed single-ticket spec', 'closed', [], '## Problem Statement\n背景提到地图票：#67。\n同线范围外：#69。决策来源：#100。实现票：#66，父地图为 #31。', sub(1, 1)),
   issue(95, 'Spec using connector', 'open', [], '## Problem Statement\n实现票为 #68。'),
+  issue(96, 'Implementation narrated without separator', 'open', ['ready-for-agent'], ''),
+  issue(97, 'Spec narrating implementation ticket', 'open', [], '## Problem Statement\n这个规格只是叙述（实现票 #96 还没拆）。'),
+  issue(99, 'Closed spec with unfinished children', 'closed', [], '## Problem Statement\nClosed but execution continues.', sub(2, 1)),
   issue(100, 'External blocker one', 'open', [], ''),
   issue(101, 'External blocker two', 'open', [], ''),
   issue(102, 'Closed external blocker', 'closed', [], ''),
+  issue(121, 'Loose bug issue', 'open', ['bug'], ''),
+  issue(122, 'Loose unlabeled issue', 'open', [], ''),
 ];
 
 const responses = {
   'sub-21': [
-    issue(24, 'Open grilling decision', 'open', ['wayfinder:grilling'], ''),
+    issue(24, 'Open grilling decision', 'open', ['wayfinder:grilling'], '', sub(0), {
+      issue_dependencies_summary: {blocked_by: 1, total_blocked_by: 1, blocking: 0, total_blocking: 0},
+      assignees: [{login: 'allan'}],
+    }),
   ],
   'sub-22': [
     issue(23, 'Open research decision', 'open', ['wayfinder:research'], ''),
@@ -134,6 +159,7 @@ const responses = {
     issue(67, 'Implementation mentioned outside spec ticket line', 'open', ['ready-for-agent'], ''),
     issue(68, 'Implementation referenced with connector', 'open', ['ready-for-agent'], ''),
     issue(69, 'Implementation mentioned before spec ticket phrase', 'open', ['ready-for-agent'], ''),
+    issue(96, 'Implementation narrated without separator', 'open', ['ready-for-agent'], ''),
   ],
   'sub-56': [
     issue(90, 'Client ticket one', 'open', [], ''),
@@ -148,6 +174,10 @@ const responses = {
     issue(81, 'Own child one', 'open', [], ''),
     issue(82, 'Own child two', 'closed', [], ''),
     issue(83, 'Own child three', 'open', [], ''),
+  ],
+  'sub-99': [
+    issue(100, 'External blocker one', 'open', [], ''),
+    issue(102, 'Closed external blocker', 'closed', [], ''),
   ],
   'blocker-58': [
     issue(100, 'External blocker one', 'open', [], ''),
@@ -225,10 +255,11 @@ git -C "$REPO" branch spec-80-old
 run_status() {
   cwd=$1
   output=$2
+  shift 2
   (
     cd "$cwd" || exit 125
     env FIXTURE_DIR="$FIXTURE" PATH="$BIN:$PATH" \
-      bash "$SCRIPT" --repo test/repo
+      bash "$SCRIPT" --repo test/repo "$@"
   ) > "$output" 2> "${output}.err"
   RUN_EXIT=$?
 }
@@ -254,10 +285,29 @@ expect_has '#21 Exploration map' 'map with open decisions needs wayfinder' "$WOR
 expect_without '#66 Implementation covered by closed spec → to-spec' 'closed spec coverage removes implementation from missing specs' "$WORK/main.out"
 expect_has '#67 Implementation mentioned outside spec ticket line → to-spec' 'incidental map reference does not cover implementation' "$WORK/main.out"
 expect_has '#69 Implementation mentioned before spec ticket phrase → to-spec' 'earlier reference on implementation line does not cover implementation' "$WORK/main.out"
+expect_has '#96 Implementation narrated without separator → to-spec' 'implementation separator is required' "$WORK/main.out"
 expect_without '#68 Implementation referenced with connector → to-spec' 'implementation ticket connector is recognized' "$WORK/main.out"
 expect_has '#95 0/1' 'spec with connector reference is implementable' "$WORK/main.out"
 expect_without '- #94 0/1 ' 'closed spec is not listed as implementable' "$WORK/main.out"
 expect_without '#94 Closed single-ticket spec → to-tickets' 'closed spec is not listed as needing tickets' "$WORK/main.out"
+
+expect_without '状态没收尾' 'default output omits hygiene section' "$WORK/main.out"
+expect_without '散票' 'default output omits loose-issue section' "$WORK/main.out"
+expect_without '  - #24 [wayfinder:grilling]' 'default output omits decision tickets' "$WORK/main.out"
+
+run_status "$REPO" "$WORK/all.out" --all
+expect_exit 0 "all fixture scan succeeds"
+expect_has '- 规格 #99 Closed spec with unfinished children 已关闭，执行票还开着：#100 → 核对后关票' 'closed spec lists only open execution tickets' "$WORK/all.out"
+expect_without '#102' 'closed execution ticket is not listed as unfinished' "$WORK/all.out"
+expect_has '- 实现票 #66 Implementation covered by closed spec 的规格 #94 已关闭，票还开着 → 核对后关票' 'open implementation covered only by closed spec needs cleanup' "$WORK/all.out"
+expect_has '- #121 [bug] Loose bug issue' 'labeled loose issue is formatted' "$WORK/all.out"
+expect_has '- #122 Loose unlabeled issue' 'unlabeled loose issue is formatted' "$WORK/all.out"
+expect_section_without '散票' '#57 ' 'map child is not loose' "$WORK/all.out"
+expect_section_without '散票' '#81 ' 'spec child is not loose' "$WORK/all.out"
+expect_section_without '散票' '#80 ' 'spec itself is not loose' "$WORK/all.out"
+expect_section_without '散票' '#70 ' 'legacy parent is not loose' "$WORK/all.out"
+expect_section_without '散票' '#71 ' 'legacy child is not loose' "$WORK/all.out"
+expect_has '  - #24 [wayfinder:grilling] Open grilling decision（有未关阻塞）（已认领：allan）' 'decision ticket state is rendered' "$WORK/all.out"
 
 run_status "$NOT_REPO" "$WORK/not-repo.out"
 expect_exit 0 "outside a git repository still scans issues"

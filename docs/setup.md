@@ -137,7 +137,7 @@ spec 是一个 GitHub 父 issue，它的子 issue 就是 ticket，ticket 之间�
 ln -s ~/.claude/skills/implement-spec-split/find-next ~/.claude/skills/find-next
 ```
 
-**用法**：`/find-next [--worker codex|pi|self]`，也可以直接问「下一步做什么」。
+**用法**：`/find-next [--worker codex|pi|self]`，也可以直接问「下一步做什么」。想看全貌时用 `/find-next --list`，或者直接问「还有什么没做完」：列出全部待办（正在实现、未拆票、缺规格、待讨论的决策票、状态没收尾、散票），不派 worker。
 
 - 默认 `codex`：机械扫描交给脚本（本地 markdown 跟踪器用 `find-next/scripts/scan.py`，GitHub 用 `scripts/pipeline-status.sh`），判断交给一个只读的 codex worker，会话里只读它不超过 15 行的结论。需要先完成阶段 2。
 - `self`：会话自己判断，不依赖 codex。
