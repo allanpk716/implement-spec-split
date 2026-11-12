@@ -103,6 +103,23 @@ if (scenario === "ok") {
   const child = require("child_process").spawn(process.execPath, ["-e", "setTimeout(()=>{},300000)"], {detached: false, stdio: "ignore"});
   if (marker) fs.writeFileSync(marker, String(child.pid));
   setInterval(() => {}, 1000);
+} else if (scenario === "slot-hold") {
+  rollout();
+  emit([thread, warning]);
+  const marker = process.env.FAKE_CODEX_SLOT_MARKER || "";
+  const ready = process.env.FAKE_CODEX_SLOT_READY || "";
+  if (ready) fs.writeFileSync(ready, String(process.pid));
+  let sequence = 10;
+  const timer = setInterval(() => {
+    if (!marker || !fs.existsSync(marker)) {
+      emit([{type: `turn.progress.${sequence++}`}]);
+      return;
+    }
+    clearInterval(timer);
+    emit([...command(4), ...finish()]);
+    fs.writeFileSync(output, "slot done\n");
+    process.exit(0);
+  }, 100);
 } else if (scenario === "stdin-echo") {
   rollout(); emit([thread, warning, {type: "item.completed", item: {id: "item_3", type: "agent_message", text: stdin}}, ...finish(stdin)]);
   fs.writeFileSync(output, stdin);

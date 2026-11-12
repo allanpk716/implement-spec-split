@@ -27,6 +27,7 @@ case "${ONLY:-all}" in L1|V1|V2|V3|all) ;; *) echo "--only must be L1, V1, V2, o
 
 ROOT="$HOME/.cache/implement-spec-split-selftest-codex/$(date +%Y%m%d-%H%M%S)-$$"
 mkdir -p "$ROOT"
+export ISS_STATE_DIR="$ROOT/worker-state"
 FAILS=0
 CLEAN_PIDS=()
 CLEAN_WIN=()

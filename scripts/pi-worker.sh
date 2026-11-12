@@ -5,8 +5,9 @@
 #   pi-worker.sh --cwd <worktree> --brief <file> --run-dir <dir>
 #                [--model glm/glm-5.3] [--time-limit 1800] [--idle-timeout 600]
 #                [--retries 2] [--retry-wait 60] [--thinking <level>] [--skill <dir>]...
+#                [--no-slot]
 #   pi-worker.sh --resume --run-dir <dir> [--time-limit 1800] [--idle-timeout 600]
-#                [--retries 2] [--retry-wait 60]
+#                [--retries 2] [--retry-wait 60] [--no-slot]
 #
 # Terms follow GLOSSARY.md: --time-limit is the per-role Time limit (hard cap on one
 # segment, counted from the segment's start across all of its attempts and retry
@@ -26,7 +27,8 @@
 # and never starts a fresh session.
 #
 # Writes into --run-dir: brief.md, events.jsonl, stderr.log, sessions/, resume.json,
-# attempt-<n>.jsonl, result.md, status.json. Prints status.json on stdout. Exit codes:
+# attempt-<n>.jsonl, result.md, status.json, pid, queued while slot-waiting.
+# Prints status.json on stdout. Exit codes:
 #   0 ok (pi finished without an API error) | 2 auth error | 3 quota exhausted | 4 transient error (retries used up)
 #   5 Time limit reached (Resumable) | 6 other error | 7 stalled (Idle timeout; not Resumable) | 64 bad usage
 #
@@ -45,6 +47,8 @@
 
 set -u
 
+HERE=$(cd "$(dirname "$0")" && pwd)
+
 MODEL="glm/glm-5.3"
 TIME_LIMIT=1800
 IDLE_TIMEOUT=600
@@ -56,6 +60,7 @@ BRIEF=""
 RUN_DIR=""
 SKILLS=()
 RESUME=false
+NO_SLOT=false
 GOT_CWD=false GOT_BRIEF=false GOT_MODEL=false GOT_THINKING=false GOT_SKILL=false
 
 die() { echo "pi-worker: $*" >&2; exit 64; }
@@ -73,6 +78,7 @@ while [ $# -gt 0 ]; do
     --thinking) THINKING="$2"; GOT_THINKING=true; shift 2 ;;
     --skill) SKILLS+=("$2"); GOT_SKILL=true; shift 2 ;;
     --resume) RESUME=true; shift ;;
+    --no-slot) NO_SLOT=true; shift ;;
     *) die "unknown argument: $1" ;;
   esac
 done
@@ -202,6 +208,70 @@ else
   ATTEMPT=0
   write_state
 fi
+
+WORKER_SLOT=""
+QUEUED_SECONDS=0
+
+# progress.sh uses the same pid + process-start identity protocol as codex runs.
+if [ -r "/proc/$$/winpid" ]; then
+  WORKER_WINPID=$(cat "/proc/$$/winpid")
+  WORKER_START_TICKS=$(powershell.exe -NoProfile -Command "(Get-Process -Id $WORKER_WINPID).StartTime.ToUniversalTime().Ticks" 2>/dev/null | tr -d '\r')
+  if [[ "$WORKER_START_TICKS" =~ ^[0-9]+$ ]]; then echo "$WORKER_WINPID $WORKER_START_TICKS" > "$RUN_DIR/pid"
+  else echo "$WORKER_WINPID" > "$RUN_DIR/pid"; fi
+else
+  WORKER_START_ID=$(ps -o lstart= -p "$$" 2>/dev/null | tr -d '[:space:]')
+  if [ -n "$WORKER_START_ID" ]; then echo "$$ $WORKER_START_ID" > "$RUN_DIR/pid"
+  else echo $$ > "$RUN_DIR/pid"; fi
+fi
+
+release_worker_slot() {
+  if [ -n "$WORKER_SLOT" ]; then
+    "$HERE/lock.sh" slot-release glm-workers "$WORKER_SLOT" --owner-pid "$$" >/dev/null 2>&1 || true
+    WORKER_SLOT=""
+  fi
+}
+
+worker_exit() {
+  local rc="$1"
+  trap - EXIT HUP INT TERM
+  release_worker_slot
+  exit "$rc"
+}
+trap 'worker_exit $?' EXIT
+trap 'worker_exit 129' HUP
+trap 'worker_exit 130' INT
+trap 'worker_exit 143' TERM
+
+acquire_worker_slot() {
+  rm -f "$RUN_DIR/queued"
+  if $NO_SLOT || [ "${ISS_WORKER_SLOTS:-1}" = 0 ]; then return 0; fi
+  local max="${ISS_MAX_WORKERS:-4}" output rc queued_at
+  [[ "$max" =~ ^[1-9][0-9]*$ ]] || die "ISS_MAX_WORKERS must be a positive integer"
+  queued_at=$(date +%s)
+  printf '%s\n' "$queued_at" > "$RUN_DIR/queued"
+  echo "=== waiting for worker slot $(date -Iseconds) ===" >> "$STDERR"
+  while :; do
+    output=$("$HERE/lock.sh" slot-acquire glm-workers --max "$max" --wait 0 --owner-pid "$$" 2>>"$STDERR")
+    rc=$?
+    if [ "$rc" -eq 0 ] && [[ "$output" =~ ^[1-9][0-9]*$ ]]; then
+      WORKER_SLOT="$output"
+      break
+    fi
+    if [ "$rc" -ne 2 ]; then
+      QUEUED_SECONDS=$(( $(date +%s) - queued_at ))
+      WORKER_SLOT=""
+      rm -f "$RUN_DIR/queued"
+      echo "worker 槽位不可用（退出码 ${rc}），本次不占槽位继续运行" >> "$STDERR"
+      return 0
+    fi
+    sleep "${ISS_WORKER_SLOT_POLL:-1}"
+  done
+  QUEUED_SECONDS=$(( $(date +%s) - queued_at ))
+  rm -f "$RUN_DIR/queued"
+  echo "拿到 worker 槽位 $WORKER_SLOT" >> "$STDERR"
+}
+
+acquire_worker_slot
 
 ARGS=(-p --mode json --model "$MODEL"
       --session-dir "$(winpath "$RUN_DIR/sessions")" --session-id "$SESSION_ID"
@@ -351,7 +421,8 @@ DIRTY=false
 
 STATUS="$STATUS" ERROR="$ERROR" ATTEMPTS="$SEG_ATTEMPT" SEGMENTS="$SEGMENTS" DURATION="$((END - START))" \
 MODEL="$MODEL" SESSION_ID="$SESSION_ID" BASE_HEAD="$BASE_HEAD" HEAD_NOW="$HEAD_NOW" \
-COMMITS="$COMMITS" DIRTY="$DIRTY" RUN_DIR_W="$(winpath "$RUN_DIR")" CWD_W="$(winpath "$CWD")" \
+COMMITS="$COMMITS" DIRTY="$DIRTY" WORKER_SLOT="${WORKER_SLOT:-}" QUEUED_SECONDS="${QUEUED_SECONDS:-0}" \
+RUN_DIR_W="$(winpath "$RUN_DIR")" CWD_W="$(winpath "$CWD")" \
 node -e '
   const e = process.env;
   const s = {
@@ -360,6 +431,8 @@ node -e '
     model: e.MODEL, session_id: e.SESSION_ID, cwd: e.CWD_W, run_dir: e.RUN_DIR_W,
     base_head: e.BASE_HEAD, head: e.HEAD_NOW, new_commits: +e.COMMITS, dirty: e.DIRTY === "true",
     result_file: e.STATUS === "ok" ? e.RUN_DIR_W + "/result.md" : null,
+    slot: e.WORKER_SLOT ? +e.WORKER_SLOT : null,
+    queued_seconds: +e.QUEUED_SECONDS || 0,
   };
   const out = JSON.stringify(s, null, 2);
   require("fs").writeFileSync(e.RUN_DIR_W + "/status.json", out + "\n");
