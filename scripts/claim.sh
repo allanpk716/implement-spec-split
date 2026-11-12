@@ -12,6 +12,7 @@ usage() {
   cat <<'EOF'
 usage:
   claim.sh take <n> [--base <main branch>]
+  claim.sh reserve <n> [--resume] [--ttl SECONDS]
   claim.sh resume <n> [--force]
   claim.sh status <n>
   claim.sh release <n> [--force]
@@ -30,12 +31,20 @@ shift
 SPEC=""
 BASE_OPTION=""
 FORCE=false
+RESERVE_RESUME=false
+TTL="${ISS_HANDOFF_TTL:-1800}"
+TTL_OPTION=false
 while [ $# -gt 0 ]; do
   case "$1" in
     --base)
       [ -n "${2:-}" ] || die "--base needs a branch name"
       BASE_OPTION="$2"; shift 2 ;;
     --force) FORCE=true; shift ;;
+    --resume)
+      RESERVE_RESUME=true; shift ;;
+    --ttl)
+      [ -n "${2:-}" ] || die "--ttl needs a number of seconds"
+      TTL="$2"; TTL_OPTION=true; shift 2 ;;
     *)
       if [ -z "$SPEC" ]; then
         SPEC="$1"
@@ -46,8 +55,11 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-case "$COMMAND" in take|resume|status|release) ;; *) die "unknown command: $COMMAND" ;; esac
+case "$COMMAND" in take|reserve|resume|status|release) ;; *) die "unknown command: $COMMAND" ;; esac
 [[ "$SPEC" =~ ^[1-9][0-9]*$ ]] || die "spec number must be a positive integer"
+if { $RESERVE_RESUME || $TTL_OPTION; } && [ "$COMMAND" != reserve ]; then
+  die "--resume and --ttl are only valid with reserve"
+fi
 BRANCH="spec-$SPEC"
 
 GIT_COMMON=$(git rev-parse --git-common-dir 2>/dev/null) || die "must run inside a Git repository"
@@ -89,26 +101,36 @@ claim_record_line() {
 }
 
 claim_owner_fields() {
+  claim_record_owner_fields "$CLAIM_FILE"
+}
+
+claim_handoff_mode() {
   CLAIM_FILE_ACT="$(printf '%s' "$CLAIM_FILE")" node -e '
     const fs = require("fs");
-    const clean = v => String(v ?? "").replace(/[\t\n\r]+/g, " ");
     try {
       const c = JSON.parse(fs.readFileSync(process.env.CLAIM_FILE_ACT, "utf8"));
-      process.stdout.write([clean(c.pid), clean(c.pid_start)].join("\t"));
-    } catch { process.stdout.write("\t"); }
+      process.stdout.write(c.handoff === "fresh" || c.handoff === "resume" ? c.handoff : "none");
+    } catch { process.stdout.write("none"); }
   '
 }
 
+claim_active_handoff() {
+  local mode
+  mode=$(claim_handoff_mode)
+  [ "$mode" != none ] && claim_record_alive "$CLAIM_FILE"
+}
+
 claim_print_state() {
-  local record pid pid_start
+  local record
   record=$(claim_record_line)
   if claim_already_claimed; then
-    IFS=$'\t' read -r pid pid_start <<< "$(claim_owner_fields)"
-    if [ -n "$pid" ] && owner_alive "$pid" "${pid_start:-}"; then
+    if claim_record_alive "$CLAIM_FILE"; then
       echo "active $record"
     else
       echo "interrupted $record"
     fi
+  elif claim_active_handoff; then
+    echo "active $record"
   else
     echo free
   fi
@@ -162,6 +184,33 @@ claim_write_record() {
   '
 }
 
+claim_write_handoff_record() {
+  local mode="$1" worktree="$2"
+  CLAIM_DIR_ENV="$(printf '%s' "$CLAIM_DIR")" CLAIM_FILE_ENV="$(printf '%s' "$CLAIM_FILE")" \
+  CLAIM_SPEC="$SPEC" CLAIM_BRANCH="$BRANCH" CLAIM_WORKTREE="$(printf '%s' "$worktree")" \
+  CLAIM_PID="$OWNER_PID" CLAIM_START="$(printf '%s' "$OWNER_PID_START")" \
+  CLAIM_AT="$(owner_iso_now)" CLAIM_NOW_EPOCH="$(owner_epoch_now)" \
+  CLAIM_HANDOFF="$mode" CLAIM_TTL="$TTL" node -e '
+    const fs = require("fs"), path = require("path");
+    const e = process.env;
+    const until = Number(e.CLAIM_NOW_EPOCH) + Number(e.CLAIM_TTL);
+    if (!Number.isSafeInteger(until)) throw new Error("handoff expiry is out of range");
+    const value = JSON.stringify({
+      spec: +e.CLAIM_SPEC, branch: e.CLAIM_BRANCH,
+      worktree: e.CLAIM_WORKTREE === "" ? null : e.CLAIM_WORKTREE,
+      // No holder process: the launcher session may live for hours, and
+      // counting it would keep a failed launch reserved past its expiry.
+      pid: null, pid_start: "",
+      claimed_at: e.CLAIM_AT, handoff: e.CLAIM_HANDOFF,
+      handoff_until_epoch: until
+    });
+    fs.mkdirSync(e.CLAIM_DIR_ENV, {recursive: true});
+    const temporary = path.join(e.CLAIM_DIR_ENV, `spec-${e.CLAIM_SPEC}.json.$$`);
+    fs.writeFileSync(temporary, value + "\n");
+    fs.renameSync(temporary, e.CLAIM_FILE_ENV);
+  '
+}
+
 OWNER_PID=""
 OWNER_PID_START=""
 claim_resolve_owner() {
@@ -195,12 +244,67 @@ claim_acquire_lock() {
   CLAIM_LOCK_HELD=true
 }
 
+claim_record_worktree() {
+  CLAIM_FILE_ACT="$(printf '%s' "$CLAIM_FILE")" node -e '
+    const fs = require("fs");
+    try {
+      const c = JSON.parse(fs.readFileSync(process.env.CLAIM_FILE_ACT, "utf8"));
+      if (typeof c.worktree === "string") process.stdout.write(c.worktree);
+    } catch {}
+  '
+}
+
+claim_usable_worktree() {
+  local candidate="$1"
+  [ -n "$candidate" ] && [ -d "$candidate" ] || return 1
+  git -C "$candidate" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
+  (cd "$candidate" && pwd)
+}
+
+claim_branch_worktree() {
+  git worktree list --porcelain 2>/dev/null | node -e '
+    const fs = require("fs");
+    const wanted = `refs/heads/${process.argv[1]}`;
+    let worktree = null;
+    for (const line of fs.readFileSync(0, "utf8").split(/\r?\n/)) {
+      if (line.startsWith("worktree ")) worktree = line.slice("worktree ".length);
+      if (line === `branch ${wanted}` && worktree) {
+        process.stdout.write(worktree);
+        process.exit(0);
+      }
+      if (line === "") worktree = null;
+    }
+  ' "$BRANCH"
+}
+
+claim_current_worktree_on_branch() {
+  local top branch
+  top=$(git rev-parse --show-toplevel 2>/dev/null) || return 1
+  branch=$(git -C "$top" symbolic-ref --quiet --short HEAD 2>/dev/null) || return 1
+  [ "$branch" = "$BRANCH" ] || return 1
+  CURRENT_WORKTREE=$(cd "$top" && pwd)
+}
+
 case "$COMMAND" in
   take)
     claim_paths || die "could not determine the main worktree"
     BASE="${BASE_OPTION:-$(claim_default_base)}"
     claim_acquire_lock || exit 2
+    HANDOFF_MODE=$(claim_handoff_mode)
+    CURRENT_WORKTREE=""
+    if [ "$HANDOFF_MODE" != none ] && claim_current_worktree_on_branch; then
+      WORKTREE_PATH="$CURRENT_WORKTREE"
+      claim_write_record
+      printf '%s\n' "$WORKTREE_PATH"
+      [ "$HANDOFF_MODE" = resume ] && exit 4
+      exit 0
+    fi
+
     if claim_already_claimed; then
+      claim_print_state
+      exit 3
+    fi
+    if claim_active_handoff; then
       claim_print_state
       exit 3
     fi
@@ -224,17 +328,54 @@ case "$COMMAND" in
     printf '%s\n' "$WORKTREE_PATH"
     ;;
 
+  reserve)
+    [[ "$TTL" =~ ^[1-9][0-9]*$ ]] || die "handoff TTL must be a positive integer"
+    claim_acquire_lock || exit 2
+    if ! $RESERVE_RESUME; then
+      if claim_already_claimed || claim_active_handoff; then
+        claim_print_state
+        exit 3
+      fi
+      claim_write_handoff_record fresh ""
+      exit 0
+    fi
+
+    if claim_already_claimed; then
+      if claim_record_alive "$CLAIM_FILE"; then
+        claim_print_state
+        exit 3
+      fi
+    elif claim_active_handoff; then
+      claim_print_state
+      exit 3
+    else
+      echo free
+      exit 3
+    fi
+
+    RESUME_WORKTREE=$(claim_usable_worktree "$(claim_record_worktree)")
+    if [ -z "$RESUME_WORKTREE" ]; then
+      RESUME_WORKTREE=$(claim_usable_worktree "$(claim_branch_worktree)")
+    fi
+    if [ -z "$RESUME_WORKTREE" ]; then
+      echo "claim.sh: no worktree found for branch $BRANCH" >&2
+      exit 4
+    fi
+    claim_write_handoff_record resume "$RESUME_WORKTREE"
+    printf '%s\n' "$RESUME_WORKTREE"
+    ;;
+
   resume)
     claim_branch_exists || { echo "claim.sh: branch $BRANCH does not exist" >&2; exit 3; }
     claim_paths || die "could not determine the main worktree"
     claim_acquire_lock || exit 2
     OLD_PID=""; OLD_START=""
     IFS=$'\t' read -r OLD_PID OLD_START <<< "$(claim_owner_fields)"
-    if ! $FORCE && ! owner_same "$OWNER_PID" "$OWNER_PID_START" "${OLD_PID:-}" "${OLD_START:-}"; then
-      [ -n "$OLD_PID" ] && owner_alive "$OLD_PID" "${OLD_START:-}" && {
-        echo "claim.sh: spec $SPEC is actively held by pid $OLD_PID" >&2
-        exit 3
-      }
+    HANDOFF_MODE=$(claim_handoff_mode)
+    if ! $FORCE && claim_record_alive "$CLAIM_FILE" && \
+       { [ "$HANDOFF_MODE" != none ] || ! owner_same "$OWNER_PID" "$OWNER_PID_START" "${OLD_PID:-}" "${OLD_START:-}"; }; then
+      echo "claim.sh: spec $SPEC is actively held by pid $OLD_PID" >&2
+      exit 3
     fi
     claim_write_record
     ;;
@@ -249,9 +390,13 @@ case "$COMMAND" in
     if [ -f "$CLAIM_FILE" ]; then
       OLD_PID=""; OLD_START=""
       IFS=$'\t' read -r OLD_PID OLD_START <<< "$(claim_owner_fields)"
-      if ! $FORCE && ! owner_same "$OWNER_PID" "$OWNER_PID_START" "${OLD_PID:-}" "${OLD_START:-}"; then
-        echo "claim.sh: claim is held by another owner" >&2
-        exit 3
+      HANDOFF_MODE=$(claim_handoff_mode)
+      if ! $FORCE; then
+        if claim_record_alive "$CLAIM_FILE" && \
+           { [ "$HANDOFF_MODE" != none ] || ! owner_same "$OWNER_PID" "$OWNER_PID_START" "${OLD_PID:-}" "${OLD_START:-}"; }; then
+          echo "claim.sh: claim is actively held by another owner" >&2
+          exit 3
+        fi
       fi
       rm -f "$CLAIM_FILE"
     fi
