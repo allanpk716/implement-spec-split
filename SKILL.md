@@ -43,7 +43,7 @@ With the `sonnet` backend, pass the `model` parameter explicitly on every Agent 
 
 ## Step 0: pick the spec and take it
 
-Several Runs may work at once, one Spec each, typically one Claude Code session per worktree, all started from the order that `/find-next --batch` printed. Here `<n>` is always the **Spec issue number**, not the number of a wayfinder map or map implementation ticket.
+Several Runs may work at once, one Spec each, typically one Claude Code session per worktree, all started from the order that `/find-next --batch` printed (it can also start those sessions in Orca itself). Here `<n>` is always the **Spec issue number**, not the number of a wayfinder map or map implementation ticket.
 
 A Spec is taken when its integration branch `spec-<n>` exists. Whether the Run holding it is still alive is recorded in its **claim record** (GLOSSARY.md): `$(git rev-parse --git-common-dir)/implement-spec-split/claims/spec-<n>.json`, written and read only through `<skill dir>/scripts/claim.sh`. It stores the PID and start time of the Claude Code process that took the Spec, so liveness does not depend on Orca. `claim.sh status <n>` prints `free`, `active <record>` (the holder process is alive) or `interrupted <record|none>` (branch exists, holder gone or no record).
 
@@ -64,9 +64,11 @@ Resolve a Spec to its Tickets in this order:
    <skill dir>/scripts/claim.sh take <n>
    ```
 
-   It creates branch `spec-<n>` with its worktree at `<repo parent>/<repo>-wt/spec-<n>` from the main branch and writes the claim record, under a short repo-wide lock so two sessions cannot both pass the check. Exit 0 prints the worktree path. Exit 3 means the branch already exists; the output says whether it is `active` or `interrupted`:
-   - `active`: another live Run holds it. Tell the user which worktree, and stop. Never work on it in parallel.
+   It creates branch `spec-<n>` with its worktree at `<repo parent>/<repo>-wt/spec-<n>` from the main branch and writes the claim record, under a short repo-wide lock so two sessions cannot both pass the check. Exit 0 prints the worktree path: that is the integration worktree. Exit 3 means the Spec is already taken; the output says whether it is `active` or `interrupted`:
+   - `active`: another live Run holds it, or find-next has reserved it for a session it is starting. Tell the user which worktree, and stop. Never work on it in parallel.
    - `interrupted`: this is **Recovery** (GLOSSARY.md). Ask the user to confirm, then `claim.sh resume <n>` (rewrites the record with this session as holder) and continue under "Recovery" below.
+
+   When find-next started this session (`launch-wave.sh`), it reserved the Spec first (a **handoff reservation**, GLOSSARY.md) and this session already runs inside the Spec's worktree on branch `spec-<n>`. `take` then adopts the reservation instead of creating anything: exit 0 prints the current directory, which is the integration worktree (a fresh Spec); exit 4 prints it too and means Recovery that the user already confirmed in find-next, so continue under "Recovery" without asking again.
 3. **Blocked Spec.** If every open ticket is blocked by tickets outside this Spec that are not merged into the main branch yet (its frontier is empty), say what blocks it, `claim.sh release <n>`, remove the just-created worktree and branch if they have no commits, and stop.
 4. In Orca (`ORCA_WORKTREE_ID` set and `orca` on PATH), also mark the session for the user: `orca worktree set --worktree current --issue <n> --workspace-status in-progress` and `orca terminal rename --title "spec-<n> <short title>"`. This is display only; the claim record is what other Runs and find-next read.
 5. Exactly one Spec per Run. `--parallel` / `GLM_MAX_PARALLEL` counts this Run's External workers only; on top of that, every External worker on the machine queues for one of the shared worker slots (see "External workers").
