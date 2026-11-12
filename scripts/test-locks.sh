@@ -456,6 +456,177 @@ git -C "$REPO" branch spec-303-fix1 master
 TICKET_FIX_OUTPUT=$(cd "$REPO" && ISS_OWNER_PID=$$ "$CLAIM" status 303)
 check "ticket and fix branches do not claim spec" test "$TICKET_FIX_OUTPUT" = free
 
+echo "handoff reservations"
+RESERVE_OUTPUT=$(cd "$REPO" && ISS_OWNER_PID=$$ "$CLAIM" reserve 304 --ttl 600)
+RESERVE_RC=$?
+expect_rc "fresh reserve succeeds" 0 "$RESERVE_RC"
+check "fresh reserve is silent" test -z "$RESERVE_OUTPUT"
+check "fresh reserve does not create a branch" bash -c '! git -C "$1" show-ref --verify refs/heads/spec-304' _ "$REPO"
+check "fresh reserve does not create a worktree" test ! -e "$REPO_PARENT/locks-wt/spec-304"
+HANDOFF_CLAIM="$REPO/.git/implement-spec-split/claims/spec-304.json"
+cp "$HANDOFF_CLAIM" "$TEST_ROOT/fresh-handoff-record.json"
+check "fresh reserve record has handoff fields" env CLAIM_FILE="$HANDOFF_CLAIM" node -e '
+  const fs = require("fs");
+  const c = JSON.parse(fs.readFileSync(process.env.CLAIM_FILE, "utf8"));
+  const wanted = ["spec", "branch", "worktree", "pid", "pid_start", "claimed_at", "handoff", "handoff_until_epoch"];
+  process.exit(
+    JSON.stringify(Object.keys(c)) === JSON.stringify(wanted) &&
+    c.spec === 304 && c.branch === "spec-304" && c.worktree === null &&
+    c.handoff === "fresh" && Number.isSafeInteger(c.handoff_until_epoch) ? 0 : 1
+  );
+'
+HANDOFF_STATUS=$(cd "$REPO" && ISS_OWNER_PID=$$ "$CLAIM" status 304)
+check "live handoff status is active" grep -q '^active {"spec":304' <<< "$HANDOFF_STATUS"
+RESERVE_AGAIN=$(cd "$REPO" && ISS_OWNER_PID=$$ "$CLAIM" reserve 304 --ttl 600 2>/dev/null)
+RESERVE_AGAIN_RC=$?
+expect_rc "occupied reserve exits 3" 3 "$RESERVE_AGAIN_RC"
+check "occupied reserve prints active state" grep -q '^active {"spec":304' <<< "$RESERVE_AGAIN"
+TAKE_OTHER_BRANCH=$(cd "$REPO" && ISS_OWNER_PID=$$ "$CLAIM" take 304 2>/dev/null)
+TAKE_OTHER_BRANCH_RC=$?
+expect_rc "live handoff blocks take outside its worktree" 3 "$TAKE_OTHER_BRANCH_RC"
+check "live handoff take prints active state" grep -q '^active {"spec":304' <<< "$TAKE_OTHER_BRANCH"
+RESUME_HANDOFF=$(cd "$REPO" && ISS_OWNER_PID=$$ "$CLAIM" resume 304 2>/dev/null)
+RESUME_HANDOFF_RC=$?
+expect_rc "live handoff blocks resume" 3 "$RESUME_HANDOFF_RC"
+RELEASE_HANDOFF=$(cd "$REPO" && ISS_OWNER_PID=$$ "$CLAIM" release 304 2>/dev/null)
+RELEASE_HANDOFF_RC=$?
+expect_rc "live handoff blocks release" 3 "$RELEASE_HANDOFF_RC"
+
+# Make the recorded process identity dead so expiry, rather than the test process,
+# controls the rest of this handoff's liveness.
+env CLAIM_FILE="$HANDOFF_CLAIM" node -e '
+  const fs = require("fs");
+  const file = process.env.CLAIM_FILE;
+  const c = JSON.parse(fs.readFileSync(file, "utf8"));
+  c.pid_start = "dead-for-test";
+  fs.writeFileSync(file, JSON.stringify(c) + "\n");
+'
+HANDOFF_UNTIL=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).handoff_until_epoch)' "$HANDOFF_CLAIM")
+HANDOFF_STATUS=$(cd "$REPO" && ISS_NOW_EPOCH="$HANDOFF_UNTIL" "$CLAIM" status 304)
+check "handoff at its expiry boundary is free" test "$HANDOFF_STATUS" = free
+EXPIRED_TAKE=$(cd "$REPO" && ISS_NOW_EPOCH="$HANDOFF_UNTIL" ISS_OWNER_PID=$$ "$CLAIM" take 304)
+EXPIRED_TAKE_RC=$?
+expect_rc "expired handoff can be taken normally" 0 "$EXPIRED_TAKE_RC"
+check "expired handoff take creates worktree" test "$EXPIRED_TAKE" = "$REPO_PARENT/locks-wt/spec-304"
+check "normal take removes handoff fields" env CLAIM_FILE="$HANDOFF_CLAIM" node -e '
+  const fs = require("fs");
+  const c = JSON.parse(fs.readFileSync(process.env.CLAIM_FILE, "utf8"));
+  const wanted = ["spec", "branch", "worktree", "pid", "pid_start", "claimed_at"];
+  process.exit(JSON.stringify(Object.keys(c)) === JSON.stringify(wanted) ? 0 : 1);
+'
+
+cat > "$TEST_ROOT/reserve-race-helper.sh" <<'EOF'
+#!/usr/bin/env bash
+set -u
+number=$1 gate=$2 done=$3 prefix=$4 repo=$5 claim=$6
+cd "$repo"
+export ISS_OWNER_PID=$$
+while [ ! -e "$gate" ]; do sleep 0.01; done
+output=$("$claim" reserve "$number" --ttl 600 2>/dev/null); rc=$?
+printf '%s\n' "$rc" > "$prefix-$ISS_OWNER_PID-rc"
+printf '%s\n' "$output" > "$prefix-$ISS_OWNER_PID-out"
+if [ "$rc" -eq 0 ]; then
+  while [ ! -e "$done" ]; do sleep 0.01; done
+  "$claim" release "$number" --force
+fi
+exit "$rc"
+EOF
+
+RESERVE_RACE_DONE="$TEST_ROOT/reserve-race-done"
+RESERVE_RACE_PREFIX="$TEST_ROOT/reserve-race-307"
+bash "$TEST_ROOT/reserve-race-helper.sh" 307 "$TEST_ROOT/reserve-race-start" "$RESERVE_RACE_DONE" \
+  "$RESERVE_RACE_PREFIX" "$REPO" "$CLAIM" >/dev/null 2>&1 &
+RR1=$!
+BACKGROUND_PIDS+=("$RR1")
+bash "$TEST_ROOT/reserve-race-helper.sh" 307 "$TEST_ROOT/reserve-race-start" "$RESERVE_RACE_DONE" \
+  "$RESERVE_RACE_PREFIX" "$REPO" "$CLAIM" >/dev/null 2>&1 &
+RR2=$!
+BACKGROUND_PIDS+=("$RR2")
+touch "$TEST_ROOT/reserve-race-start"
+wait_file "$RESERVE_RACE_PREFIX-$RR1-rc" 5
+wait_file "$RESERVE_RACE_PREFIX-$RR2-rc" 5
+RESERVE_SUCCESS_COUNT=0
+RESERVE_BLOCKED_COUNT=0
+for rc_file in "$RESERVE_RACE_PREFIX"-*-rc; do
+  [ "$(cat "$rc_file")" = 0 ] && RESERVE_SUCCESS_COUNT=$((RESERVE_SUCCESS_COUNT + 1))
+  [ "$(cat "$rc_file")" = 3 ] && RESERVE_BLOCKED_COUNT=$((RESERVE_BLOCKED_COUNT + 1))
+done
+check "exactly one concurrent reserve succeeds" test "$RESERVE_SUCCESS_COUNT" = 1
+check "the other concurrent reserve is blocked" test "$RESERVE_BLOCKED_COUNT" = 1
+touch "$RESERVE_RACE_DONE"
+wait_pid_exit "$RR1" && wait_pid_exit "$RR2"
+check "released concurrent reserve leaves no record" test ! -e "$REPO/.git/implement-spec-split/claims/spec-307.json"
+
+git -C "$REPO" branch spec-308 master
+git -C "$REPO" worktree add -q "$REPO_PARENT/locks-wt/spec-308" spec-308
+RESUME_RESERVE=$(cd "$REPO" && ISS_OWNER_PID=$$ "$CLAIM" reserve 308 --resume --ttl 600)
+RESUME_RESERVE_RC=$?
+expect_rc "resume reserve succeeds for interrupted spec" 0 "$RESUME_RESERVE_RC"
+check "resume reserve finds the branch worktree" test "$RESUME_RESERVE" = "$REPO_PARENT/locks-wt/spec-308"
+RESUME_CLAIM="$REPO/.git/implement-spec-split/claims/spec-308.json"
+cp "$RESUME_CLAIM" "$TEST_ROOT/resume-handoff-record.json"
+check "resume reserve record has handoff fields" env CLAIM_FILE="$RESUME_CLAIM" EXPECTED_WORKTREE="$REPO_PARENT/locks-wt/spec-308" node -e '
+  const fs = require("fs");
+  const c = JSON.parse(fs.readFileSync(process.env.CLAIM_FILE, "utf8"));
+  const wanted = ["spec", "branch", "worktree", "pid", "pid_start", "claimed_at", "handoff", "handoff_until_epoch"];
+  process.exit(
+    JSON.stringify(Object.keys(c)) === JSON.stringify(wanted) &&
+    c.spec === 308 && c.worktree === process.env.EXPECTED_WORKTREE &&
+    c.handoff === "resume" && Number.isSafeInteger(c.handoff_until_epoch) ? 0 : 1
+  );
+'
+check "resume reserve status is active" grep -q '^active {"spec":308' < <(cd "$REPO" && ISS_OWNER_PID=$$ "$CLAIM" status 308)
+RESUME_RESERVE_AGAIN=$(cd "$REPO" && ISS_OWNER_PID=$$ "$CLAIM" reserve 308 --resume 2>/dev/null)
+RESUME_RESERVE_AGAIN_RC=$?
+expect_rc "active resume reserve exits 3" 3 "$RESUME_RESERVE_AGAIN_RC"
+check "active resume reserve prints state" grep -q '^active {"spec":308' <<< "$RESUME_RESERVE_AGAIN"
+ACTIVE_HANDOFF_RESUME=$(cd "$REPO" && ISS_OWNER_PID=$$ "$CLAIM" resume 308 2>/dev/null)
+ACTIVE_HANDOFF_RESUME_RC=$?
+expect_rc "active resume handoff blocks resume" 3 "$ACTIVE_HANDOFF_RESUME_RC"
+ACTIVE_HANDOFF_RELEASE=$(cd "$REPO" && ISS_OWNER_PID=$$ "$CLAIM" release 308 2>/dev/null)
+ACTIVE_HANDOFF_RELEASE_RC=$?
+expect_rc "active resume handoff blocks release" 3 "$ACTIVE_HANDOFF_RELEASE_RC"
+
+RESUME_TAKE=$(cd "$REPO_PARENT/locks-wt/spec-308" && ISS_OWNER_PID=$$ "$CLAIM" take 308)
+RESUME_TAKE_RC=$?
+expect_rc "taking over resume handoff exits 4" 4 "$RESUME_TAKE_RC"
+check "taking over resume handoff prints worktree" test "$RESUME_TAKE" = "$REPO_PARENT/locks-wt/spec-308"
+check "resume takeover clears handoff fields" env CLAIM_FILE="$RESUME_CLAIM" node -e '
+  const fs = require("fs");
+  const c = JSON.parse(fs.readFileSync(process.env.CLAIM_FILE, "utf8"));
+  const wanted = ["spec", "branch", "worktree", "pid", "pid_start", "claimed_at"];
+  process.exit(JSON.stringify(Object.keys(c)) === JSON.stringify(wanted) ? 0 : 1);
+'
+
+(cd "$REPO" && ISS_OWNER_PID=$$ "$CLAIM" reserve 309 --ttl 600)
+git -C "$REPO" branch spec-309 master
+git -C "$REPO" worktree add -q "$REPO_PARENT/locks-wt/spec-309" spec-309
+FRESH_TAKE=$(cd "$REPO_PARENT/locks-wt/spec-309" && ISS_OWNER_PID=$$ "$CLAIM" take 309)
+FRESH_TAKE_RC=$?
+expect_rc "taking over fresh handoff succeeds" 0 "$FRESH_TAKE_RC"
+check "taking over fresh handoff prints worktree" test "$FRESH_TAKE" = "$REPO_PARENT/locks-wt/spec-309"
+check "fresh takeover clears handoff fields" env CLAIM_FILE="$REPO/.git/implement-spec-split/claims/spec-309.json" node -e '
+  const fs = require("fs");
+  const c = JSON.parse(fs.readFileSync(process.env.CLAIM_FILE, "utf8"));
+  process.exit(!("handoff" in c) && !("handoff_until_epoch" in c) ? 0 : 1);
+'
+
+FREE_RESUME=$(cd "$REPO" && ISS_OWNER_PID=$$ "$CLAIM" reserve 310 --resume 2>/dev/null)
+FREE_RESUME_RC=$?
+expect_rc "free resume reserve exits 3" 3 "$FREE_RESUME_RC"
+check "free resume reserve prints free" test "$FREE_RESUME" = free
+git -C "$REPO" branch spec-311 master
+NO_WORKTREE_RESUME=$(cd "$REPO" && ISS_OWNER_PID=$$ "$CLAIM" reserve 311 --resume 2>"$TEST_ROOT/no-worktree-reserve.err")
+NO_WORKTREE_RESUME_RC=$?
+expect_rc "resume reserve without worktree exits 4" 4 "$NO_WORKTREE_RESUME_RC"
+check "resume reserve without worktree explains error" grep -q "no worktree found for branch spec-311" "$TEST_ROOT/no-worktree-reserve.err"
+
+(cd "$REPO" && ISS_OWNER_PID=$$ "$CLAIM" reserve 312 --ttl 600)
+RELEASE_FORCE_OUTPUT=$(cd "$REPO" && ISS_OWNER_PID=$$ "$CLAIM" release 312 --force)
+RELEASE_FORCE_RC=$?
+expect_rc "forced release removes a handoff reservation" 0 "$RELEASE_FORCE_RC"
+check "forced release leaves spec free" test "$(cd "$REPO" && ISS_OWNER_PID=$$ "$CLAIM" status 312)" = free
+
 echo "worker slot queue"
 WORK_REPO="$TEST_ROOT/worker-repo"
 mkdir -p "$WORK_REPO"
@@ -467,7 +638,36 @@ git -C "$WORK_REPO" add a.txt
 git -C "$WORK_REPO" commit -qm init
 printf 'Say hello.\n' > "$TEST_ROOT/worker-brief.md"
 mkdir -p "$CODEX_HOME/sessions"
-export ISS_MAX_WORKERS=1
+
+echo "worker limit configuration"
+unset ISS_MAX_WORKERS
+rm -f "$ISS_STATE_DIR/max-workers"
+DEFAULT_MAX=$(source "$HERE/lib-workers.sh"; iss_max_workers)
+check "worker default limit is four" test "$DEFAULT_MAX" = 4
+DEFAULT_MAX_OUTPUT=$(bash "$HERE/max-workers.sh")
+check "worker limit CLI reports default" test "$DEFAULT_MAX_OUTPUT" = "4 (default)"
+printf '6\n' > "$ISS_STATE_DIR/max-workers"
+FILE_MAX=$(source "$HERE/lib-workers.sh"; iss_max_workers)
+check "worker file limit is read" test "$FILE_MAX" = 6
+FILE_MAX_OUTPUT=$(bash "$HERE/max-workers.sh")
+check "worker limit CLI reports file" test "$FILE_MAX_OUTPUT" = "6 (file)"
+ENV_MAX=$(ISS_MAX_WORKERS=3 bash -c 'source "$1"; iss_max_workers' _ "$HERE/lib-workers.sh")
+check "worker environment limit wins" test "$ENV_MAX" = 3
+ENV_MAX_OUTPUT=$(ISS_MAX_WORKERS=3 bash "$HERE/max-workers.sh")
+check "worker limit CLI reports environment" test "$ENV_MAX_OUTPUT" = "3 (ISS_MAX_WORKERS)"
+INVALID_ENV_MAX=$(ISS_MAX_WORKERS=bad bash -c 'source "$1"; iss_max_workers' _ "$HERE/lib-workers.sh" \
+  2>"$TEST_ROOT/invalid-env-max.err")
+INVALID_ENV_MAX_RC=$?
+expect_rc "invalid worker environment limit exits 64" 64 "$INVALID_ENV_MAX_RC"
+printf 'not-a-number\n' > "$ISS_STATE_DIR/max-workers"
+INVALID_FILE_MAX=$(source "$HERE/lib-workers.sh"; iss_max_workers 2>"$TEST_ROOT/invalid-file-max.err")
+check "invalid worker file falls back to four" test "$INVALID_FILE_MAX" = 4
+check "invalid worker file warns" grep -q 'invalid integer' "$TEST_ROOT/invalid-file-max.err"
+MAX_WORKERS_WRITE_OUTPUT=$(bash "$HERE/max-workers.sh" 7)
+check "worker limit CLI writes value" test "$MAX_WORKERS_WRITE_OUTPUT" = "max-workers = 7"
+check "worker limit CLI persists value" test "$(cat "$ISS_STATE_DIR/max-workers")" = 7
+
+bash "$HERE/max-workers.sh" 1
 FAKE_CODEX_SLOT_READY="$TEST_ROOT/worker1-ready" FAKE_CODEX_SLOT_MARKER="$TEST_ROOT/worker1-release" "$WORKER" \
   --cwd "$WORK_REPO" --brief "$TEST_ROOT/worker-brief.md" --run-dir "$TEST_ROOT/worker1" \
   --time-limit 10 --idle-timeout 5 >"$TEST_ROOT/worker1.stdout" 2>"$TEST_ROOT/worker1.stderr" &

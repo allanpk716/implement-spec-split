@@ -107,6 +107,54 @@ owner_iso_now() {
   date +%Y-%m-%dT%H:%M:%S%z
 }
 
+owner_epoch_now() {
+  local value="${ISS_NOW_EPOCH:-}"
+  if [[ "$value" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$value"
+  else
+    date +%s
+  fi
+}
+
+# A claim record is alive when its recorded process identity is still alive, or
+# when it is an unexpired handoff reservation. The epoch override keeps expiry
+# deterministic in tests.
+claim_record_alive() {
+  local file="$1" pid="" pid_start=""
+  IFS=$'\t' read -r pid pid_start <<< "$(claim_record_owner_fields "$file")"
+  if [ -n "$pid" ] && owner_alive "$pid" "${pid_start:-}"; then
+    return 0
+  fi
+
+  CLAIM_RECORD_FILE="$(printf '%s' "$file")" \
+  CLAIM_NOW_EPOCH="$(owner_epoch_now)" node -e '
+    const fs = require("fs");
+    try {
+      const claim = JSON.parse(fs.readFileSync(process.env.CLAIM_RECORD_FILE, "utf8"));
+      const handoff = claim.handoff;
+      if (handoff !== "fresh" && handoff !== "resume") process.exit(1);
+      const until = claim.handoff_until_epoch;
+      if (typeof until !== "number" || !Number.isSafeInteger(until)) process.exit(1);
+      const now = Number(process.env.CLAIM_NOW_EPOCH);
+      process.exit(now < until ? 0 : 1);
+    } catch {
+      process.exit(1);
+    }
+  '
+}
+
+claim_record_owner_fields() {
+  local file="$1"
+  CLAIM_RECORD_FILE="$(printf '%s' "$file")" node -e '
+    const fs = require("fs");
+    const clean = value => String(value ?? "").replace(/[\t\n\r]+/g, " ");
+    try {
+      const claim = JSON.parse(fs.readFileSync(process.env.CLAIM_RECORD_FILE, "utf8"));
+      process.stdout.write([clean(claim.pid), clean(claim.pid_start)].join("\t"));
+    } catch {}
+  '
+}
+
 owner_age_seconds() {
   local value="$1"
   OWNER_DATE="$(printf '%s' "$value")" node -e '

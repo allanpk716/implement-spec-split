@@ -104,6 +104,9 @@ GOT_READ_ONLY=false
 
 die() { echo "codex-worker: $*" >&2; exit 64; }
 
+# shellcheck source=lib-workers.sh
+source "$HERE/lib-workers.sh"
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --cwd) CWD="$2"; GOT_CWD=true; shift 2 ;;
@@ -614,8 +617,8 @@ trap 'worker_exit 143' TERM
 acquire_worker_slot() {
   rm -f "$RUN_DIR/queued"
   if $NO_SLOT || [ "${ISS_WORKER_SLOTS:-1}" = 0 ]; then return 0; fi
-  local max="${ISS_MAX_WORKERS:-4}" output rc queued_at
-  [[ "$max" =~ ^[1-9][0-9]*$ ]] || die "ISS_MAX_WORKERS must be a positive integer"
+  local max="" output rc queued_at
+  max=$(iss_max_workers) || exit $?
   queued_at=$(date +%s)
   printf '%s\n' "$queued_at" > "$RUN_DIR/queued"
   echo "=== waiting for worker slot $(date -Iseconds) ===" >> "$STDERR"
