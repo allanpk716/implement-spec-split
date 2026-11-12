@@ -9,6 +9,7 @@ Usage: launch-wave.sh --repo <owner/name> --workers N [--specs K] [--apart A:B].
 
 Print the development order, then optionally reserve and launch its first wave.
 Without --apply, this script only shows what would run and makes no claims.
+When the main worktree is Orca-managed, resumed worktrees outside Orca use a terminal tab in it.
 EOF
 }
 
@@ -24,7 +25,7 @@ else
   SCRIPT_DIR=$(command -v -- "$SCRIPT_SOURCE") || die "could not resolve the launch script path"
   SCRIPT_DIR=${SCRIPT_DIR%/*}
 fi
-SKILL_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd) || die "could not resolve the skill root"
+SKILL_ROOT=$(cd -P -- "$SCRIPT_DIR/../.." && pwd) || die "could not resolve the skill root"
 
 REPO=
 WORKERS=
@@ -235,6 +236,9 @@ if [ "$APPLY" -eq 0 ]; then
         printf ' #%s（恢复，找不到 worktree，需手动）\n' "$spec"
       elif [ "$IN_ORCA" -eq 1 ] && in_orca "$worktree"; then
         printf ' #%s（恢复，原 worktree）→ %s\n' "$spec" "$command"
+      elif [ "$IN_ORCA" -eq 1 ] && in_orca "$MAIN_WORKTREE"; then
+        printf ' #%s（恢复，在主工作树开终端标签）→ cd %s 后运行 %s\n' \
+          "$spec" "$worktree" "$command"
       elif [ "$IN_ORCA" -eq 1 ]; then
         printf ' #%s（恢复，worktree 不在 Orca 列表里，需手动）→ cd %s 后运行 %s\n' \
           "$spec" "$worktree" "$command"
@@ -300,7 +304,9 @@ if [ "${#ONLY_SPECS[@]}" -gt 0 ]; then
   available_specs=$(printf '%s\n' "$ENTRIES" | while IFS=$'\t' read -r kind spec command_json worktree_json; do
     [ -n "$kind" ] || continue
     worktree=$(decode_json_string "$worktree_json")
-    if [ "$kind" = wave ] || { [ "$kind" = resume ] && [ -n "$worktree" ] && in_orca "$worktree"; }; then
+    if [ "$kind" = wave ] ||
+       { [ "$kind" = resume ] && [ -n "$worktree" ] &&
+         { in_orca "$worktree" || in_orca "$MAIN_WORKTREE"; }; }; then
       printf '%s\n' "$spec"
     fi
   done)
@@ -325,7 +331,8 @@ while IFS=$'\t' read -r kind spec command_json worktree_json; do
   worktree=$(decode_json_string "$worktree_json")
 
   if [ "$kind" = resume ]; then
-    if [ -z "$worktree" ] || ! in_orca "$worktree"; then
+    if [ -z "$worktree" ] ||
+       { ! in_orca "$worktree" && ! in_orca "$MAIN_WORKTREE"; }; then
       if [ "${#ONLY_SPECS[@]}" -eq 0 ]; then
         if [ -z "$worktree" ]; then
           printf ' #%s（恢复，找不到 worktree，需手动）\n' "$spec"
@@ -352,14 +359,31 @@ while IFS=$'\t' read -r kind spec command_json worktree_json; do
       continue
     fi
     resume_worktree=$(printf '%s\n' "$reserve_output" | sed -n '1p')
-    if "$ORCA" agent launch --agent claude --worktree "path:$resume_worktree" \
-      --prompt "$command" --json < /dev/null > "$run_out" 2> "$run_err"; then
-      printf '#%s 已启动：%s\n' "$spec" "$resume_worktree"
-      started=$((started + 1))
+    if in_orca "$worktree"; then
+      if "$ORCA" agent launch --agent claude --worktree "path:$resume_worktree" \
+        --prompt "$command" --json < /dev/null > "$run_out" 2> "$run_err"; then
+        printf '#%s 已启动：%s\n' "$spec" "$resume_worktree"
+        started=$((started + 1))
+      else
+        claim_main release "$spec" --force >/dev/null 2>&1 || true
+        printf '#%s 启动失败：%s\n' "$spec" "$(first_error_line "$run_err" "$run_out")"
+        failed=$((failed + 1))
+      fi
     else
-      claim_main release "$spec" --force >/dev/null 2>&1 || true
-      printf '#%s 启动失败：%s\n' "$spec" "$(first_error_line "$run_err" "$run_out")"
-      failed=$((failed + 1))
+      escaped_worktree=$(printf '%q' "$worktree")
+      escaped_command=$(printf '%q' "$command")
+      if "$ORCA" terminal create --worktree "path:$MAIN_WORKTREE" \
+        --title "spec-$spec" \
+        --command "cd $escaped_worktree && claude $escaped_command" \
+        --json < /dev/null > "$run_out" 2> "$run_err"; then
+        printf '#%s 已启动：%s（挂在主工作树的终端标签 spec-%s）\n' \
+          "$spec" "$worktree" "$spec"
+        started=$((started + 1))
+      else
+        claim_main release "$spec" --force >/dev/null 2>&1 || true
+        printf '#%s 启动失败：%s\n' "$spec" "$(first_error_line "$run_err" "$run_out")"
+        failed=$((failed + 1))
+      fi
     fi
     continue
   fi

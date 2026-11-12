@@ -10,13 +10,16 @@ BIN=$WORK/bin
 REPO=$WORK/git-repo
 ORIGIN=$WORK/test/repo.git  # path ends in the --repo slug the script checks
 WT222=$WORK/spec-222
-WT224=$WORK/spec-224
+WT224=$WORK/'spec-224 with spaces'
 MAIN_WORKTREE_PATH=$REPO
 PLAN=$WORK/plan.json
 PLAN_TEXT=$WORK/plan.txt
 EMPTY_PLAN=$WORK/empty-plan.json
 EMPTY_PLAN_TEXT=$WORK/empty-plan.txt
+ONLY_INVISIBLE_PLAN=$WORK/only-invisible-plan.json
+ONLY_INVISIBLE_PLAN_TEXT=$WORK/only-invisible-plan.txt
 ORCA_LIST=$WORK/orca-list.json
+ORCA_LIST_NO_MAIN=$WORK/orca-list-no-main.json
 ORCA_LOG=$WORK/orca.log
 CLAIM_LOG=$WORK/claim.log
 MAX_LOG=$WORK/max-workers.log
@@ -161,7 +164,39 @@ printf '%s\n' '{"parallel_specs":2,"workers":4,"per_spec_parallel":2,"resume":[]
   > "$EMPTY_PLAN"
 printf '%s\n' '开发顺序：没有可以实现的规格' > "$EMPTY_PLAN_TEXT"
 
-node - "$WT222" > "$ORCA_LIST" <<'NODE'
+node - "$WT224" > "$ONLY_INVISIBLE_PLAN" <<'NODE'
+const worktree = process.argv[2];
+process.stdout.write(JSON.stringify({
+  parallel_specs: 1,
+  workers: 4,
+  per_spec_parallel: 2,
+  resume: [{
+    spec: 224,
+    title: 'Invisible resume',
+    branch: 'spec-224',
+    worktree,
+    command: '/implement-spec-split 224 --impl codex --parallel 2',
+  }],
+  active: [],
+  wave1: [],
+  later: [],
+  cycles: [],
+  standalone: [],
+}, null, 2) + '\n');
+NODE
+cat > "$ONLY_INVISIBLE_PLAN_TEXT" <<'EOF'
+开发顺序（同时 1 份，共 4 个 worker）
+先恢复：#224
+EOF
+
+node - "$WT222" "$MAIN_WORKTREE_PATH" > "$ORCA_LIST" <<'NODE'
+const [visible, main] = process.argv.slice(2);
+process.stdout.write(JSON.stringify({
+  result: {worktrees: [{path: visible}, {path: main}]},
+}) + '\n');
+NODE
+
+node - "$WT222" > "$ORCA_LIST_NO_MAIN" <<'NODE'
 const visible = process.argv[2];
 process.stdout.write(JSON.stringify({
   result: {worktrees: [{path: visible}]},
@@ -263,6 +298,19 @@ case "$1" in
     fi
     printf '%s\n' '{"result":{"agent":{"id":"fake"}}}'
     ;;
+  terminal)
+    case "$2" in
+      create)
+        printf '%s\n' 'ORCA_TERMINAL_CREATE' >> "$LAUNCH_SEQUENCE_LOG"
+        if [ "${LAUNCH_ORCA_FAIL_TERMINAL:-0}" = 1 ]; then
+          printf '%s\n' 'orca terminal create failed' >&2
+          exit 1
+        fi
+        printf '%s\n' '{"result":{"terminal":{"id":"fake"}}}'
+        ;;
+      *) exit 2 ;;
+    esac
+    ;;
   *) exit 2 ;;
 esac
 EOF
@@ -275,7 +323,8 @@ run_launch() {
     cd "$REPO" || exit 125
     env LAUNCH_PLAN_FILE="${LAUNCH_PLAN_FILE_OVERRIDE:-$PLAN}" \
       LAUNCH_PLAN_TEXT_FILE="${LAUNCH_PLAN_TEXT_FILE_OVERRIDE:-$PLAN_TEXT}" \
-      LAUNCH_ORCA_LIST_FILE="$ORCA_LIST" LAUNCH_GIT_REPO="$REPO" \
+      LAUNCH_ORCA_LIST_FILE="${LAUNCH_ORCA_LIST_FILE_OVERRIDE:-$ORCA_LIST}" \
+      LAUNCH_GIT_REPO="$REPO" \
       LAUNCH_RESUME_DEFAULT="$WT222" \
       LAUNCH_PIPELINE_LOG="$PIPELINE_LOG" LAUNCH_CLAIM_LOG="$CLAIM_LOG" \
       LAUNCH_MAX_LOG="$MAX_LOG" LAUNCH_ORCA_LOG="$ORCA_LOG" \
@@ -296,8 +345,8 @@ expect_has '开发顺序（同时 2 份，共 4 个 worker）' 'dry run shows pi
 expect_has '现在启动吗？会在 Orca 里自动运行：' 'dry run uses Orca heading' "$WORK/dry.out"
 expect_has " #222（恢复，原 worktree）→ /implement-spec-split 222 --impl codex --parallel 2" \
   'visible resume is automatic' "$WORK/dry.out"
-expect_has " #224（恢复，worktree 不在 Orca 列表里，需手动）→ cd $WT224 后运行 /implement-spec-split 224 --impl codex --parallel 2" \
-  'invisible resume has manual command' "$WORK/dry.out"
+expect_has " #224（恢复，在主工作树开终端标签）→ cd $WT224 后运行 /implement-spec-split 224 --impl codex --parallel 2" \
+  'invisible resume uses a main-worktree terminal tab' "$WORK/dry.out"
 expect_has ' #238（恢复，找不到 worktree，需手动）' 'missing resume has no command' "$WORK/dry.out"
 expect_has ' #237（新 worktree）→ /implement-spec-split 237 --impl codex --parallel 2' \
   'new spec gets a worktree command' "$WORK/dry.out"
@@ -324,6 +373,8 @@ expect_exit 0 "offline dry run succeeds"
 expect_has '不在 Orca 里，请在各 worktree 手动运行：' 'offline dry run uses manual heading' "$WORK/offline-dry.out"
 expect_has " #222（恢复，需手动）→ cd $WT222 后运行 /implement-spec-split 222 --impl codex --parallel 2" \
   'offline visible resume is manual' "$WORK/offline-dry.out"
+expect_has " #224（恢复，需手动）→ cd $WT224 后运行 /implement-spec-split 224 --impl codex --parallel 2" \
+  'offline invisible resume remains manual' "$WORK/offline-dry.out"
 expect_has ' #237 → /implement-spec-split 237 --impl codex --parallel 2' \
   'offline new spec is direct' "$WORK/offline-dry.out"
 expect_without '（新 worktree）' 'offline dry run omits Orca label' "$WORK/offline-dry.out"
@@ -364,17 +415,77 @@ expect_has 'origin/master' 'main branch comes from origin HEAD' "$ORCA_LOG"
 expect_has "$WT222" 'resume launch uses reserve stdout path' "$ORCA_LOG"
 expect_has '--prompt' 'Orca calls pass prompt explicitly' "$ORCA_LOG"
 
-LAUNCH_ORCA_FAIL_CREATE=0
-export LAUNCH_ORCA_FAIL_CREATE
-: > "$CLAIM_LOG"; : > "$ORCA_LOG"
+: > "$CLAIM_LOG"; : > "$ORCA_LOG"; : > "$SEQUENCE_LOG"
 run_launch "$WORK/only-invisible.out" --apply --only 224
 expect_exit 0 "apply with only an invisible resume succeeds"
-expect_count '#224 已不可启动，跳过' 1 \
-  'invisible only resume is reported once' "$WORK/only-invisible.out"
+expect_without '#224 已不可启动，跳过' \
+  'invisible only resume is available with main worktree' "$WORK/only-invisible.out"
+expect_has "#224 已启动：${WT224}（挂在主工作树的终端标签 spec-224）" \
+  'invisible resume is launched in a terminal tab' "$WORK/only-invisible.out"
+expect_has '已启动 1 份，跳过 0 份，失败 0 份。' \
+  'invisible only resume summary counts launch' "$WORK/only-invisible.out"
+expect_has 'reserve' 'invisible resume is reserved' "$CLAIM_LOG"
+expect_has '--resume' 'invisible resume reservation is resumed' "$CLAIM_LOG"
+expect_has 'terminal' 'invisible resume uses Orca terminal' "$ORCA_LOG"
+expect_has 'create' 'invisible resume creates a terminal' "$ORCA_LOG"
+expect_has "path:$MAIN_WORKTREE_PATH" \
+  'terminal is attached to the main worktree' "$ORCA_LOG"
+expect_has 'spec-224' 'terminal title names the spec' "$ORCA_LOG"
+ESCAPED_WT224=$(printf '%q' "$WT224")
+ESCAPED_IMPL_COMMAND=$(printf '%q' '/implement-spec-split 224 --impl codex --parallel 2')
+expect_has "cd $ESCAPED_WT224 && claude $ESCAPED_IMPL_COMMAND" \
+  'terminal command shell-escapes path and prompt' "$ORCA_LOG"
+expect_sequence CLAIM_RESUME ORCA_TERMINAL_CREATE \
+  'invisible resume claim runs before terminal create'
+
+LAUNCH_ORCA_FAIL_TERMINAL=1
+export LAUNCH_ORCA_FAIL_TERMINAL
+: > "$CLAIM_LOG"; : > "$ORCA_LOG"; : > "$SEQUENCE_LOG"
+run_launch "$WORK/terminal-failure.out" --apply --only 224
+expect_exit 1 "Orca terminal failure exits one"
+expect_has '#224 启动失败：orca terminal create failed' \
+  'terminal failure surfaces first error line' "$WORK/terminal-failure.out"
+expect_has '已启动 0 份，跳过 0 份，失败 1 份。' \
+  'terminal failure summary counts failure' "$WORK/terminal-failure.out"
+expect_has 'release' 'terminal failure releases claim' "$CLAIM_LOG"
+expect_has '--force' 'terminal failure forces claim release' "$CLAIM_LOG"
+unset LAUNCH_ORCA_FAIL_TERMINAL
+
+LAUNCH_ORCA_LIST_FILE_OVERRIDE=$ORCA_LIST_NO_MAIN
+export LAUNCH_ORCA_LIST_FILE_OVERRIDE
+: > "$CLAIM_LOG"; : > "$ORCA_LOG"
+LAUNCH_PLAN_FILE_OVERRIDE=$ONLY_INVISIBLE_PLAN
+LAUNCH_PLAN_TEXT_FILE_OVERRIDE=$ONLY_INVISIBLE_PLAN_TEXT
+export LAUNCH_PLAN_FILE_OVERRIDE LAUNCH_PLAN_TEXT_FILE_OVERRIDE
+: > "$CLAIM_LOG"; : > "$ORCA_LOG"
+run_launch "$WORK/invisible-without-main-dry.out"
+expect_exit 0 "invisible resume without main worktree dry run succeeds"
+expect_has " #224（恢复，worktree 不在 Orca 列表里，需手动）→ cd $WT224 后运行 /implement-spec-split 224 --impl codex --parallel 2" \
+  'invisible resume without main worktree dry run stays manual' "$WORK/invisible-without-main-dry.out"
+expect_without 'reserve' 'dry run without main worktree makes no claim' "$CLAIM_LOG"
+expect_without 'terminal' 'dry run without main worktree has no terminal' "$ORCA_LOG"
+
+: > "$CLAIM_LOG"; : > "$ORCA_LOG"
+run_launch "$WORK/invisible-without-main.out" --apply
+expect_exit 0 "invisible resume without main worktree remains manual"
+expect_has " #224（恢复，worktree 不在 Orca 列表里，需手动）→ cd $WT224 后运行 /implement-spec-split 224 --impl codex --parallel 2" \
+  'invisible resume without main worktree stays manual' "$WORK/invisible-without-main.out"
 expect_has '已启动 0 份，跳过 1 份，失败 0 份。' \
-  'invisible only resume is skipped once' "$WORK/only-invisible.out"
-expect_without 'reserve' 'invisible only resume is not claimed' "$CLAIM_LOG"
-unset LAUNCH_ORCA_FAIL_CREATE
+  'manual invisible resume summary counts skip' "$WORK/invisible-without-main.out"
+expect_without 'reserve' 'manual invisible resume is not claimed' "$CLAIM_LOG"
+expect_without 'terminal' 'manual invisible resume has no terminal' "$ORCA_LOG"
+unset LAUNCH_PLAN_FILE_OVERRIDE LAUNCH_PLAN_TEXT_FILE_OVERRIDE
+
+: > "$CLAIM_LOG"; : > "$ORCA_LOG"
+run_launch "$WORK/only-invisible.out" --apply --only 224
+expect_exit 0 "invisible resume without main worktree succeeds as a skip"
+expect_count '#224 已不可启动，跳过' 1 \
+  'invisible resume without main worktree is reported once' "$WORK/only-invisible.out"
+expect_has '已启动 0 份，跳过 1 份，失败 0 份。' \
+  'invisible resume without main worktree is skipped once' "$WORK/only-invisible.out"
+expect_without 'reserve' 'invisible resume without main worktree is not claimed' "$CLAIM_LOG"
+expect_without 'terminal' 'invisible resume without main worktree has no terminal' "$ORCA_LOG"
+unset LAUNCH_ORCA_LIST_FILE_OVERRIDE
 
 LAUNCH_CLAIM_FAIL_FRESH=237
 export LAUNCH_CLAIM_FAIL_FRESH
