@@ -9,6 +9,8 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/publish-batch-test.XXXXXX")
 BIN=$WORK/bin
 STATE=$WORK/state.json
 LOG=$WORK/gh.log
+PIPELINE_LOG=$WORK/pipeline.log
+FAKE_PIPELINE=$WORK/fake-pipeline-status.sh
 PASSED=0
 FAILED=0
 RUN_EXIT=
@@ -112,6 +114,21 @@ make_case() {
     > "$directory/S2/manifest.json"
 }
 
+make_mixed_case() {
+  directory=$1
+  existing_spec=$2
+  mkdir -p "$directory/S1/tickets" "$directory/S2/tickets"
+  printf '%s\n' 'New spec body.' > "$directory/S1/spec.md"
+  printf '%s\n' $'## Parent\n#{{S1}}\nNew spec first ticket.' \
+    > "$directory/S1/tickets/T1.md"
+  printf '%s\n' $'## Parent\n#{{S2}}\nAfter #{{S1/T1}} and #{{#212}}.' \
+    > "$directory/S2/tickets/T1.md"
+  printf '%s\n' '{"key":"S1","title":"New mixed spec","body":"spec.md","tickets":[{"key":"T1","title":"New spec ticket","body":"tickets/T1.md","blocked_by":[]}]}' \
+    > "$directory/S1/manifest.json"
+  printf '%s\n' "{\"key\":\"S2\",\"existing_spec\":$existing_spec,\"title\":\"Existing spec for splitting\",\"tickets\":[{\"key\":\"T1\",\"title\":\"Existing spec ticket\",\"body\":\"tickets/T1.md\",\"blocked_by\":[\"S1/T1\",\"#212\"]}]}" \
+    > "$directory/S2/manifest.json"
+}
+
 mkdir -p "$BIN" || exit 1
 printf '%s\n' '{"nextNumber":300}' > "$STATE"
 : > "$LOG"
@@ -121,6 +138,13 @@ cat > "$BIN/gh" <<EOF
 exec node "$WORK/fake-gh.js" "\$@"
 EOF
 chmod +x "$BIN/gh"
+
+cat > "$FAKE_PIPELINE" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "\$PUBLISH_PIPELINE_LOG"
+printf '%s\n' 'PIPELINE-ORDER output'
+EOF
+chmod +x "$FAKE_PIPELINE"
 
 cat > "$WORK/fake-gh.js" <<'EOF'
 const fs = require('fs');
@@ -138,6 +162,21 @@ state.issues = state.issues || {
   48: {number: 48, id: 10000048, title: 'Existing spec', state: 'open', body: '## Problem Statement'},
   49: {number: 49, id: 10000049, title: 'Closed blocker', state: 'closed', body: ''},
   84: {number: 84, id: 10000084, title: 'Existing handoff', state: 'open', body: ''},
+  98: {number: 98, id: 10000098, title: 'Foreign execution ticket', state: 'open', body: ''},
+  224: {
+    number: 224,
+    id: 10000224,
+    title: 'Existing spec for splitting',
+    state: 'open',
+    body: '## Problem Statement\n\n实现票：#65\n地图：#22\n',
+  },
+  225: {
+    number: 225,
+    id: 10000225,
+    title: 'Existing spec for splitting',
+    state: 'open',
+    body: '## Problem Statement\n\n实现票：#66\n地图：#22\n',
+  },
 };
 state.subIssues = state.subIssues || {};
 state.blockedBy = state.blockedBy || {};
@@ -235,7 +274,10 @@ run_publish() {
   shift
   (
     cd "$WORK" || exit 125
-    env PUBLISH_TEST_STATE="$STATE" PUBLISH_GH_LOG="$LOG" PATH="$BIN:$PATH" \
+    env PUBLISH_TEST_STATE="$STATE" PUBLISH_GH_LOG="$LOG" \
+      PUBLISH_PIPELINE_LOG="$PIPELINE_LOG" \
+      ISS_PIPELINE_STATUS="${PUBLISH_TEST_PIPELINE:-$FAKE_PIPELINE}" \
+      PATH="$BIN:$PATH" \
       bash "$SCRIPT" --repo test/repo "$@"
   ) > "$output" 2> "${output}.err"
   RUN_EXIT=$?
@@ -246,7 +288,10 @@ run_publish_auto_repo() {
   shift
   (
     cd "$WORK" || exit 125
-    env PUBLISH_TEST_STATE="$STATE" PUBLISH_GH_LOG="$LOG" PATH="$BIN:$PATH" \
+    env PUBLISH_TEST_STATE="$STATE" PUBLISH_GH_LOG="$LOG" \
+      PUBLISH_PIPELINE_LOG="$PIPELINE_LOG" \
+      ISS_PIPELINE_STATUS="${PUBLISH_TEST_PIPELINE:-$FAKE_PIPELINE}" \
+      PATH="$BIN:$PATH" \
       bash "$SCRIPT" "$@"
   ) > "$output" 2> "${output}.err"
   RUN_EXIT=$?
@@ -258,6 +303,7 @@ expect_has 'Usage: publish-batch.sh' 'help shows usage' "$WORK/help.out"
 
 make_case "$WORK/base"
 : > "$LOG"
+: > "$PIPELINE_LOG"
 run_publish "$WORK/base-dry.out" "$WORK/base/S1/manifest.json" "$WORK/base/S2/manifest.json"
 expect_exit 0 "base dry run succeeds"
 expect_has '将新建规格 S1「Spec one」 标签：ready-for-agent' \
@@ -272,6 +318,12 @@ expect_has '将回填正文 S1「Spec one」' \
   'dry run shows deferred body patch' "$WORK/base-dry.out"
 expect_has '试运行：将发布 2 张规格、2 张执行票，加 --apply 执行' \
   'dry run summary' "$WORK/base-dry.out"
+expect_has '发布后会运行 pipeline-status.sh --order 输出开发顺序。' \
+  'dry run mentions pipeline status order' "$WORK/base-dry.out"
+expect_without '开工顺序' 'dry run no longer prints start order' \
+  "$WORK/base-dry.out"
+expect_without 'PIPELINE-ORDER output' 'dry run does not call pipeline status' \
+  "$WORK/base-dry.out"
 expect_has '"endpoint":"repos/test/repo/issues/212"' \
   'dry run verifies existing issue' "$LOG"
 expect_without '"write":true' 'dry run sends no write request' "$LOG"
@@ -282,6 +334,12 @@ expect_exit 0 "base apply succeeds"
 expect_has '核对：子票与阻塞关系都对上了' \
   'successful apply verifies relations' "$WORK/base-apply.out"
 expect_has '已发布 2 张规格、2 张执行票' 'apply summary' "$WORK/base-apply.out"
+expect_has 'PIPELINE-ORDER output' \
+  'apply outputs pipeline status order verbatim' "$WORK/base-apply.out"
+expect_has '--order --repo test/repo' 'pipeline status gets order arguments' \
+  "$PIPELINE_LOG"
+expect_without '开工顺序' 'apply no longer prints start order' \
+  "$WORK/base-apply.out"
 expect_has 'S1 #300 Spec one' 'published spec number is listed' "$WORK/base-apply.out"
 expect_has 'S2/T1 #303 Ticket two' 'published ticket number is listed' "$WORK/base-apply.out"
 expect_order 'title=Spec one' 'title=Spec two' 'specs are created before tickets' "$LOG"
@@ -457,6 +515,119 @@ expect_has '"endpoint":"repos/test/repo/issues/305/dependencies/blocked_by","arg
   'only dependency uses record database id' "$LOG"
 expect_has 'After #251 and #212.' 'only placeholders use record number' "$LOG"
 
+make_mixed_case "$WORK/mixed-existing" 224
+: > "$LOG"
+: > "$PIPELINE_LOG"
+run_publish "$WORK/mixed-existing-dry.out" \
+  "$WORK/mixed-existing/S1/manifest.json" \
+  "$WORK/mixed-existing/S2/manifest.json"
+expect_exit 0 'mixed existing-spec dry run succeeds'
+expect_has '使用已有规格 S2 #224「Existing spec for splitting」（只拆票）' \
+  'dry run identifies existing spec' "$WORK/mixed-existing-dry.out"
+expect_has '将新建规格 S1「New mixed spec」' \
+  'dry run still plans a new spec' "$WORK/mixed-existing-dry.out"
+expect_has '试运行：将发布 1 张规格、2 张执行票，加 --apply 执行' \
+  'dry run counts only new specs' "$WORK/mixed-existing-dry.out"
+expect_without '"write":true' 'mixed dry run sends no write' "$LOG"
+
+: > "$LOG"
+: > "$PIPELINE_LOG"
+run_publish "$WORK/mixed-existing-apply.out" --apply \
+  "$WORK/mixed-existing/S1/manifest.json" \
+  "$WORK/mixed-existing/S2/manifest.json"
+expect_exit 0 'mixed existing-spec apply succeeds'
+expect_has '已发布 1 张规格、2 张执行票' \
+  'apply counts only new specs' "$WORK/mixed-existing-apply.out"
+expect_has 'S2 #224 Existing spec for splitting' \
+  'apply lists existing spec number' "$WORK/mixed-existing-apply.out"
+expect_has 'PIPELINE-ORDER output' \
+  'mixed apply outputs pipeline order' "$WORK/mixed-existing-apply.out"
+expect_count 'title=Existing spec for splitting' 0 \
+  'existing spec is not created' "$LOG"
+expect_order 'title=New mixed spec' 'title=New spec ticket' \
+  'new spec precedes its ticket' "$LOG"
+expect_order 'title=New spec ticket' 'title=Existing spec ticket' \
+  'blocker ticket precedes existing-spec ticket' "$LOG"
+MIXED_ISSUES=$(STATE="$STATE" node -e '
+  const state = JSON.parse(require("fs").readFileSync(process.env.STATE, "utf8"));
+  const byTitle = (title) => Object.values(state.issues).find((issue) => issue.title === title);
+  const spec = byTitle("New mixed spec");
+  const first = byTitle("New spec ticket");
+  const second = byTitle("Existing spec ticket");
+  process.stdout.write([spec.number, first.number, second.number].join(" "));
+')
+read MIXED_SPEC MIXED_FIRST MIXED_SECOND <<EOF
+$MIXED_ISSUES
+EOF
+expect_has "\"endpoint\":\"repos/test/repo/issues/224/sub_issues\",\"args\":[\"api\",\"-X\",\"POST\",\"repos/test/repo/issues/224/sub_issues\",\"-F\",\"sub_issue_id=10000${MIXED_SECOND}\"]" \
+  'existing-spec ticket attaches to existing spec' "$LOG"
+expect_has "\"endpoint\":\"repos/test/repo/issues/${MIXED_SECOND}/dependencies/blocked_by\",\"args\":[\"api\",\"-X\",\"POST\",\"repos/test/repo/issues/${MIXED_SECOND}/dependencies/blocked_by\",\"-F\",\"issue_id=10000${MIXED_FIRST}\"]" \
+  'existing-spec ticket uses new blocker' "$LOG"
+STATE="$STATE" MIXED_SECOND="$MIXED_SECOND" node -e '
+  const fs = require("fs");
+  const state = JSON.parse(fs.readFileSync(process.env.STATE, "utf8"));
+  const issue = state.issues[Number(process.env.MIXED_SECOND)];
+  fs.writeFileSync(process.argv[1], issue.body);
+' "$WORK/mixed-existing-ticket.md"
+expect_has "#224" 'ticket parent placeholder resolves to existing spec' \
+  "$WORK/mixed-existing-ticket.md"
+expect_has "#${MIXED_FIRST} and #212." \
+  'ticket blockers resolve in body' "$WORK/mixed-existing-ticket.md"
+expect_has '"S2": {
+    "key": "S2",
+    "type": "spec",
+    "number": 224' 'existing spec is recorded durably' \
+  "$WORK/mixed-existing/S2/published.json"
+
+: > "$LOG"
+: > "$PIPELINE_LOG"
+run_publish "$WORK/mixed-existing-rerun.out" --apply \
+  "$WORK/mixed-existing/S1/manifest.json" \
+  "$WORK/mixed-existing/S2/manifest.json"
+expect_exit 0 'mixed existing-spec rerun succeeds'
+expect_without '"write":true' 'mixed rerun does not duplicate issues' "$LOG"
+expect_has 'PIPELINE-ORDER output' 'successful rerun still outputs pipeline order' \
+  "$WORK/mixed-existing-rerun.out"
+
+cat > "$WORK/failing-pipeline-status.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' 'pipeline failed' >&2
+exit 7
+EOF
+chmod +x "$WORK/failing-pipeline-status.sh"
+PUBLISH_TEST_PIPELINE="$WORK/failing-pipeline-status.sh" \
+  run_publish "$WORK/pipeline-failure.out" --apply \
+  "$WORK/mixed-existing/S1/manifest.json" \
+  "$WORK/mixed-existing/S2/manifest.json"
+expect_exit 0 'pipeline status failure preserves publish exit code'
+expect_has 'publish-batch: pipeline-status.sh --order failed' \
+  'pipeline status failure is one-line stderr advice' \
+  "$WORK/pipeline-failure.out.err"
+expect_without 'PIPELINE-ORDER output' 'failed pipeline output is not faked' \
+  "$WORK/pipeline-failure.out"
+
+make_mixed_case "$WORK/existing-spec-foreign-child" 225
+: > "$LOG"
+run_publish "$WORK/existing-spec-foreign-child-dry.out" \
+  "$WORK/existing-spec-foreign-child/S1/manifest.json" \
+  "$WORK/existing-spec-foreign-child/S2/manifest.json"
+expect_exit 0 'foreign-child dry run succeeds before race'
+STATE="$STATE" node -e '
+  const fs = require("fs");
+  const file = process.env.STATE;
+  const state = JSON.parse(fs.readFileSync(file, "utf8"));
+  state.subIssues[225] = [98];
+  fs.writeFileSync(file, JSON.stringify(state));
+'
+: > "$LOG"
+run_publish "$WORK/existing-spec-foreign-child-apply.out" --apply \
+  "$WORK/existing-spec-foreign-child/S1/manifest.json" \
+  "$WORK/existing-spec-foreign-child/S2/manifest.json"
+expect_exit 1 'existing spec with foreign children is rejected on apply'
+expect_has 'existing spec #225 already has sub-issues: #98' \
+  'foreign child is named' "$WORK/existing-spec-foreign-child-apply.out.err"
+expect_without '"write":true' 'foreign child rejection sends no write' "$LOG"
+
 make_case "$WORK/retry"
 : > "$LOG"
 STATE="$STATE" node -e '
@@ -466,6 +637,13 @@ STATE="$STATE" node -e '
   state.writeCount = 0;
   fs.writeFileSync(file, JSON.stringify(state));
 '
+RETRY_FIRST_SPEC=$(STATE="$STATE" node -e '
+  const state = JSON.parse(require("fs").readFileSync(process.env.STATE, "utf8"));
+  process.stdout.write(String(state.nextNumber));
+')
+RETRY_SECOND_SPEC=$((RETRY_FIRST_SPEC + 1))
+RETRY_FIRST_TICKET=$((RETRY_FIRST_SPEC + 2))
+RETRY_SECOND_TICKET=$((RETRY_FIRST_SPEC + 3))
 FAKE_GH_FAIL_WRITE=4
 export FAKE_GH_FAIL_WRITE
 run_publish "$WORK/retry-failed.out" --apply \
@@ -474,11 +652,11 @@ unset FAKE_GH_FAIL_WRITE
 expect_exit 1 "write failure stops publication"
 expect_has 'fake gh: simulated write failure' 'write failure is surfaced' \
   "$WORK/retry-failed.out.err"
-expect_has '"endpoint":"repos/test/repo/issues/306/sub_issues"' \
+expect_has "\"endpoint\":\"repos/test/repo/issues/${RETRY_FIRST_SPEC}/sub_issues\"" \
   'failure happens after ticket creation' "$LOG"
 expect_has '已新建执行票 S1/T1' 'issue created before failure is recorded in output' \
   "$WORK/retry-failed.out"
-expect_has '"number": 308' 'failed run has durable issue record' \
+expect_has "\"number\": ${RETRY_FIRST_TICKET}" 'failed run has durable issue record' \
   "$WORK/retry/S1/published.json"
 
 FAILED_LOG=$LOG
@@ -495,13 +673,13 @@ expect_count 'title=Spec one' 1 'retry does not duplicate first spec' "$LOG"
 expect_count 'title=Spec two' 1 'retry does not duplicate second spec' "$LOG"
 expect_count 'title=Ticket one' 1 'retry does not duplicate first ticket' "$LOG"
 expect_count 'title=Ticket two' 1 'retry does not duplicate second ticket' "$LOG"
-expect_count '"endpoint":"repos/test/repo/issues/306/sub_issues"' 2 \
+expect_count "\"endpoint\":\"repos/test/repo/issues/${RETRY_FIRST_SPEC}/sub_issues\"" 2 \
   'failed sub-issue is retried exactly once more' "$LOG"
-expect_count '"endpoint":"repos/test/repo/issues/306/sub_issues"' 1 \
+expect_count "\"endpoint\":\"repos/test/repo/issues/${RETRY_FIRST_SPEC}/sub_issues\"" 1 \
   'incomplete sub-issue is retried once' "$WORK/retry-resumed.log"
-expect_count '"endpoint":"repos/test/repo/issues/307/sub_issues"' 1 \
+expect_count "\"endpoint\":\"repos/test/repo/issues/${RETRY_SECOND_SPEC}/sub_issues\"" 1 \
   'retry creates remaining sub-issue relation once' "$WORK/retry-resumed.log"
-expect_count '"endpoint":"repos/test/repo/issues/309/dependencies/blocked_by"' 2 \
+expect_count "\"endpoint\":\"repos/test/repo/issues/${RETRY_SECOND_TICKET}/dependencies/blocked_by\"" 2 \
   'retry creates each dependency once' "$LOG"
 expect_count '"method":"PATCH"' 1 'retry patches only pending body once' "$LOG"
 expect_has '"sub:S1/T1"' 'sub relation is recorded' "$WORK/retry/S1/published.json"
@@ -557,72 +735,6 @@ expect_exit 1 "missing handoff issue fails validation"
 expect_has 'GitHub request failed at GET repos/test/repo/issues/999' \
   'missing handoff issue is named' "$WORK/handoff-missing.out.err"
 expect_without '"write":true' 'missing handoff issue sends no write' "$LOG"
-
-make_case "$WORK/start-order"
-mkdir -p "$WORK/start-order/S3/tickets"
-printf '%s\n' '{"key":"S1","title":"Ready spec","body":"spec.md","tickets":[{"key":"T1","title":"Ready ticket","body":"tickets/T1.md","blocked_by":[]}]}' \
-  > "$WORK/start-order/S1/manifest.json"
-printf '%s\n' '## Parent
-#{{S1}}
-Ready.' > "$WORK/start-order/S1/tickets/T1.md"
-printf '%s\n' '{"key":"S2","title":"Partial spec","body":"spec.md","tickets":[{"key":"T1","title":"Local ready","body":"tickets/T1.md","blocked_by":[]},{"key":"T2","title":"Other spec blocker","body":"tickets/T2.md","blocked_by":["S1"]},{"key":"T3","title":"Standalone blocker","body":"tickets/T3.md","blocked_by":["#47"]},{"key":"T4","title":"Indirect blocker","body":"tickets/T4.md","blocked_by":["T3"]},{"key":"T5","title":"Closed blocker ignored","body":"tickets/T5.md","blocked_by":["#49"]}]}' \
-  > "$WORK/start-order/S2/manifest.json"
-for ticket in T1 T2 T3 T4 T5; do
-  printf '## Parent\n#{{S2}}\nTicket %s.\n' "$ticket" \
-    > "$WORK/start-order/S2/tickets/$ticket.md"
-done
-printf '%s\n' '{"key":"S3","title":"Waiting spec","body":"spec.md","tickets":[{"key":"T1","title":"Other ticket blocker","body":"tickets/T1.md","blocked_by":["S2/T2"]},{"key":"T2","title":"Internal indirect","body":"tickets/T2.md","blocked_by":["T1"]},{"key":"T3","title":"Existing spec blocker","body":"tickets/T3.md","blocked_by":["#48"]}]}' \
-  > "$WORK/start-order/S3/manifest.json"
-for ticket in T1 T2 T3; do
-  printf '## Parent\n#{{S3}}\nTicket %s.\n' "$ticket" \
-    > "$WORK/start-order/S3/tickets/$ticket.md"
-done
-printf '%s\n' 'Ready spec body.' > "$WORK/start-order/S1/spec.md"
-printf '%s\n' 'Partial spec body.' > "$WORK/start-order/S2/spec.md"
-printf '%s\n' 'Waiting spec body.' > "$WORK/start-order/S3/spec.md"
-
-: > "$LOG"
-run_publish "$WORK/start-order-dry.out" \
-  "$WORK/start-order/S1/manifest.json" \
-  "$WORK/start-order/S2/manifest.json" \
-  "$WORK/start-order/S3/manifest.json"
-expect_exit 0 "start-order dry run succeeds"
-expect_has '- 现在可开：S1 Ready spec' \
-  'dry start order shows ready spec' "$WORK/start-order-dry.out"
-expect_has '- 部分可开：S2 Partial spec：可先做 S2/T1、S2/T5；S2/T2 要等 S1（同批规格）、S2/T3 要等 #47（单独的票，implement-spec-split 不会处理，需另行安排）、S2/T4 要等 #47（单独的票，implement-spec-split 不会处理，需另行安排）' \
-  'dry start order explains partial blockers' "$WORK/start-order-dry.out"
-expect_has '- 要等：S3 Waiting spec：全部执行票要等 S2（同批规格）、#48（已有规格）' \
-  'dry start order shows fully blocked spec' "$WORK/start-order-dry.out"
-expect_without 'S2/T5 要等' 'closed existing blocker is ignored' \
-  "$WORK/start-order-dry.out"
-
-: > "$LOG"
-run_publish "$WORK/start-order-apply.out" --apply \
-  "$WORK/start-order/S1/manifest.json" \
-  "$WORK/start-order/S2/manifest.json" \
-  "$WORK/start-order/S3/manifest.json"
-expect_exit 0 "start-order apply succeeds"
-ORDER_NUMBERS=$(node -e '
-  const fs = require("fs");
-  const root = process.argv[1];
-  const issue = (spec, key) => JSON.parse(
-    fs.readFileSync(`${root}/${spec}/published.json`, "utf8")
-  ).issues[key].number;
-  process.stdout.write([
-    issue("S1", "S1"), issue("S2", "S2"), issue("S2", "T1"),
-    issue("S2", "T2"), issue("S2", "T3"), issue("S2", "T4"),
-    issue("S2", "T5"), issue("S3", "S3"),
-  ].join(" "));
-' "$WORK/start-order")
-read S1_NUM S2_NUM S2T1_NUM S2T2_NUM S2T3_NUM S2T4_NUM S2T5_NUM S3_NUM <<EOF
-$ORDER_NUMBERS
-EOF
-expect_has "- 现在可开：#${S1_NUM} Ready spec" \
-  'apply start order uses ready spec number' "$WORK/start-order-apply.out"
-expect_has "- 部分可开：#${S2_NUM} Partial spec：可先做 #${S2T1_NUM}、#${S2T5_NUM}；#${S2T2_NUM} 要等 #${S1_NUM}（同批规格）、#${S2T3_NUM} 要等 #47（单独的票，implement-spec-split 不会处理，需另行安排）、#${S2T4_NUM} 要等 #47（单独的票，implement-spec-split 不会处理，需另行安排）" \
-  'apply start order explains real ticket numbers' "$WORK/start-order-apply.out"
-expect_has "- 要等：#${S3_NUM} Waiting spec：全部执行票要等 #${S2_NUM}（同批规格）、#48（已有规格）" \
-  'apply start order shows real waiting spec' "$WORK/start-order-apply.out"
 
 make_case "$WORK/unresolved-only"
 mutate_manifest "$WORK/unresolved-only/S2/manifest.json" \

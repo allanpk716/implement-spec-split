@@ -123,10 +123,40 @@ const issues = new Map([
   [63, {number: 63, title: 'Ticket beta', parent: 22}],
   [64, {number: 64, title: 'Ticket other map', parent: 23}],
   [74, {number: 74, title: 'Ticket gamma', parent: 23}],
+  [65, {number: 65, title: 'Existing spec implementation', parent: 22}],
+  [66, {number: 66, title: 'Blocked spec implementation', parent: 22}],
+  [224, {
+    number: 224,
+    title: 'Existing spec twenty-four',
+    state: 'open',
+    body: '## Problem Statement\n\n实现票：#65\n地图：#22\n',
+  }],
+  [225, {
+    number: 225,
+    title: 'Existing spec with children',
+    state: 'open',
+    body: '## Problem Statement\n\n实现票：#66\n地图：#22\n',
+  }],
+  [226, {
+    number: 226,
+    title: 'Closed existing spec',
+    state: 'closed',
+    body: '## Problem Statement\n\n实现票：#65\n地图：#22\n',
+  }],
+  [227, {
+    number: 227,
+    title: 'Issue without spec heading',
+    state: 'open',
+    body: '实现票：#65\n地图：#22\n',
+  }],
 ]);
 fs.appendFileSync(logFile, `${JSON.stringify({args})}\n`);
 if (args[0] === 'repo' && args[1] === 'view') {
   process.stdout.write('test/repo\n');
+  process.exit(0);
+}
+if (args[0] === 'api' && args[1].endsWith('/sub_issues')) {
+  process.stdout.write(args[1].startsWith('repos/test/repo/issues/225/') ? '1\n' : '0\n');
   process.exit(0);
 }
 if (args[0] !== 'issue' || args[1] !== 'view') {
@@ -143,6 +173,8 @@ const fieldsArgument = args[args.indexOf('--json') + 1];
 const fields = fieldsArgument.split(',');
 const result = {number: issue.number};
 if (fields.includes('title')) result.title = issue.title;
+  if (fields.includes('state')) result.state = issue.state || 'open';
+  if (fields.includes('body')) result.body = issue.body || '';
 if (fields.includes('parent')) result.parent = issue.parent === undefined
   ? null
   : {number: issue.parent, title: `Map ${issue.parent}`};
@@ -197,6 +229,50 @@ expect_has '## 本组补充' 'S2 note heading is inserted' "$SUCCESS/S2/brief.md
 expect_has 'S2-only supplementary material.' 'S2 note content is inserted' "$SUCCESS/S2/brief.md"
 expect_without 'S2-only supplementary material.' \
   'S2 note is absent from S1' "$SUCCESS/S1/brief.md"
+
+EXISTING_SPEC=$WORK/existing-spec
+run_brief "$WORK/existing-spec.out" --example 205 "$EXISTING_SPEC" \
+  S1=62,63 S2=spec:224
+expect_exit 0 'mixed groups generate successfully'
+expect_first_line '# 任务：为已有规格 #224 起草执行票（只写草稿，不发布）' \
+  'existing-spec template opening is used' "$EXISTING_SPEC/S2/brief.md"
+expect_has '规格 #224「Existing spec twenty-four」已经写好' \
+  'existing spec identity is substituted' "$EXISTING_SPEC/S2/brief.md"
+expect_has '#65「Existing spec implementation」' \
+  'existing spec implementation tickets are substituted' "$EXISTING_SPEC/S2/brief.md"
+expect_has '"existing_spec": 224' \
+  'existing-spec manifest format is documented' "$EXISTING_SPEC/S2/brief.md"
+expect_has '- S2：已有规格 #224 Existing spec twenty-four（只拆票）' \
+  'existing-spec group appears in every groups list' "$EXISTING_SPEC/S1/brief.md"
+expect_has '- S1 · 地图 #22 · 覆盖 #62「Ticket alpha」、#63「Ticket beta」' \
+  'new-spec group appears in existing-spec brief' "$EXISTING_SPEC/S2/brief.md"
+expect_without '@@' 'existing-spec brief has no variable left' "$EXISTING_SPEC/S2/brief.md"
+expect_has '不要写 `body`' 'existing-spec manifest omits spec body' \
+  "$EXISTING_SPEC/S2/brief.md"
+expect_has '不要生成 `spec.md`' 'existing-spec brief does not draft a spec' \
+  "$EXISTING_SPEC/S2/brief.md"
+
+CHILDREN=$WORK/existing-spec-children
+run_brief "$WORK/existing-spec-children.out" --example 205 "$CHILDREN" \
+  S1=spec:225
+expect_exit 1 'existing spec with children is rejected'
+expect_has 'existing spec #225 already has sub-issues' \
+  'existing-spec children error is explained' "$WORK/existing-spec-children.out.err"
+expect_no_directory "$CHILDREN" 'existing-spec children failure writes no files'
+
+CLOSED_SPEC=$WORK/closed-spec
+run_brief "$WORK/closed-spec.out" --example 205 "$CLOSED_SPEC" S1=spec:226
+expect_exit 1 'closed existing spec is rejected'
+expect_has 'existing spec #226 is not open (state: closed)' \
+  'closed-spec error is explained' "$WORK/closed-spec.out.err"
+expect_no_directory "$CLOSED_SPEC" 'closed-spec failure writes no files'
+
+NO_HEADING=$WORK/no-spec-heading
+run_brief "$WORK/no-spec-heading.out" --example 205 "$NO_HEADING" S1=spec:227
+expect_exit 1 'existing issue without Problem Statement is rejected'
+expect_has 'existing spec #227 has no ## Problem Statement section' \
+  'missing-heading error is explained' "$WORK/no-spec-heading.out.err"
+expect_no_directory "$NO_HEADING" 'missing-heading failure writes no files'
 
 MISMATCH=$WORK/mismatch
 run_brief "$WORK/mismatch.out" --example 205 "$MISMATCH" S1=62,64

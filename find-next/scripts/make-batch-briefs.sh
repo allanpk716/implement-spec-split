@@ -8,10 +8,13 @@ usage() {
 Usage: make-batch-briefs.sh [--repo <owner/name>] --example <issue>
                             [--note S<k>=<file>]... [--force]
                             <run-directory> S1=62 S2=63,64...
+                                                   S3=spec:224...
 
 Generate <run-directory>/S<k>/brief.md from the batch Brief template. Tickets
-in one group must have the same parent issue (the wayfinder map). Existing
-brief.md files are rejected unless --force is passed.
+in one group must have the same parent issue (the wayfinder map). A group of
+the form S<k>=spec:<issue> drafts execution tickets for that already-existing
+spec instead of creating a new spec. Existing brief.md files are rejected
+unless --force is passed.
 EOF
 }
 
@@ -34,6 +37,7 @@ FORCE=0
 RUN_DIR=
 GROUP_KEYS=()
 GROUP_TICKETS=()
+GROUP_MODES=()
 NOTE_KEYS=()
 NOTE_FILES=()
 
@@ -104,12 +108,14 @@ fi
 
 SEEN_KEYS=()
 SEEN_TICKETS=()
+SEEN_EXISTING_SPECS=()
 index=0
 while [ "$index" -lt "${#GROUP_KEYS[@]}" ]; do
   key=${GROUP_KEYS[$index]}
-  ticket_list=${GROUP_TICKETS[$index]}
+  ticket_argument=${GROUP_TICKETS[$index]}
   [[ "$key" =~ ^S[1-9][0-9]*$ ]] || die "group key must be S<number>: $key"
-  [[ "$ticket_list" != "$key" ]] || die "group $key must be S<number>=<ticket,...>"
+  [[ "$ticket_argument" != "$key" ]] ||
+    die "group $key must be S<number>=<ticket,...> or S<number>=spec:<issue>"
   seen_index=0
   while [ "$seen_index" -lt "${#SEEN_KEYS[@]}" ]; do
     [ "${SEEN_KEYS[$seen_index]}" != "$key" ] || die "duplicate group key: $key"
@@ -117,26 +123,54 @@ while [ "$index" -lt "${#GROUP_KEYS[@]}" ]; do
   done
   SEEN_KEYS+=("$key")
 
-  IFS=, read -r -a tickets <<< "$ticket_list"
-  [ "${#tickets[@]}" -gt 0 ] || die "group $key has no tickets"
-  group_seen=()
-  for ticket in "${tickets[@]}"; do
-    [[ "$ticket" =~ ^[1-9][0-9]*$ ]] || die "group $key has an invalid ticket number: $ticket"
+  if [[ "$ticket_argument" == spec:* ]]; then
+    spec_number=${ticket_argument#spec:}
+    [[ "$spec_number" =~ ^[1-9][0-9]*$ ]] ||
+      die "group $key has an invalid existing spec number: $spec_number"
     seen_index=0
-    while [ "$seen_index" -lt "${#group_seen[@]}" ]; do
-      [ "${group_seen[$seen_index]}" != "$ticket" ] ||
-        die "group $key repeats ticket #$ticket"
+    while [ "$seen_index" -lt "${#SEEN_EXISTING_SPECS[@]}" ]; do
+      [ "${SEEN_EXISTING_SPECS[$seen_index]}" != "$spec_number" ] ||
+        die "existing spec #$spec_number appears in more than one group"
       seen_index=$((seen_index + 1))
     done
     seen_index=0
     while [ "$seen_index" -lt "${#SEEN_TICKETS[@]}" ]; do
-      [ "${SEEN_TICKETS[$seen_index]}" != "$ticket" ] ||
-        die "ticket #$ticket appears in more than one group"
+      [ "${SEEN_TICKETS[$seen_index]}" != "$spec_number" ] ||
+        die "existing spec #$spec_number also appears as an implementation ticket"
       seen_index=$((seen_index + 1))
     done
-    group_seen+=("$ticket")
-    SEEN_TICKETS+=("$ticket")
-  done
+    SEEN_EXISTING_SPECS+=("$spec_number")
+    GROUP_MODES+=("existing-spec")
+  else
+    IFS=, read -r -a tickets <<< "$ticket_argument"
+    [ "${#tickets[@]}" -gt 0 ] || die "group $key has no tickets"
+    group_seen=()
+    for ticket in "${tickets[@]}"; do
+      [[ "$ticket" =~ ^[1-9][0-9]*$ ]] ||
+        die "group $key has an invalid ticket number: $ticket"
+      seen_index=0
+      while [ "$seen_index" -lt "${#group_seen[@]}" ]; do
+        [ "${group_seen[$seen_index]}" != "$ticket" ] ||
+          die "group $key repeats ticket #$ticket"
+        seen_index=$((seen_index + 1))
+      done
+      seen_index=0
+      while [ "$seen_index" -lt "${#SEEN_TICKETS[@]}" ]; do
+        [ "${SEEN_TICKETS[$seen_index]}" != "$ticket" ] ||
+          die "ticket #$ticket appears in more than one group"
+        seen_index=$((seen_index + 1))
+      done
+      seen_index=0
+      while [ "$seen_index" -lt "${#SEEN_EXISTING_SPECS[@]}" ]; do
+        [ "${SEEN_EXISTING_SPECS[$seen_index]}" != "$ticket" ] ||
+          die "implementation ticket #$ticket also appears as an existing spec"
+        seen_index=$((seen_index + 1))
+      done
+      group_seen+=("$ticket")
+      SEEN_TICKETS+=("$ticket")
+    done
+    GROUP_MODES+=("tickets")
+  fi
   index=$((index + 1))
 done
 
@@ -183,6 +217,7 @@ fi
 GROUP_ISSUES=()
 GROUP_MAPS=()
 GROUP_MAP_JSON=()
+GROUP_SPEC_JSON=()
 MAP_CACHE_KEYS=()
 MAP_CACHE_JSON=()
 
@@ -201,14 +236,90 @@ issue_parent() {
   ' || return 1
 }
 
+existing_spec_facts() {
+  printf '%s' "$1" | node -e '
+    let value;
+    try {
+      value = JSON.parse(require("fs").readFileSync(0, "utf8"));
+    } catch (_) {
+      process.exit(1);
+    }
+    const body = String(value && value.body || "");
+    const hasProblemStatement = /^[ \t]*## Problem Statement[ \t\r]*$/m.test(body);
+    process.stdout.write(`${String(value && value.state || "")}\n${hasProblemStatement ? 1 : 0}\n`);
+  '
+}
+
+existing_spec_implementation_numbers() {
+  printf '%s' "$1" | node -e '
+    let value;
+    try {
+      value = JSON.parse(require("fs").readFileSync(0, "utf8"));
+    } catch (_) {
+      process.exit(1);
+    }
+    const numbers = new Set();
+    const body = String(value && value.body || "");
+    const linkPattern = /^[ \t]*实现票\s*[：:][ \t]*#[1-9][0-9]*(?:\s*(?:[,，、和]|and)\s*#[1-9][0-9]*)*/gm;
+    for (const lineMatch of body.matchAll(linkPattern)) {
+      for (const match of lineMatch[0].matchAll(/#([1-9][0-9]*)/g)) {
+        numbers.add(match[1]);
+      }
+    }
+    for (const number of numbers) console.log(number);
+  '
+}
+
+gh_sub_issue_count() {
+  gh api "repos/$REPO/issues/$1/sub_issues" --jq length
+}
+
 index=0
 while [ "$index" -lt "${#GROUP_KEYS[@]}" ]; do
   key=${GROUP_KEYS[$index]}
-  ticket_list=${GROUP_TICKETS[$index]}
-  IFS=, read -r -a tickets <<< "$ticket_list"
+  ticket_argument=${GROUP_TICKETS[$index]}
   group_map=
   group_issues=
+  group_spec_json=
+
+  if [ "${GROUP_MODES[$index]}" = "existing-spec" ]; then
+    spec_number=${ticket_argument#spec:}
+    group_spec_json=$(gh_issue_view "$spec_number" number,title,state,body) ||
+      die "could not read existing spec #$spec_number with gh issue view"
+    spec_facts=$(existing_spec_facts "$group_spec_json") ||
+      die "could not parse existing spec #$spec_number"
+    spec_state=${spec_facts%%$'\n'*}
+    spec_has_heading=${spec_facts##*$'\n'}
+    [ "$spec_state" = "open" ] ||
+      die "existing spec #$spec_number is not open (state: $spec_state)"
+    [ "$spec_has_heading" = "1" ] ||
+      die "existing spec #$spec_number has no ## Problem Statement section"
+    sub_issue_count=$(gh_sub_issue_count "$spec_number") ||
+      die "could not read sub-issues of existing spec #$spec_number"
+    [[ "$sub_issue_count" =~ ^[0-9]+$ ]] ||
+      die "gh returned an invalid sub-issue count for existing spec #$spec_number"
+    [ "$sub_issue_count" -eq 0 ] ||
+      die "existing spec #$spec_number already has sub-issues"
+
+    implementation_numbers=$(existing_spec_implementation_numbers "$group_spec_json") ||
+      die "could not parse the implementation ticket links of existing spec #$spec_number"
+    [ -n "$implementation_numbers" ] ||
+      die "existing spec #$spec_number has no 实现票： line"
+    impl_numbers=${implementation_numbers//$'\n'/,}
+    IFS=, read -r -a tickets <<< "$impl_numbers"
+  else
+    IFS=, read -r -a tickets <<< "$ticket_argument"
+  fi
+
   for ticket in "${tickets[@]}"; do
+    if [ "${GROUP_MODES[$index]}" = "existing-spec" ]; then
+      seen_index=0
+      while [ "$seen_index" -lt "${#SEEN_TICKETS[@]}" ]; do
+        [ "${SEEN_TICKETS[$seen_index]}" != "$ticket" ] ||
+          die "implementation ticket #$ticket appears in more than one group"
+        seen_index=$((seen_index + 1))
+      done
+    fi
     issue_json=$(gh_issue_view "$ticket" number,title,parent) ||
       die "could not read issue #$ticket with gh issue view"
     ticket_map=$(issue_parent "$issue_json") ||
@@ -219,6 +330,9 @@ while [ "$index" -lt "${#GROUP_KEYS[@]}" ]; do
       die "group $key has tickets with different parent maps: #$group_map and #$ticket_map"
     fi
     group_issues+="${group_issues:+$'\037'}$issue_json"
+    if [ "${GROUP_MODES[$index]}" = "existing-spec" ]; then
+      SEEN_TICKETS+=("$ticket")
+    fi
   done
 
   map_json=
@@ -240,6 +354,7 @@ while [ "$index" -lt "${#GROUP_KEYS[@]}" ]; do
   GROUP_ISSUES+=("$group_issues")
   GROUP_MAPS+=("$group_map")
   GROUP_MAP_JSON+=("$map_json")
+  GROUP_SPEC_JSON+=("$group_spec_json")
   index=$((index + 1))
 done
 
@@ -251,6 +366,9 @@ SCRIPT_DIR=$(cd -- "${SCRIPT_SOURCE%/*}" && pwd) || die "could not resolve the s
 TEMPLATE=$SCRIPT_DIR/../templates/brief-spec-batch.md
 [ -f "$TEMPLATE" ] || die "Brief template was not found: $TEMPLATE"
 [ -r "$TEMPLATE" ] || die "Brief template is not readable: $TEMPLATE"
+TICKETS_TEMPLATE=$SCRIPT_DIR/../templates/brief-tickets-batch.md
+[ -f "$TICKETS_TEMPLATE" ] || die "Brief template was not found: $TICKETS_TEMPLATE"
+[ -r "$TICKETS_TEMPLATE" ] || die "Brief template is not readable: $TICKETS_TEMPLATE"
 SKILLS_ROOT=${FIND_NEXT_SKILLS_ROOT:-$HOME/.claude/plugins/cache/mattpocock/mattpocock-skills}
 [ -d "$SKILLS_ROOT" ] || die "skills root was not found: $SKILLS_ROOT"
 
@@ -264,11 +382,13 @@ while [ "$index" -lt "${#GROUP_KEYS[@]}" ]; do
   index=$((index + 1))
 done
 
-set -- "$TEMPLATE" "$REPO_PATH" "$REPO" "$EXAMPLE" "$RUN_DIR" "$SKILLS_ROOT"
+set -- "$TEMPLATE" "$TICKETS_TEMPLATE" "$REPO_PATH" "$REPO" "$EXAMPLE" \
+  "$RUN_DIR" "$SKILLS_ROOT"
 index=0
 while [ "$index" -lt "${#GROUP_KEYS[@]}" ]; do
   set -- "$@" --group "${GROUP_KEYS[$index]}" "${GROUP_TICKETS[$index]}" \
-    "${GROUP_ISSUES[$index]}" "${GROUP_MAPS[$index]}" "${GROUP_MAP_JSON[$index]}"
+    "${GROUP_MODES[$index]}" "${GROUP_ISSUES[$index]}" "${GROUP_MAPS[$index]}" \
+    "${GROUP_MAP_JSON[$index]}" "${GROUP_SPEC_JSON[$index]}"
   index=$((index + 1))
 done
 note_index=0
@@ -282,7 +402,9 @@ const fs = require('fs');
 const path = require('path');
 
 const argv = process.argv.slice(2);
-const [templatePath, repoPath, repo, example, runDir, skillsRoot] = argv;
+const [
+  templatePath, ticketsTemplatePath, repoPath, repo, example, runDir, skillsRoot,
+] = argv;
 const groups = [];
 const notes = new Map();
 for (let index = 0; index < argv.length; index++) {
@@ -291,9 +413,11 @@ for (let index = 0; index < argv.length; index++) {
     groups.push({
       key: argv[++index],
       ticketArgument: argv[++index],
+      mode: argv[++index],
       issuesArgument: argv[++index],
       mapArgument: argv[++index],
       mapJsonArgument: argv[++index],
+      specJsonArgument: argv[++index],
     });
   } else {
     notes.set(argv[++index], argv[++index]);
@@ -349,7 +473,13 @@ const toTickets = latestSkill('to-tickets');
 
 const parsedGroups = [];
 for (const group of groups) {
-  const ticketNumbers = group.ticketArgument.split(',');
+  const existingSpecMode = group.mode === 'existing-spec';
+  if (!existingSpecMode && group.mode !== 'tickets') {
+    fail(`internal error: unknown group mode ${group.mode}`);
+  }
+  const ticketNumbers = existingSpecMode
+    ? []
+    : group.ticketArgument.split(',');
   const issueRecords = group.issuesArgument
     .split('\u001f')
     .filter(value => value !== '')
@@ -360,7 +490,7 @@ for (const group of groups) {
         fail(`could not parse the gh issue view result for group ${group.key}`);
       }
     });
-  if (issueRecords.length !== ticketNumbers.length) {
+  if (!existingSpecMode && issueRecords.length !== ticketNumbers.length) {
     fail(`gh returned ${issueRecords.length} issues for ${ticketNumbers.length} tickets`);
   }
 
@@ -375,7 +505,9 @@ for (const group of groups) {
   }
 
   const tickets = issueRecords.map((issue, index) => {
-    const expected = Number(ticketNumbers[index]);
+    const expected = existingSpecMode
+      ? issue.number
+      : Number(ticketNumbers[index]);
     if (!Number.isInteger(issue.number) || issue.number !== expected) {
       fail(`gh returned issue #${issue.number} where #${expected} was expected`);
     }
@@ -392,6 +524,28 @@ for (const group of groups) {
     return {number: issue.number, title: issue.title};
   });
 
+  let existingSpec = null;
+  let existingSpecTitle = '';
+  if (existingSpecMode) {
+    let spec;
+    try {
+      spec = JSON.parse(group.specJsonArgument);
+    } catch (error) {
+      fail(`could not parse the gh issue view result for group ${group.key}`);
+    }
+    existingSpec = Number(spec.number);
+    existingSpecTitle = String(spec.title || '');
+    if (!Number.isInteger(existingSpec) || existingSpec <= 0) {
+      fail(`existing spec for group ${group.key} has no issue number`);
+    }
+    if (existingSpecTitle === '') {
+      fail(`existing spec #${existingSpec} has no title`);
+    }
+    if (tickets.length === 0) {
+      fail(`existing spec #${existingSpec} has no implementation ticket links`);
+    }
+  }
+
   let noteContent = '';
   if (notes.has(group.key)) {
     try {
@@ -405,6 +559,8 @@ for (const group of groups) {
     map: Number(group.mapArgument),
     mapTitle,
     tickets,
+    existingSpec,
+    existingSpecTitle,
     noteContent,
     dir: path.resolve(runDir, group.key),
   });
@@ -428,7 +584,10 @@ function ticketList(tickets) {
 }
 
 const groupLines = parsedGroups.map(group =>
-  `- ${group.key} · 地图 #${group.map} · 覆盖 ${ticketList(group.tickets)}`).join('\n');
+  group.existingSpec === null
+    ? `- ${group.key} · 地图 #${group.map} · 覆盖 ${ticketList(group.tickets)}`
+    : `- ${group.key}：已有规格 #${group.existingSpec} ${group.existingSpecTitle}（只拆票）`
+).join('\n');
 
 let template;
 try {
@@ -438,9 +597,17 @@ try {
 }
 template = template.replace(/^\s*<!--[\s\S]*?-->\s*/, '');
 
+let ticketsTemplate;
+try {
+  ticketsTemplate = fs.readFileSync(ticketsTemplatePath, 'utf8');
+} catch (error) {
+  fail(`could not read the Brief template: ${error.message}`);
+}
+ticketsTemplate = ticketsTemplate.replace(/^\s*<!--[\s\S]*?-->\s*/, '');
+
 const renderedGroups = [];
 for (const group of parsedGroups) {
-  let output = template;
+  let output = group.existingSpec === null ? template : ticketsTemplate;
   const values = new Map([
     ['REPO_PATH', repoPath],
     ['REPO', repo],
@@ -455,6 +622,10 @@ for (const group of parsedGroups) {
     ['TICKETS', ticketList(group.tickets)],
     ['GROUPS', groupLines],
   ]);
+  if (group.existingSpec !== null) {
+    values.set('SPEC_NUM', group.existingSpec);
+    values.set('SPEC_TITLE', group.existingSpecTitle);
+  }
   for (const [name, value] of values) {
     output = replaceAll(output, name, value);
   }
