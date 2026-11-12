@@ -12,7 +12,8 @@ Terms (Orchestrator, In-session subagent, External worker, Implement backend, Br
 
 ## Usage
 
-- `/implement-spec-split <spec ref> [backend options]`: implement or recover one Spec as described below.
+- `/implement-spec-split <spec ref> [backend options]`: implement or recover one Spec as described below. The spec ref is required.
+- `/implement-spec-split [backend options]` without a spec ref: do not scan or list candidates. Say "先运行 `/find-next --batch`，它给出开发顺序和每个 worktree 要敲的命令" and stop. Choosing what to build happens in one place (find-next), so several worktrees started at once never scan and pick in parallel.
 - `/implement-spec-split --status`: only run `<skill dir>/scripts/pipeline-status.sh`, relay its result, and stop. Do not take a Spec, run preflight, or dispatch a worker.
 
 ## Config (edit here to change the policy)
@@ -42,7 +43,9 @@ With the `sonnet` backend, pass the `model` parameter explicitly on every Agent 
 
 ## Step 0: pick the spec and take it
 
-Several Runs may work at once, one Spec each, typically one Claude Code session per Orca worktree. The Spec's integration branch, always named exactly `spec-<n>`, is what marks a Spec as taken; Orca metadata only shows it to the user. Here `<n>` is always the **Spec issue number**, not the number of a wayfinder map or map implementation ticket.
+Several Runs may work at once, one Spec each, typically one Claude Code session per worktree, all started from the order that `/find-next --batch` printed. Here `<n>` is always the **Spec issue number**, not the number of a wayfinder map or map implementation ticket.
+
+A Spec is taken when its integration branch `spec-<n>` exists. Whether the Run holding it is still alive is recorded in its **claim record** (GLOSSARY.md): `$(git rev-parse --git-common-dir)/implement-spec-split/claims/spec-<n>.json`, written and read only through `<skill dir>/scripts/claim.sh`. It stores the PID and start time of the Claude Code process that took the Spec, so liveness does not depend on Orca. `claim.sh status <n>` prints `free`, `active <record>` (the holder process is alive) or `interrupted <record|none>` (branch exists, holder gone or no record).
 
 On GitHub, identify Specs structurally, not by a “规格：” title prefix:
 
@@ -54,31 +57,32 @@ Resolve a Spec to its Tickets in this order:
 1. If the Spec issue has its own sub-issues, those sub-issues are the Tickets.
 2. Otherwise, take the open wayfinder map implementation tickets referenced on an `实现票：#<n>` (also `实现票为 #<n>`) or `Implementation ticket(s): #<n>` line in the Spec body (only that line counts: specs also mention other map tickets as out of scope, and those must not be collected). to-spec does not write this line by itself, so the repo's tracker doc should require it. Such an implementation ticket has no `wayfinder:*` label and belongs to a `wayfinder:map` issue. If it has sub-issues, those sub-issues are the Tickets; if it has none, that implementation ticket is itself the one Ticket (a single-ticket Spec). Multiple referenced implementation tickets are all collected.
 
-1. **Candidates.** If the user passed a spec reference (number, URL, path), it is the only candidate; verify that it meets one of the Spec rules above. Otherwise discover candidates via the tracker doc (`docs/agents/issue-tracker.md`). For GitHub, run:
+1. **Verify the ref.** It must meet one of the Spec rules above; otherwise say so and stop.
+2. **Take it atomically**, from any directory inside the repo:
 
    ```bash
-   <skill dir>/scripts/pipeline-status.sh
+   <skill dir>/scripts/claim.sh take <n>
    ```
 
-   The script lists four stages: `可以实现` (the candidates), `有规格、未拆票` (suggest `to-tickets`), `缺规格` (suggest `to-spec`), and `地图仍在探索` (suggest `wayfinder`). When asking the user, append the three non-candidate groups after the candidate list as hints. For non-GitHub trackers, do the equivalent per the tracker doc.
-2. **State of each candidate.** "In Orca" means `ORCA_WORKTREE_ID` is set and `orca` is on PATH.
-   - **free**: no local branch `spec-<n>` (nor a legacy `spec-<n>-*` from before this naming rule);
-   - **in progress**: the branch exists and, in Orca, some worktree in `orca worktree list --json` has `linkedIssue` = n and `workspaceStatus` = `in-progress`, with a live Claude terminal in it (`orca terminal list --json`: same `worktreePath`, `agentIdentity` = `claude`);
-   - **interrupted?**: the branch exists but no such worktree + live terminal. Outside Orca, a Spec with a branch is shown as "in progress or interrupted".
-   - **blocked**: every open ticket is blocked by tickets outside this Spec that are not merged into the main branch yet (e.g. another Run's Spec); its frontier is empty.
-3. **Ask.** Without a spec reference, always list the candidates (number, progress, state, title; for in progress / interrupted also the worktree and when the branch last moved, `git log -1 --format=%cr spec-<n>`) and ask which one; implement one spec per run. None -> say so and stop. A blocked Spec can be listed but not taken: say what blocks it.
-4. **Take it.**
-   - free: create the integration branch in its own worktree, next to the repo: `git worktree add -b spec-<n> <repo parent>/<repo>-wt/spec-<n> <main branch>`. git refuses if the branch exists, so if this fails another Run just took the Spec: tell the user and ask again (Recovery or another Spec).
-   - in progress / interrupted: this is **Recovery** (GLOSSARY.md): see "Recovery" below. For in progress, first warn that the other session still looks alive and two Runs on one Spec will collide, and go on only if the user confirms.
-   - In Orca, mark the session: `orca worktree set --worktree current --issue <n> --workspace-status in-progress` and `orca terminal rename --title "spec-<n> <short title>"` (the title is for the user only; the worktree metadata is what step 2 reads).
-5. Exactly one Spec per Run. `--parallel` / `GLM_MAX_PARALLEL` counts this Run's External workers only; parallel Runs add up and share the same GLM quota, so a 429 tends to hit all of them at once.
+   It creates branch `spec-<n>` with its worktree at `<repo parent>/<repo>-wt/spec-<n>` from the main branch and writes the claim record, under a short repo-wide lock so two sessions cannot both pass the check. Exit 0 prints the worktree path. Exit 3 means the branch already exists; the output says whether it is `active` or `interrupted`:
+   - `active`: another live Run holds it. Tell the user which worktree, and stop. Never work on it in parallel.
+   - `interrupted`: this is **Recovery** (GLOSSARY.md). Ask the user to confirm, then `claim.sh resume <n>` (rewrites the record with this session as holder) and continue under "Recovery" below.
+3. **Blocked Spec.** If every open ticket is blocked by tickets outside this Spec that are not merged into the main branch yet (its frontier is empty), say what blocks it, `claim.sh release <n>`, remove the just-created worktree and branch if they have no commits, and stop.
+4. In Orca (`ORCA_WORKTREE_ID` set and `orca` on PATH), also mark the session for the user: `orca worktree set --worktree current --issue <n> --workspace-status in-progress` and `orca terminal rename --title "spec-<n> <short title>"`. This is display only; the claim record is what other Runs and find-next read.
+5. Exactly one Spec per Run. `--parallel` / `GLM_MAX_PARALLEL` counts this Run's External workers only; on top of that, every External worker on the machine queues for one of the shared worker slots (see "External workers").
 6. If the backend is `codex` or `pi`, run the preflight from "External workers" now, before any other work.
+
+### Tickets blocked by another Spec
+
+Some open tickets may be blocked by tickets that belong to another Spec (or a standalone issue) not yet merged into the main branch. Build only the rest. Never implement the other Spec's scope inside this one, not even a "small shared helper": that is how one judgement got written twice in #222 and #223. Leave those tickets open, finish and land the rest, keep this Spec open, and say in the final report which tickets wait for which Spec.
+
+If you need to know whether the blocking Spec is being worked on, check it fresh at that moment with `claim.sh status <m>` together with the issue state. Never conclude "nobody is working on it" from the issue being open, and never reuse what you saw in step 0.
 
 ### Recovery
 
-Continue the Spec on its existing integration branch and integration worktree (`git worktree list` shows where `spec-<n>` is checked out). Closed tickets count as already merged; only the open ones form the frontier. Then, for each leftover ticket worktree of this Spec (`spec-<n>-t<m>` in `git worktree list`), with its newest run dir under `~/.cache/implement-spec-split/runs/<n>-*/`:
+Continue the Spec on its existing integration branch and integration worktree (`git worktree list` shows where `spec-<n>` is checked out). Closed tickets count as already merged; only the open ones form the frontier. Then, for each leftover ticket worktree of this Spec (`spec-<n>-t<m>` in `git worktree list`), with its newest run dir under `~/.cache/implement-spec-split/runs/<repo>-<n>-*/`:
 
-- its wrapper still running (`pgrep -f <run dir>`, or `progress.sh` says `running`): wait for it, never kill it;
+- its wrapper still running (`pgrep -f <run dir>`, or `progress.sh` says `running` / `queued`): wait for it, never kill it;
 - `status.json` present: handle it by the exit-code rules under "External workers", as if this Run had launched it;
 - no `status.json` (the wrapper died with the old session): treat as `error`. If the ticket branch has commits, keep the worktree and re-brief in it with a fresh run dir; otherwise remove the worktree and dispatch the ticket afresh.
 - With the `sonnet` backend there are no run dirs: a ticket worktree with commits goes through the verification gate, one without is removed and redispatched.
@@ -97,10 +101,22 @@ Continue the Spec on its existing integration branch and integration worktree (`
 5. When an implementer completes, verify it (External workers: the verification gate below), then dispatch a merger that merges its work into the integration branch and re-runs the test suite. **Run one merger at a time**; queue the rest.
    - For Go repos, the merger also cross-compiles for the other platforms CI builds (`CGO_ENABLED=0 GOOS=linux go vet ./...` and `CGO_ENABLED=0 GOOS=darwin go vet ./...`, or `GOOS=windows` when running on Linux/macOS). A local suite only proves the host platform: files named `*_windows.go` / `*_linux.go` etc. are silently excluded elsewhere, so a green local run can hide a red CI lane.
 6. If this changes the frontier, dispatch implementers for the newly unblocked tickets.
-7. **Review (the split point).** When all tickets are merged, call the Skill tool with `mattpocock-skills:code-review` (not the built-in `code-review`, which does not spawn the two axis sub-agents) on the integration branch, using the branch point from the main branch as the fixed point. When it spawns the Standards and Spec sub-agents, set `model: REVIEW_MODEL` on both. Do not skip this step, do not downgrade the model, and never hand review to an External worker.
+7. **Review (the split point).** When all tickets are merged (except those waiting for another Spec, see "Tickets blocked by another Spec"), call the Skill tool with `mattpocock-skills:code-review` (not the built-in `code-review`, which does not spawn the two axis sub-agents) on the integration branch, using the branch point from the main branch as the fixed point. When it spawns the Standards and Spec sub-agents, set `model: REVIEW_MODEL` on both. Do not skip this step, do not downgrade the model, and never hand review to an External worker.
 8. Save the review report to a file outside the repo and dispatch a single fix role with that file as its context pointer. If an item is a design-level or subtle correctness problem rather than a mechanical fix, tell the fix role to report it back instead of guessing, then resolve it yourself or ask the user.
-9. First merge the latest main branch into the integration branch and re-run the test suite (another Run may have landed a Spec meanwhile); on conflicts dispatch a merger to resolve them and tell the user, who decides whether conflicts in this Spec's core changes need another review. If a draft PR exists, mark it ready for review. Otherwise resolve each ticket the way the tracker closes work (e.g. merge with `Closes #n` and push) and report the integration branch. Close the Spec too, and every map implementation ticket on its `实现票` line, even when that implementation ticket has its own sub-issues: an implementation ticket left open after its Spec closes looks unfinished to the tracker, and `find-next` / `pipeline-status.sh` may list it as needing a spec again. Confirm with the user before pushing/closing if they haven't already authorised it.
-10. Clean up all implementer worktrees. In Orca, set the session's worktree to `--workspace-status in-review` (PR open) or `completed`, and retitle the tab `spec-<n> ✓`.
+9. **Land, holding the repo's landing lock.** Several Runs land into the same main branch; without the lock one Run's tested result is no longer what it merges (on 2026-11-12 three Specs landed within five minutes and a merge lost content). Confirm with the user before pushing/closing if they haven't already authorised it, then:
+
+   ```bash
+   <skill dir>/scripts/lock.sh acquire land --scope repo     # run in the background; it returns when the lock is yours
+   ```
+
+   Exit 2 means it waited `--wait` seconds and another live Run still holds it: if that Run has held it for over 30 minutes, ask the user whether to take it over (`lock.sh release land --force`) or keep waiting; otherwise acquire again. Holding the lock, in this order:
+   1. `git fetch origin`, then in the integration worktree merge `origin/<main branch>` into `spec-<n>` and re-run the test suite (and the cross-compile vets for Go). On conflicts dispatch a merger to resolve them and tell the user, who decides whether conflicts in this Spec's core changes need another review.
+   2. Merge in a temporary worktree, never in the main checkout (the user or another session may be working there): `git worktree add --detach <repo parent>/<repo>-wt/land-<n> origin/<main branch>`, `git merge --no-ff spec-<n>` there with the repo's usual merge message (e.g. `Closes #n`), then `git push origin HEAD:<main branch>`. If the push is rejected because origin moved, go back to step 1; do not force-push.
+   3. Update the local main branch only if that is safe: if the main checkout is on the main branch and clean, `git -C <main checkout> merge --ff-only origin/<main branch>`; otherwise leave it and say so. Remove the temporary worktree.
+   4. `lock.sh release land --scope repo`. Release it on every exit path, including failures and the user saying stop.
+
+   If the tracker closes work through PRs instead (a draft PR exists), skip 2–3: mark the PR ready for review and release the lock. Then resolve each ticket the way the tracker closes work. Close the Spec too, and every map implementation ticket on its `实现票` line, even when that implementation ticket has its own sub-issues: an implementation ticket left open after its Spec closes looks unfinished to the tracker, and `find-next` / `pipeline-status.sh` may list it as needing a spec again. When tickets still wait for another Spec, land what is done but keep the Spec, those tickets and the implementation ticket open.
+10. Clean up all implementer worktrees, then `claim.sh release <n>`. A Spec left open because tickets wait for another Spec keeps its `spec-<n>` branch, so later it shows as interrupted ("先恢复" in find-next's order) and the next Run resumes it. In Orca, set the session's worktree to `--workspace-status in-review` (PR open) or `completed`, and retitle the tab `spec-<n> ✓`.
 
 ## External workers (backends `codex` and `pi`)
 
@@ -117,7 +133,7 @@ An External worker is a wrapper script (in this skill's directory) running one h
 
 **Dispatching a role:**
 
-1. Make a run directory per worker: `~/.cache/implement-spec-split/runs/<n>-<YYYYmmdd-HHMM>/<role>-<ticket>/` (`<n>` = the Spec number, so Recovery can find them).
+1. Make a run directory per worker: `~/.cache/implement-spec-split/runs/<repo>-<n>-<YYYYmmdd-HHMM>/<role>-<ticket>/` (`<repo>` = the main checkout's directory name, `<n>` = the Spec number, so Recovery finds them; the repo name keeps Specs with the same number in different repos apart).
 2. Write the Brief to a file, fresh for every worker: do not derive one Brief from another with `sed` or search-and-replace (ticket numbers and branch names get left behind). Keep it to pointers and rules:
    - who it is (role, ticket number, how to read the spec and ticket, e.g. `gh issue view <n>`), worktree path, branch, integration branch;
    - exploration notes dir and, for fix, the review report path;
@@ -126,6 +142,8 @@ An External worker is a wrapper script (in this skill's directory) running one h
    - "Final message: files changed, test command and result, anything you could not do or are unsure about."
    - (`codex`) never ask it to delete directories recursively: codex refuses `rm -rf` / `Remove-Item -Recurse` even without a sandbox. Do such cleanup yourself.
 3. Run it with Bash, `run_in_background: true`, never more than `GLM_MAX_PARALLEL` at once (or the run's `--parallel` override, which replaces it for that run):
+
+   Independently of that per-Run limit, every wrapper first takes one of the machine-wide worker slots (`ISS_MAX_WORKERS`, default 4, shared by all Runs and all repos, since they share one GLM quota). While it waits, its run dir has a `queued` file and `progress.sh` shows `queued`; the wait does not count against the Time limit. Do not treat a queued worker as stuck.
 
    ```bash
    <skill dir>/<worker> --cwd <worktree> --brief <brief file> --run-dir <run dir> \

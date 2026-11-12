@@ -62,12 +62,16 @@
     - Windows 的 pid 会很快被复用。`pid` 文件记录"pid + 进程启动时间"；`progress.sh` 先看 `status.json` 是否比 `pid` 新，再核对启动时间（V3 实测碰到过）。
     - bypass 下 codex 仍有内置命令策略，会拒绝 `rm -rf` 和 `Remove-Item -Recurse`（E15）。Brief 里别让它递归删目录。
     - 不走 codex-plugin-cc：它没有卡死检测和 Time limit，后台任务会永远停在 running，在 Git Bash 下取消会失败，还依赖本地补丁（见文档第一节"参考"）。插件只留给临时手动用。
-18. **多个 Run 并行做不同 spec 时，靠"固定名 integration branch + 用户选择"协调，不做锁。**
-    - 第 0 步不再自动选 spec：总是列出候选及状态（空闲 / 进行中 / 疑似中断 / 被阻塞），由用户选。integration branch 名字固定为 `spec-<n>`，检出在独立 worktree `<repo>-wt/spec-<n>`；`git worktree add -b` 遇到已存在的分支会失败，这就是唯一的互斥，两个会话同时领同一个 spec 只有一个能成功。
-    - Orca 里用 `orca worktree set --issue <n> --workspace-status in-progress` 标记，并给标签页改名。判断"进行中"读的是 worktree 的 `linkedIssue`/`workspaceStatus`，加上该 worktree 里有没有活着的 claude 终端。别改成读标签页标题：`orca terminal rename` 设的标题 CLI 读不回来（`terminal list/show` 的 `title` 是 Claude Code 自己设的标题，2026-11-01 实测）。
-    - 用户选了已在进行或疑似中断的 spec，就是 Recovery（GLOSSARY.md）：复用分支，留下的 ticket worktree 按 worker 的 `status.json` 处理。会话是否还活着由用户判断，不做心跳、pid 检查、stale 判定或 GitHub label/评论占用。这些在 2026-11-01 讨论过，复杂度换来的只是"精确判死"，用户在 Orca 里一眼就能看到；接受的代价是用户若误选一个其实还活着的 spec，会有两个 Orchestrator 撞车（选择时会提醒）。
-    - ticket worktree/分支命名 `spec-<n>-t<m>`、run dir 以 spec 编号开头，Recovery 靠这两点找到上一个 Run 的残留。
-    - 只覆盖同一个 clone 的多个 worktree（分支是本地的）。`--parallel` 按 Run 计，并行的 Run 相加、共享 GLM 额度。
+18. **多个 Run 并行：选什么由 find-next 一处决定，领取、合入、worker 数量靠锁和领取记录（2026-11-12 改）。**
+    - 原先的做法是「固定名 integration branch + 每个 Run 自己列候选、用户选」，不做锁。11-11 夜里用户在三个 worktree 同时启动，暴露了三个问题：各会话扫描到的状态在一分钟内就过时，#223 的会话以为 #222 没人做，把 #222 的判断又写了一遍；第 9 步「合最新 master → 测试 → 合入 → push」不是原子的，11-12 早上三份规格五分钟内先后合入，一次合并丢了内容要事后补；运行目录只按规格号命名，`235-*` 下混着两个仓库的运行。
+    - 选什么：第 0 步不再扫描和列候选，必须带规格号；不带就让用户先跑 `/find-next --batch`，它输出确定性的开发顺序（find-next 设计要点第 12 条）。这样「扫描加挑选」只在一处发生，不需要给它加锁。
+    - 领取：`scripts/claim.sh take` 在一把短的仓库级锁内建 `spec-<n>` 分支和 worktree，并写领取记录（持有者 Claude 进程的 PID 和启动时间）。「进行中」和「中断」靠领取记录判断，不再靠 Orca 元数据或用户猜；Orca 标记只给用户看。
+    - 合入：第 9 步全程持有合入锁（`lock.sh acquire land --scope repo`），在临时 worktree 里合入并 push，不碰主 checkout；push 被拒就回到第一步，不强推。
+    - worker 数量：`--parallel` 仍按 Run 计；另有全机共用的 worker 槽位（`ISS_MAX_WORKERS`，默认 4），所有仓库所有 Run 的 wrapper 都要先拿槽位，拿不到排队、不计入 Time limit。
+    - 中途被别的规格挡住的票一律等待，绝不在本规格里实现别的规格的范围；要判断对方状态时现查 `claim.sh status`，不能只看 issue 开着就说没人做。
+    - 锁都用 `mkdir` 原子创建（macOS 没有 `flock`），持有者信息写进锁目录；持有者进程死了（PID 不在或启动时间对不上）由下一个等待者接管，所以会话崩溃不会留下永久的锁。
+    - 运行目录改为 `runs/<仓库名>-<n>-<时间>/`。ticket worktree/分支命名仍是 `spec-<n>-t<m>`，Recovery 靠这两点找到上一个 Run 的残留。
+    - 只覆盖同一个 clone 的多个 worktree（分支、领取记录、合入锁都在这个 clone 的 git 公共目录里）。
 
 ## find-next 设计要点（2026-11-01 grilling 定稿）
 
@@ -87,7 +91,7 @@
    - 本地 markdown 跟踪器用 `find-next/scripts/scan.py`（只用 Python 标准库，输出 JSON），GitHub 复用 `scripts/pipeline-status.sh`，两套识别规则不分叉。对应关系：`needsTickets` → to-tickets，`missing` → to-spec，`exploring` → Decision ticket（具体哪张再用 `gh` 查），`implement` 不用。
    - 两种跟踪器判断「该 to-spec」的口径不同。本地是地图的 Map frontier 已空，或只剩 Closing ticket；GitHub 是地图下的 Map ticket 还没被任何 Spec 覆盖。
 9. **判断部分默认交给 codex worker（`--worker codex`），带 `--read-only`。** 要读多张地图 Notes 和票正文，体量大但判断稀疏。worker 出错按全局 CLAUDE.md 的处理表，不自动降级为 `self`。
-10. **默认模式不推荐「执行票已拆、可以开工」这一阶段**（`/implement-spec-split` 自己的第 0 步和 `--status` 已经覆盖），也不跨仓库汇总。
+10. **默认模式不推荐「执行票已拆、可以开工」这一阶段**（开发顺序由 `--batch` 的后半给出，`/implement-spec-split --status` 也能看），也不跨仓库汇总。
 11. **允许模型自动触发**（不设 `disable-model-invocation`）：它只读，误触发的代价只是一次扫描。
 12. **`--batch` 批量模式（2026-11-11 加）：批量起草规格和执行票，用户确认一轮后发布。**
     - 起因：缺规格的票一多（ssh-manager-mcp 一次 9 张），逐张走「to-spec → 确认 → to-tickets → 确认 → clear」要几十次操作，每轮我还要重读同一张地图的材料。
@@ -99,9 +103,13 @@
     - Brief 用 `make-batch-briefs.sh` 生成而不是我手写：几份 Brief 只差票号和标题，手写纯属输出开销，组越多越明显。
     - 发布是对外写操作，由我在用户确认后用 `publish-batch.sh --apply` 执行，默认试运行。发布记录 `published.json` 让中途失败可以直接重跑、不重复建票。
     - 占位符只认 `{{S1}}`、`{{T2}}`、`{{S1/T2}}`、`{{#N}}` 四种：试跑时规格正文里有产品自身的 `{{sshmgr-secret:NAME}}` 语法，被当成占位符拒绝了。
-    - 试运行有未决也打印完整计划，只有 `--apply` 拒绝；开工顺序表和发布后的核对由脚本做（它已知道全部阻塞），我只补「建议错开」这类要看代码的判断。
+    - 试运行有未决也打印完整计划，只有 `--apply` 拒绝；发布后的核对由脚本做。
+    - **2026-11-12 起 `--batch` 同时负责「有规格、未拆票」和开发顺序。** 用户的用法是：只在一处运行 `find-next --batch` 决定做什么，再在多个 worktree 里各跑一个 `/implement-spec-split <规格号>`。所以 `--batch` 前半起草两类（缺规格、未拆票，后者用 `S<k>=spec:<n>` 分组，只拆票不建规格），后半总是输出全仓库的开发顺序。
+    - 开发顺序由 `pipeline-status.sh --order` 确定性地算，不交给模型排：同样的状态每次给出同样的顺序，用户在几个 worktree 之间照着做不会乱。规则：被依赖的先做（规格 A 的票挡住规格 B 的票就建边 A→B，拓扑排序）→ 解锁下游多的先做 → 编号小的先做；第 1 波容量 = 并行数 − 进行中 − 中断；完全被挡住的不进第 1 波，部分被挡住的可以；中断的置顶「先恢复」；循环依赖单列，交给用户。模型只补 `--apart`（两份规格改同一块代码），因为这要读规格正文。
+    - 输出要精简（用户 2026-11-12 要求）：每份规格一行，只给第 1 波命令，不写排序理由。
+    - 起因：11-11 夜里三个会话同时运行 implement-spec-split，各自扫描、各自判断，#223 的会话以为 #222 没人做（其实一分钟前被领走），在 #228 里把 #222 的「权威端是否过旧」判断又写了一遍。开发顺序事先写清「#223 等 #222」就不会发生。
     - 只支持 GitHub 跟踪器：本地 markdown 跟踪器的规格写进 `SPEC.md` 章节，形态不同，需求出现再做。
-    - 不自动开 `/implement-spec-split` 会话（2026-11-11 用户定，先不做）：只输出开工顺序表，同时做的规格不超过 2 份，因为几个会话共用 GLM 额度。
+    - 不自动开 `/implement-spec-split` 会话（2026-11-11 用户定，先不做）：只输出开发顺序（`pipeline-status.sh --order`，默认同时 2 份），因为几个会话共用 GLM 额度。
 
 ## 同步上游
 
@@ -119,9 +127,10 @@
 
 ## 自测
 
-- **批量发布**：`bash find-next/scripts/test-publish-batch.sh`。用假 `gh` 测校验、试运行、发布顺序、占位符回填、未决、交接留言、开工顺序表、发布后核对、`--only` 与中途失败后重跑，不访问网络。
+- **批量发布**：`bash find-next/scripts/test-publish-batch.sh`。用假 `gh` 测校验、试运行、发布顺序、占位符回填、未决、交接留言、只拆票的已有规格组、发布后调用开发顺序脚本、发布后核对、`--only` 与中途失败后重跑，不访问网络。
 - **批量 Brief 生成**：`bash find-next/scripts/test-make-batch-briefs.sh`。用假 `gh` 测变量替换、上游技能版本选择与参数校验。
-- **流水线状态**：`bash scripts/test-pipeline-status.sh`。它用假 `gh` 和临时 git 仓库测独立规格、单票规格、原版父规格、旧父 issue 形状、缺规格分组、探索中的地图、分支接手、外部阻塞和 gh 失败，不访问网络。
+- **流水线状态**：`bash scripts/test-pipeline-status.sh`。它用假 `gh` 和临时 git 仓库测独立规格、单票规格、原版父规格、旧父 issue 形状、缺规格分组、探索中的地图、分支接手、外部阻塞、`--order` 开发顺序（状态、排序、波次、`--apart`、循环依赖）和 gh 失败，不访问网络。
+- **锁与领取记录**：`bash scripts/test-locks.sh`。测 `lock.sh` 的互斥、重入、等待超时、死持有者接管、槽位排队，`claim.sh` 的领取、并发领取、恢复与释放权限，以及两个 `codex-worker.sh` 在 `ISS_MAX_WORKERS=1` 下排队，不访问网络。
 - **codex 后端**：`scripts/selftest-codex.sh [--only L1|V1|V2|V3]`。各级的内容见脚本开头的注释和 `docs/codex-backend.md` 第三节：
   - V1：假 codex，确定性，不花 GLM；
   - V2：真 codex 连假服务器（`scripts/testing/mock-responses.js`），不花 GLM，要跑 6–7 分钟；
