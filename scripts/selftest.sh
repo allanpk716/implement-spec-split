@@ -29,6 +29,7 @@ done
 TDD_SKILL=$(ls -d "$HOME"/.claude/plugins/cache/mattpocock/mattpocock-skills/*/skills/*/tdd 2>/dev/null | sort -V | tail -1)
 ROOT="$HOME/.cache/implement-spec-split-selftest/$(date +%Y%m%d-%H%M%S)-$$"
 mkdir -p "$ROOT"
+export ISS_STATE_DIR="$ROOT/worker-state"
 FAILS=0
 
 pass() { echo "  PASS $*"; }

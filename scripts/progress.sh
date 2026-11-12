@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Read-only progress for a codex-worker run directory.
+# Read-only progress for an External worker run directory.
 #
 # Usage: progress.sh <run dir> [N=10]
 #
@@ -7,7 +7,7 @@
 # Otherwise running requires a live wrapper pid from the same process instance (the pid
 # file records Windows start ticks or a POSIX process start identity); a merely
 # recycled pid reports dead.
-# Reads pid, status.json, watch.json, events.jsonl, and the latest/current attempt file.
+# Reads pid, queued, status.json, watch.json, events.jsonl, and the latest/current attempt file.
 
 set -u
 RUN_DIR="${1:-}"
@@ -28,6 +28,10 @@ const statusPath = path.join(run, "status.json");
 const status = json(statusPath);
 const newer = (a, b) => fs.statSync(a).mtimeMs >= fs.statSync(b).mtimeMs;
 const pidFile = path.join(run, "pid");
+const queuedPath = path.join(run, "queued");
+const queuedText = read(queuedPath).trim();
+const queuedStarted = +queuedText || 0;
+const queuedWaiting = fs.existsSync(queuedPath) && queuedStarted > 0;
 const pidParts = read(pidFile).trim().split(/\s+/).filter(Boolean);
 const pid = +pidParts[0] || 0;
 const recordedTicks = pidParts[1] || "";
@@ -57,6 +61,7 @@ if (status && pidParts.length && fs.existsSync(pidFile) && newer(statusPath, pid
     state = currentTicks === recordedTicks ? "running" : "dead";
   }
 }
+if (queuedWaiting && (state === "running" || state.startsWith("finished"))) state = "queued";
 console.log("state: " + state);
 
 const watch = json(path.join(run, "watch.json"));
@@ -98,10 +103,15 @@ const displayPath = file => {
   return rel && !rel.startsWith("..") && !path.isAbsolute(rel) ? rel : p;
 };
 
-if (watch) {
+if (watch && state !== "queued") {
   const now = Math.floor(Date.now() / 1000);
   console.log(`segment: ${watch.segment}  attempt: ${watch.attempt}`);
   console.log(`elapsed: ${Math.max(0, now - watch.started_at)}s  last progress: ${Math.max(0, now - watch.last_progress_at)}s ago`);
+}
+
+if (state === "queued") {
+  const now = Math.floor(Date.now() / 1000);
+  console.log(`queued: ${Math.max(0, now - queuedStarted)}s`);
 }
 
 if (state === "running") {

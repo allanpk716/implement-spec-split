@@ -8,9 +8,9 @@
 #                    [--retries 2] [--retry-wait 60]
 #                    [--thinking <low|medium|high|xhigh>] [--skill <dir>]...
 #                    [--add-dir <dir>]...
-#                    [--read-only]
+#                    [--read-only] [--no-slot]
 #   codex-worker.sh --resume --run-dir <dir> [--time-limit ..] [--idle-timeout ..]
-#                    [--retries ..] [--retry-wait ..]
+#                    [--retries ..] [--retry-wait ..] [--no-slot]
 #
 # Contract and semantics match pi-worker.sh. --time-limit is one segment's hard budget:
 # it spans every attempt and retry wait since the segment started, and each attempt gets
@@ -34,7 +34,7 @@
 # arguments.
 #
 # Run-dir files: brief.md; prompt-<attempt>.md (the finite stdin prompt, F8);
-# attempt-<attempt>.jsonl; accumulated events.jsonl; stderr.log; resume.json; status.json;
+# attempt-<attempt>.jsonl; accumulated events.jsonl; stderr.log; resume.json; status.json; queued while slot-waiting;
 # result.md (codex -o output, or a salvaged final agent_message); fingerprint-start.json
 # and fingerprint-end.json in read-only mode (the first-segment baseline and each segment's
 # final fingerprint); pid (this wrapper's Windows pid and Windows start ticks, or its POSIX
@@ -83,6 +83,8 @@
 
 set -u
 
+HERE=$(cd "$(dirname "$0")" && pwd)
+
 MODEL="glm-5.3"
 TIME_LIMIT=1800
 IDLE_TIMEOUT=600
@@ -96,6 +98,7 @@ SKILLS=()
 ADD_DIRS=()
 RESUME=false
 READ_ONLY=false
+NO_SLOT=false
 GOT_CWD=false GOT_BRIEF=false GOT_MODEL=false GOT_THINKING=false GOT_SKILL=false GOT_ADD_DIR=false
 GOT_READ_ONLY=false
 
@@ -116,6 +119,7 @@ while [ $# -gt 0 ]; do
     --add-dir) ADD_DIRS+=("$2"); GOT_ADD_DIR=true; shift 2 ;;
     --resume) RESUME=true; shift ;;
     --read-only) READ_ONLY=true; GOT_READ_ONLY=true; shift ;;
+    --no-slot) NO_SLOT=true; shift ;;
     *) die "unknown argument: $1" ;;
   esac
 done
@@ -563,6 +567,7 @@ write_status() {
   DURATION="$((END - START))" MODEL="$MODEL" SESSION_ID="$SESSION_ID" BASE_HEAD="$BASE_HEAD" \
   HEAD_NOW="$HEAD_NOW" COMMITS="$COMMITS" DIRTY="$DIRTY" SALVAGED="${SALVAGED:-false}" \
   READ_ONLY="$READ_ONLY" READ_ONLY_VIOLATION="${READ_ONLY_VIOLATION:-false}" CHANGED_PATHS="${CHANGED_PATHS:-[]}" \
+  WORKER_SLOT="${WORKER_SLOT:-}" QUEUED_SECONDS="${QUEUED_SECONDS:-0}" \
   RUN_DIR_W="$(winpath "$RUN_DIR")" CWD_W="$(winpath "$CWD")" \
   node -e '
     const e = process.env;
@@ -572,6 +577,8 @@ write_status() {
       run_dir: e.RUN_DIR_W, base_head: e.BASE_HEAD, head: e.HEAD_NOW,
       new_commits: +e.COMMITS, dirty: e.DIRTY === "true",
       result_file: (e.STATUS === "ok" || e.SALVAGED === "true") ? e.RUN_DIR_W + "/result.md" : null,
+      slot: e.WORKER_SLOT ? +e.WORKER_SLOT : null,
+      queued_seconds: +e.QUEUED_SECONDS || 0,
     };
     if (e.READ_ONLY === "true") {
       s.read_only = true;
@@ -583,6 +590,57 @@ write_status() {
     console.log(out);
   '
 }
+
+WORKER_SLOT=""
+QUEUED_SECONDS=0
+release_worker_slot() {
+  if [ -n "$WORKER_SLOT" ]; then
+    "$HERE/lock.sh" slot-release glm-workers "$WORKER_SLOT" --owner-pid "$$" >/dev/null 2>&1 || true
+    WORKER_SLOT=""
+  fi
+}
+
+worker_exit() {
+  local rc="$1"
+  trap - EXIT HUP INT TERM
+  release_worker_slot
+  exit "$rc"
+}
+trap 'worker_exit $?' EXIT
+trap 'worker_exit 129' HUP
+trap 'worker_exit 130' INT
+trap 'worker_exit 143' TERM
+
+acquire_worker_slot() {
+  rm -f "$RUN_DIR/queued"
+  if $NO_SLOT || [ "${ISS_WORKER_SLOTS:-1}" = 0 ]; then return 0; fi
+  local max="${ISS_MAX_WORKERS:-4}" output rc queued_at
+  [[ "$max" =~ ^[1-9][0-9]*$ ]] || die "ISS_MAX_WORKERS must be a positive integer"
+  queued_at=$(date +%s)
+  printf '%s\n' "$queued_at" > "$RUN_DIR/queued"
+  echo "=== waiting for worker slot $(date -Iseconds) ===" >> "$STDERR"
+  while :; do
+    output=$("$HERE/lock.sh" slot-acquire glm-workers --max "$max" --wait 0 --owner-pid "$$" 2>>"$STDERR")
+    rc=$?
+    if [ "$rc" -eq 0 ] && [[ "$output" =~ ^[1-9][0-9]*$ ]]; then
+      WORKER_SLOT="$output"
+      break
+    fi
+    if [ "$rc" -ne 2 ]; then
+      QUEUED_SECONDS=$(( $(date +%s) - queued_at ))
+      WORKER_SLOT=""
+      rm -f "$RUN_DIR/queued"
+      echo "worker 槽位不可用（退出码 ${rc}），本次不占槽位继续运行" >> "$STDERR"
+      return 0
+    fi
+    sleep "${ISS_WORKER_SLOT_POLL:-1}"
+  done
+  QUEUED_SECONDS=$(( $(date +%s) - queued_at ))
+  rm -f "$RUN_DIR/queued"
+  echo "拿到 worker 槽位 $WORKER_SLOT" >> "$STDERR"
+}
+
+acquire_worker_slot
 
 BASE_URL="${CODEX_WORKER_BASE_URL:-}"
 PROXY_HOST=""; PROXY_PORT=""
