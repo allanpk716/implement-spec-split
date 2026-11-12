@@ -5,7 +5,7 @@ set -u
 
 usage() {
   cat <<'EOF'
-Usage: publish-batch.sh [--repo <owner/name>] [--apply] [--only S1,S3] <manifest.json>...
+Usage: publish-batch.sh [--repo <owner/name>] [--apply] [--no-order] [--only S1,S3] <manifest.json>...
 
 Read one manifest per drafted spec, validate all references first, then publish
 GitHub issues. Without --apply, no write request is sent.
@@ -57,6 +57,7 @@ gh_current_repo() {
 
 REPO=
 APPLY=0
+NO_ORDER=0
 ONLY=
 MANIFESTS=()
 while [ $# -gt 0 ]; do
@@ -68,6 +69,10 @@ while [ $# -gt 0 ]; do
       ;;
     --apply)
       APPLY=1
+      shift
+      ;;
+    --no-order)
+      NO_ORDER=1
       shift
       ;;
     --only)
@@ -124,7 +129,8 @@ const mode = process.argv[2];
 const argv = process.argv.slice(3);
 const repo = argv[0];
 const apply = argv[1] === '1';
-const onlyArgument = argv[2];
+const noOrder = argv[2] === '1';
+const onlyArgument = argv[3];
 const manifestPaths = argv.slice(argv.indexOf('--') + 1);
 const errors = [];
 const externalIds = new Map();
@@ -920,7 +926,9 @@ function printDryRun(graph) {
     `试运行：将发布 ${newSpecs} 张规格、${newTickets} 张执行票，加 --apply 执行\n`
   );
   printUnresolved();
-  process.stdout.write('发布后会运行 pipeline-status.sh --order 输出开发顺序。\n');
+  if (!noOrder) {
+    process.stdout.write('发布后会运行 pipeline-status.sh --order 输出开发顺序。\n');
+  }
 }
 
 function printHandoffPreviews() {
@@ -1128,11 +1136,11 @@ NODE
 }
 
 export PUBLISH_SCRIPT=$0
-if ! publish_node run "$REPO" "$APPLY" "$ONLY" -- "${MANIFESTS[@]}"; then
+if ! publish_node run "$REPO" "$APPLY" "$NO_ORDER" "$ONLY" -- "${MANIFESTS[@]}"; then
   die "batch publication failed"
 fi
 
-if [ "$APPLY" -eq 1 ]; then
+if [ "$APPLY" -eq 1 ] && [ "$NO_ORDER" -eq 0 ]; then
   case "$0" in
     */*) PUBLISH_SCRIPT_SOURCE=$0 ;;
     *) PUBLISH_SCRIPT_SOURCE=$(command -v -- "$0") ||

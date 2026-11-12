@@ -451,11 +451,23 @@ git -C "$ORDER_REPO" add README.md
 git -C "$ORDER_REPO" commit --quiet -m 'initial commit'
 git -C "$ORDER_REPO" branch spec-370
 git -C "$ORDER_REPO" branch spec-380
+ORDER_RESUME_WORKTREE=$ORDER_REPO/spec-380-worktree
+git -C "$ORDER_REPO" worktree add --quiet "$ORDER_RESUME_WORKTREE" spec-380
 mkdir -p "$ORDER_REPO/.git/implement-spec-split/claims"
 printf '%s\n' '{"spec":370,"branch":"spec-370","worktree":"/tmp/order-370","pid":777,"pid_start":"fake alive","claimed_at":"2026-11-12T09:00:00+08:00"}' \
   > "$ORDER_REPO/.git/implement-spec-split/claims/spec-370.json"
 printf '%s\n' '{"spec":380,"branch":"spec-380","worktree":"/tmp/order-380","pid":778,"pid_start":"dead holder","claimed_at":"2026-11-12T09:05:00+08:00"}' \
   > "$ORDER_REPO/.git/implement-spec-split/claims/spec-380.json"
+
+WAVE_REPO=$WORK/workers-git-repo
+mkdir -p "$WAVE_REPO"
+git -C "$WAVE_REPO" init --quiet
+git -C "$WAVE_REPO" config user.name 'Pipeline Status Workers Test'
+git -C "$WAVE_REPO" config user.email 'pipeline-status-workers-test@example.invalid'
+git -C "$WAVE_REPO" config commit.gpgsign false
+printf '%s\n' 'workers repository' > "$WAVE_REPO/README.md"
+git -C "$WAVE_REPO" add README.md
+git -C "$WAVE_REPO" commit --quiet -m 'initial commit'
 
 git -C "$EMPTY_REPO" init --quiet
 git -C "$EMPTY_REPO" config user.name 'Pipeline Status Empty Wave Test'
@@ -530,8 +542,27 @@ expect_has '  - #24 [wayfinder:grilling] Open grilling decision（有未关阻�
 run_order() {
   output=$1
   shift
+  order_env=(
+    FIXTURE_DIR="$ORDER_FIXTURE"
+    PATH="$BIN:$PATH"
+    ISS_PS_LSTART_CMD="$BIN/order-lstart"
+  )
+  if [ -n "${ORDER_NOW_EPOCH:-}" ]; then
+    order_env+=("ISS_NOW_EPOCH=$ORDER_NOW_EPOCH")
+  fi
   (
     cd "$ORDER_REPO" || exit 125
+    env "${order_env[@]}" \
+      bash "$SCRIPT" --repo test/repo --order "$@"
+  ) > "$output" 2> "${output}.err"
+  RUN_EXIT=$?
+}
+
+run_workers_order() {
+  output=$1
+  shift
+  (
+    cd "$WAVE_REPO" || exit 125
     env FIXTURE_DIR="$ORDER_FIXTURE" PATH="$BIN:$PATH" \
       ISS_PS_LSTART_CMD="$BIN/order-lstart" \
       bash "$SCRIPT" --repo test/repo --order "$@"
@@ -589,6 +620,26 @@ expect_exit 0 "order mode without apart succeeds"
 expect_has ' 1. #300 Hub root → /implement-spec-split 300 --impl codex' 'default command suffix is appended' "$WORK/order-no-apart.out"
 expect_without ' 2. #390 ' 'tie-break spec follows equal-score lower specs' "$WORK/order-no-apart.out"
 
+run_workers_order "$WORK/order-workers-4.out" --parallel 2 --workers 4
+expect_exit 0 "worker-aware order succeeds"
+expect_has '开发顺序（同时 2 份，共 4 个 worker）' \
+  'worker order heading includes total workers' "$WORK/order-workers-4.out"
+expect_has ' 1. #300 Hub root → /implement-spec-split 300 --impl codex --parallel 2' \
+  'worker order appends per-spec parallel' "$WORK/order-workers-4.out"
+
+run_workers_order "$WORK/order-workers-4.json" --parallel 2 --workers 4 --json
+expect_exit 0 "worker-aware JSON plan succeeds"
+
+run_workers_order "$WORK/order-workers-5.out" --parallel 2 --workers 5
+expect_exit 0 "worker total rounds down to per-spec parallel"
+expect_has ' 1. #300 Hub root → /implement-spec-split 300 --impl codex --parallel 2' \
+  'five workers still use parallel two' "$WORK/order-workers-5.out"
+
+run_workers_order "$WORK/order-workers-1.out" --parallel 2 --workers 1
+expect_exit 0 "worker total uses minimum per-spec parallel"
+expect_has ' 1. #300 Hub root → /implement-spec-split 300 --impl codex --parallel 1' \
+  'one worker uses parallel one' "$WORK/order-workers-1.out"
+
 run_order "$WORK/order-capacity.out" --parallel 5 --apart 300:390
 expect_exit 0 "order mode subtracts active and interrupted specs"
 expect_has ' 1. #300 Hub root' 'first capacity slot selects hub root' "$WORK/order-capacity.out"
@@ -600,6 +651,93 @@ expect_has '之后：' 'remaining specs continue numbering after wave' "$WORK/or
 run_order "$WORK/order-default-capacity.out"
 expect_exit 0 "default parallel is two"
 expect_has '第 1 波：（无，先恢复上面的规格）' 'interrupted specs occupying capacity ask for recovery first' "$WORK/order-default-capacity.out"
+
+run_order "$WORK/order-json-text.out" --parallel 5 --workers 4
+expect_exit 0 "worker-aware text plan succeeds"
+cat > "$WORK/order-json-text.expected" <<EOF
+开发顺序（同时 5 份，共 4 个 worker）
+先恢复：#380
+进行中：#370（spec-370）
+第 1 波：
+ 1. #300 Hub root → /implement-spec-split 300 --impl codex --parallel 1
+ 2. #420 Spec-owned blocker root → /implement-spec-split 420 --impl codex --parallel 1
+ 3. #330 Partial dependency → /implement-spec-split 330 --impl codex --parallel 1（部分等 #380；另需 #399）
+之后：
+ 4. #310 Downstream one（等 #300）
+ 5. #320 Downstream two（等 #300）
+ 6. #340 Complete dependency（等 #370）
+ 7. #390 Tie-break spec
+ 8. #410 Blocked by needs tickets（等 #400）
+ 9. #430 Blocked by spec issue（等 #420）
+ 10. #440 Blocked by implementation ref（等 #420）
+循环依赖：#350 #360，需要人工决定
+EOF
+expect_equal "$WORK/order-json-text.out" "$WORK/order-json-text.expected" \
+  'worker-aware text order is deterministic'
+
+run_order "$WORK/order-json.out" --parallel 5 --workers 4 --json
+expect_exit 0 "order JSON mode succeeds"
+ORDER_RESUME_WORKTREE="$ORDER_RESUME_WORKTREE" node - \
+  "$WORK/order-json.out" > "$WORK/order-json-check.txt" <<'NODE'
+const fs = require('fs');
+const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const expectedWorktree = fs.realpathSync(process.env.ORDER_RESUME_WORKTREE);
+const assertions = [
+  [plan.parallel_specs === 5, 'parallel_specs'],
+  [plan.workers === 4, 'workers'],
+  [plan.per_spec_parallel === 1, 'per_spec_parallel'],
+  [plan.resume.length === 1 && plan.resume[0].spec === 380, 'resume spec'],
+  [plan.resume[0].worktree === expectedWorktree, 'resume worktree from git metadata'],
+  [plan.resume[0].command.endsWith('--parallel 1'), 'resume command'],
+  [plan.active.length === 1 && plan.active[0].spec === 370 && plan.active[0].branch === 'spec-370', 'active spec'],
+  [plan.wave1.map((item) => item.spec).join(',') === '300,420,330', 'wave order'],
+  [plan.wave1.every((item) => item.command.endsWith('--parallel 1')), 'wave commands'],
+  [plan.wave1[2].note === '部分等 #380；另需 #399', 'wave note'],
+  [plan.later[0].index === 4 && plan.later[0].spec === 310 && plan.later[0].note === '等 #300', 'later order'],
+  [plan.cycles.join(',') === '350,360', 'cycles'],
+  [plan.standalone.join(',') === '399', 'standalone blockers'],
+];
+const failed = assertions.filter(([ok]) => !ok);
+if (failed.length > 0) throw new Error(failed.map(([, name]) => name).join(','));
+NODE
+RUN_EXIT=$?
+expect_exit 0 "order JSON matches text plan and worktree metadata"
+
+run_order "$WORK/order-json-no-workers.out" --parallel 5 --json
+expect_exit 0 "order JSON without workers succeeds"
+node - "$WORK/order-json-no-workers.out" > "$WORK/order-json-no-workers-check.txt" <<'NODE'
+const fs = require('fs');
+const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+if (plan.workers !== null || plan.per_spec_parallel !== null) {
+  throw new Error('workers must be null without --workers');
+}
+if (plan.wave1.some((item) => item.command.includes('--parallel'))) {
+  throw new Error('commands must omit --parallel without --workers');
+}
+NODE
+RUN_EXIT=$?
+expect_exit 0 "order JSON without workers omits parallel command suffix"
+
+printf '%s\n' '{"spec":370,"branch":"spec-370","worktree":"/tmp/order-370","pid":999,"pid_start":"dead holder","handoff":"fresh","handoff_until_epoch":2000}' \
+  > "$ORDER_REPO/.git/implement-spec-split/claims/spec-370.json"
+printf '%s\n' '{"spec":390,"worktree":null,"handoff":"resume","handoff_until_epoch":2000}' \
+  > "$ORDER_REPO/.git/implement-spec-split/claims/spec-390.json"
+printf '%s\n' '{"spec":420,"worktree":null,"handoff":"fresh","handoff_until_epoch":999}' \
+  > "$ORDER_REPO/.git/implement-spec-split/claims/spec-420.json"
+ORDER_NOW_EPOCH=1000
+run_order "$WORK/order-handoff.out" --parallel 5
+expect_exit 0 "handoff reservation order succeeds"
+expect_has '进行中：#370（spec-370） #390（spec-390）' \
+  'live handoffs keep branch and reservation specs active' "$WORK/order-handoff.out"
+expect_has ' 2. #420 Spec-owned blocker root' \
+  'expired handoff reservation remains idle' "$WORK/order-handoff.out"
+expect_without ' #390 Tie-break spec' 'live no-branch reservation is not launched' \
+  "$WORK/order-handoff.out"
+ORDER_NOW_EPOCH=
+printf '%s\n' '{"spec":370,"branch":"spec-370","worktree":"/tmp/order-370","pid":777,"pid_start":"fake alive","claimed_at":"2026-11-12T09:00:00+08:00"}' \
+  > "$ORDER_REPO/.git/implement-spec-split/claims/spec-370.json"
+rm -f "$ORDER_REPO/.git/implement-spec-split/claims/spec-390.json" \
+  "$ORDER_REPO/.git/implement-spec-split/claims/spec-420.json"
 
 (
   cd "$ORDER_REPO" || exit 125

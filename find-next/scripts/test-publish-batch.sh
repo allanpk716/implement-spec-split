@@ -371,6 +371,30 @@ expect_without '"write":true' 'completed rerun writes nothing' "$LOG"
 expect_has '已发布 2 张规格、2 张执行票' 'rerun summary remains stable' "$WORK/base-rerun.out"
 
 : > "$LOG"
+: > "$PIPELINE_LOG"
+run_publish "$WORK/base-no-order-dry.out" --no-order \
+  "$WORK/base/S1/manifest.json" "$WORK/base/S2/manifest.json"
+expect_exit 0 "--no-order dry run succeeds"
+expect_without '发布后会运行 pipeline-status.sh --order 输出开发顺序。' \
+  '--no-order dry run omits order notice' "$WORK/base-no-order-dry.out"
+expect_without 'PIPELINE-ORDER output' '--no-order dry run does not print order' \
+  "$WORK/base-no-order-dry.out"
+expect_without '"write":true' '--no-order dry run sends no write request' "$LOG"
+
+: > "$LOG"
+: > "$PIPELINE_LOG"
+run_publish "$WORK/base-no-order-apply.out" --apply --no-order \
+  "$WORK/base/S1/manifest.json" "$WORK/base/S2/manifest.json"
+expect_exit 0 "--no-order apply succeeds"
+expect_has '已发布 2 张规格、2 张执行票' '--no-order apply still summarizes publication' \
+  "$WORK/base-no-order-apply.out"
+expect_without 'PIPELINE-ORDER output' '--no-order apply omits order output' \
+  "$WORK/base-no-order-apply.out"
+expect_without '--order --repo test/repo' '--no-order apply does not call pipeline status' \
+  "$PIPELINE_LOG"
+expect_without '"write":true' '--no-order completed rerun writes nothing' "$LOG"
+
+: > "$LOG"
 run_publish_auto_repo "$WORK/auto-repo.out" "$WORK/base/S1/manifest.json" \
   "$WORK/base/S2/manifest.json"
 expect_exit 0 "repository is inferred with gh repo view"
