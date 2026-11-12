@@ -1148,7 +1148,7 @@ if [ "$APPLY" -eq 1 ] && [ "$NO_ORDER" -eq 0 ]; then
   esac
   PUBLISH_SCRIPT_DIR=$(cd -- "${PUBLISH_SCRIPT_SOURCE%/*}" && pwd) ||
     die "could not resolve the publish script directory"
-  SKILL_ROOT=$(cd -- "$PUBLISH_SCRIPT_DIR/.." && pwd) ||
+  SKILL_ROOT=$(cd -- "$PUBLISH_SCRIPT_DIR/../.." && pwd) ||
     die "could not resolve the skill root"
   PIPELINE_STATUS=${ISS_PIPELINE_STATUS:-$SKILL_ROOT/scripts/pipeline-status.sh}
   if ! "$PIPELINE_STATUS" --order --repo "$REPO"; then

@@ -8,7 +8,7 @@ SCRIPT=$ROOT/find-next/scripts/launch-wave.sh
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/launch-wave-test.XXXXXX")
 BIN=$WORK/bin
 REPO=$WORK/git-repo
-ORIGIN=$WORK/origin.git
+ORIGIN=$WORK/test/repo.git  # path ends in the --repo slug the script checks
 WT222=$WORK/spec-222
 WT224=$WORK/spec-224
 MAIN_WORKTREE_PATH=$REPO
@@ -109,7 +109,7 @@ expect_sequence() {
 }
 
 mkdir -p "$BIN" "$REPO" || exit 1
-git init --quiet --bare --initial-branch=master "$ORIGIN"
+mkdir -p "$WORK/test" && git init --quiet --bare --initial-branch=master "$ORIGIN"
 git -C "$REPO" init --quiet --initial-branch=master
 git -C "$REPO" config user.name 'Launch Wave Test'
 git -C "$REPO" config user.email 'launch-wave-test@example.invalid'
@@ -283,7 +283,7 @@ run_launch() {
       ISS_PIPELINE_STATUS="$BIN/fake-pipeline" ISS_CLAIM="$BIN/fake-claim" \
       ISS_MAX_WORKERS_CMD="$BIN/fake-max-workers" ISS_ORCA="$BIN/fake-orca" \
       PATH="$BIN:$PATH" \
-      bash "$SCRIPT" --repo test/repo --workers 4 "$@"
+      bash "$SCRIPT" --repo "${LAUNCH_REPO_OVERRIDE:-test/repo}" --workers 4 "$@"
   ) > "$output" 2> "${output}.err"
   RUN_EXIT=$?
 }
@@ -416,6 +416,12 @@ expect_has '已启动 0 份，跳过 1 份，失败 0 份。' \
   'resume conflict summary counts skip' "$WORK/resume-conflict.out"
 expect_without 'launch' 'resume conflict does not call agent launch' "$ORCA_LOG"
 unset LAUNCH_CLAIM_FAIL_RESUME
+
+: > "$ORCA_LOG"
+LAUNCH_REPO_OVERRIDE=other/repo run_launch "$WORK/mismatch.out" --apply
+expect_exit 1 "repo that is not this checkout's origin is refused"
+expect_has 'does not match' 'mismatch names the problem' "$WORK/mismatch.out.err"
+expect_without 'create' 'mismatch never calls Orca' "$ORCA_LOG"
 
 if [ "$FAILED" -eq 0 ]; then
   printf 'Summary: %d passed, 0 failed\n' "$PASSED"

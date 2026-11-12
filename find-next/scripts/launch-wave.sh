@@ -24,7 +24,7 @@ else
   SCRIPT_DIR=$(command -v -- "$SCRIPT_SOURCE") || die "could not resolve the launch script path"
   SCRIPT_DIR=${SCRIPT_DIR%/*}
 fi
-SKILL_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd) || die "could not resolve the skill root"
+SKILL_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd) || die "could not resolve the skill root"
 
 REPO=
 WORKERS=
@@ -101,6 +101,12 @@ WORKTREE_OUTPUT=$(git worktree list --porcelain 2>/dev/null) ||
 MAIN_WORKTREE=$(printf '%s\n' "$WORKTREE_OUTPUT" | sed -n 's/^worktree //p' | sed -n '1p')
 [ -n "$MAIN_WORKTREE" ] || die "could not determine the main git worktree"
 
+# --repo must name this checkout's origin; otherwise worktrees would be created
+# in the wrong repository.
+ORIGIN_URL=$(git -C "$MAIN_WORKTREE" remote get-url origin 2>/dev/null || true)
+ORIGIN_SLUG=$(printf '%s' "$ORIGIN_URL" | sed -E 's#\.git$##; s#^.*[:/]([^/:]+/[^/]+)$#\1#' | tr '[:upper:]' '[:lower:]')
+[ "$ORIGIN_SLUG" = "$(printf '%s' "$REPO" | tr '[:upper:]' '[:lower:]')" ] ||
+  die "--repo $REPO does not match this checkout's origin ($ORIGIN_URL); run from that repository"
 MAIN_BRANCH=$(git -C "$MAIN_WORKTREE" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || true)
 MAIN_BRANCH=${MAIN_BRANCH#origin/}
 [ -n "$MAIN_BRANCH" ] || MAIN_BRANCH=master
