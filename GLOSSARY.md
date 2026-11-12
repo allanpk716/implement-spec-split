@@ -70,8 +70,12 @@ _Avoid_: lock file, Orca status
 The repo-wide lock (`scripts/lock.sh acquire land --scope repo`) a Run holds from merging the latest main branch into its integration branch until it has pushed the merged main branch, so that what it tested is what lands.
 _Avoid_: merge lock (mergers inside one Run are already serialised)
 
+**Handoff reservation**:
+A Claim record that `find-next/scripts/launch-wave.sh` writes with `claim.sh reserve` before it starts a session in Orca; it counts as active until `handoff_until_epoch` even though no live process holds it, and `claim.sh take` run inside that Spec's worktree adopts it (exit 4 when it was a resume).
+_Avoid_: pre-claim, lease
+
 **Worker slot**:
-One of the machine-wide places (`ISS_MAX_WORKERS`, default 4) an External worker wrapper must hold while its agent runs; wrappers beyond that queue instead of failing, because all Runs share one GLM quota.
+One of the machine-wide places an External worker wrapper must hold while its agent runs; wrappers beyond that queue instead of failing, because all Runs share one GLM quota. The count is `ISS_MAX_WORKERS` if set, else the file `~/.cache/implement-spec-split/max-workers` (written by `scripts/max-workers.sh`, which find-next calls with its `--workers`), else 4.
 
 **Integration branch**:
 The single branch where every Ticket of a Spec is merged before review.
