@@ -76,6 +76,17 @@ expect_section_without() {
   fi
 }
 
+expect_equal() {
+  actual=$1
+  expected=$2
+  name=$3
+  if cmp -s "$actual" "$expected"; then
+    record PASS "$name"
+  else
+    record FAIL "$name" "output differs from $expected"
+  fi
+}
+
 mkdir -p "$FIXTURE" "$BIN" "$REPO" "$NOT_REPO" || exit 1
 
 FIXTURE=$FIXTURE node > /dev/null <<'NODE'
@@ -252,6 +263,212 @@ git -C "$REPO" commit --quiet -m 'initial commit'
 git -C "$REPO" branch spec-89
 git -C "$REPO" branch spec-80-old
 
+ORDER_FIXTURE=$WORK/order-fixture
+ORDER_REPO=$WORK/order-git-repo
+mkdir -p "$ORDER_FIXTURE" "$ORDER_REPO" || exit 1
+
+ORDER_FIXTURE=$ORDER_FIXTURE node > /dev/null <<'NODE'
+const fs = require('fs');
+const directory = process.env.ORDER_FIXTURE;
+
+function sub(total, completed = total) {
+  return {total, completed, percent_completed: total ? Math.round(100 * completed / total) : 0};
+}
+
+function issue(number, title, state, labels, body, children = sub(0), extras = {}) {
+  return Object.assign({
+    number,
+    title,
+    state,
+    labels: labels.map((name) => ({name})),
+    body,
+    sub_issues_summary: children,
+    issue_dependencies_summary: {blocked_by: 0, total_blocked_by: 0, blocking: 0, total_blocking: 0},
+    assignees: [],
+  }, extras);
+}
+
+function spec(number, title, ticketCount) {
+  return issue(number, title, 'open', [], '## Problem Statement\nOrder fixture.', sub(ticketCount, 0));
+}
+
+const issues = [
+  spec(300, 'Hub root', 2),
+  issue(301, 'Hub ticket one', 'open', [], ''),
+  issue(302, 'Hub ticket two', 'open', [], ''),
+  spec(310, 'Downstream one', 1),
+  issue(311, 'Downstream one ticket', 'open', [], ''),
+  spec(320, 'Downstream two', 1),
+  issue(321, 'Downstream two ticket', 'open', [], ''),
+  spec(330, 'Partial dependency', 2),
+  issue(331, 'Blocked partial ticket', 'open', [], ''),
+  issue(332, 'Ready partial ticket', 'open', [], ''),
+  spec(340, 'Complete dependency', 1),
+  issue(341, 'Fully blocked ticket', 'open', [], ''),
+  spec(350, 'Cycle one', 1),
+  issue(351, 'Cycle one ticket', 'open', [], ''),
+  spec(360, 'Cycle two', 1),
+  issue(361, 'Cycle two ticket', 'open', [], ''),
+  spec(370, 'Running spec', 1),
+  issue(371, 'Running ticket', 'open', [], ''),
+  spec(380, 'Interrupted spec', 1),
+  issue(381, 'Interrupted ticket', 'open', [], ''),
+  spec(390, 'Tie-break spec', 1),
+  issue(391, 'Tie-break ticket', 'open', [], ''),
+  issue(420, 'Spec-owned blocker root', 'open', [], '## Problem Statement\n实现票：#423。', sub(2, 0)),
+  issue(421, 'Spec-owned ticket one', 'open', [], ''),
+  issue(422, 'Spec-owned ticket two', 'open', [], ''),
+  issue(423, 'Referenced implementation', 'open', [], ''),
+  spec(430, 'Blocked by spec issue', 1),
+  issue(431, 'Spec-issue dependency ticket', 'open', [], ''),
+  spec(440, 'Blocked by implementation ref', 1),
+  issue(441, 'Implementation-ref dependency ticket', 'open', [], ''),
+  issue(399, 'Loose external blocker', 'open', [], ''),
+  issue(400, 'Needs tickets spec', 'open', [], '## Problem Statement\n实现票：#401。'),
+  issue(401, 'Unsplit implementation ticket', 'open', [], ''),
+  spec(410, 'Blocked by needs tickets', 1),
+  issue(411, 'Needs tickets dependency ticket', 'open', [], ''),
+];
+
+const responses = {
+  'sub-300': [issue(301, 'Hub ticket one', 'open', [], ''), issue(302, 'Hub ticket two', 'open', [], '')],
+  'sub-310': [issue(311, 'Downstream one ticket', 'open', [], '')],
+  'sub-320': [issue(321, 'Downstream two ticket', 'open', [], '')],
+  'sub-330': [
+    issue(331, 'Blocked partial ticket', 'open', [], ''),
+    issue(332, 'Ready partial ticket', 'open', [], ''),
+  ],
+  'sub-340': [issue(341, 'Fully blocked ticket', 'open', [], '')],
+  'sub-350': [issue(351, 'Cycle one ticket', 'open', [], '')],
+  'sub-360': [issue(361, 'Cycle two ticket', 'open', [], '')],
+  'sub-370': [issue(371, 'Running ticket', 'open', [], '')],
+  'sub-380': [issue(381, 'Interrupted ticket', 'open', [], '')],
+  'sub-390': [issue(391, 'Tie-break ticket', 'open', [], '')],
+  'sub-420': [
+    issue(421, 'Spec-owned ticket one', 'open', [], ''),
+    issue(422, 'Spec-owned ticket two', 'open', [], ''),
+  ],
+  'sub-430': [issue(431, 'Spec-issue dependency ticket', 'open', [], '')],
+  'sub-440': [issue(441, 'Implementation-ref dependency ticket', 'open', [], '')],
+  'sub-410': [issue(411, 'Needs tickets dependency ticket', 'open', [], '')],
+  'blocker-301': [],
+  'blocker-302': [],
+  'blocker-311': [issue(301, 'Hub ticket one', 'open', [], '')],
+  'blocker-321': [issue(302, 'Hub ticket two', 'open', [], '')],
+  'blocker-331': [
+    issue(381, 'Interrupted ticket', 'open', [], ''),
+    issue(399, 'Loose external blocker', 'open', [], ''),
+  ],
+  'blocker-332': [],
+  'blocker-341': [issue(371, 'Running ticket', 'open', [], '')],
+  'blocker-351': [issue(361, 'Cycle two ticket', 'open', [], '')],
+  'blocker-361': [issue(351, 'Cycle one ticket', 'open', [], '')],
+  'blocker-371': [],
+  'blocker-381': [],
+  'blocker-391': [],
+  'blocker-421': [],
+  'blocker-422': [],
+  'blocker-431': [issue(420, 'Spec-owned blocker root', 'open', [], '## Problem Statement\n实现票：#423。', sub(2, 0))],
+  'blocker-441': [issue(423, 'Referenced implementation', 'open', [], '')],
+  'blocker-411': [issue(401, 'Unsplit implementation ticket', 'open', [], '')],
+};
+
+fs.writeFileSync(`${directory}/issues.json`, JSON.stringify(issues, null, 2));
+for (const [name, value] of Object.entries(responses)) {
+  fs.writeFileSync(`${directory}/${name}.json`, JSON.stringify(value, null, 2));
+}
+NODE
+
+EMPTY_FIXTURE=$WORK/empty-wave-fixture
+EMPTY_REPO=$WORK/empty-wave-git-repo
+mkdir -p "$EMPTY_FIXTURE" "$EMPTY_REPO" || exit 1
+
+EMPTY_FIXTURE=$EMPTY_FIXTURE node > /dev/null <<'NODE'
+const fs = require('fs');
+const directory = process.env.EMPTY_FIXTURE;
+
+function sub(total, completed = total) {
+  return {total, completed, percent_completed: total ? Math.round(100 * completed / total) : 0};
+}
+
+function issue(number, title, state, labels, body, children = sub(0)) {
+  return {
+    number,
+    title,
+    state,
+    labels: labels.map((name) => ({name})),
+    body,
+    sub_issues_summary: children,
+    issue_dependencies_summary: {blocked_by: 0, total_blocked_by: 0, blocking: 0, total_blocking: 0},
+    assignees: [],
+  };
+}
+
+const issues = [
+  issue(500, 'Running blocker spec', 'open', [], '## Problem Statement\nEmpty-wave fixture.', sub(1, 0)),
+  issue(501, 'Running blocker ticket', 'open', [], ''),
+  issue(510, 'Idle blocked spec', 'open', [], '## Problem Statement\nEmpty-wave fixture.', sub(1, 0)),
+  issue(511, 'Idle blocked ticket', 'open', [], ''),
+];
+const responses = {
+  'sub-500': [issues[1]],
+  'sub-510': [issues[3]],
+  'blocker-501': [],
+  'blocker-511': [issues[0]],
+};
+
+fs.writeFileSync(`${directory}/issues.json`, JSON.stringify(issues, null, 2));
+for (const [name, value] of Object.entries(responses)) {
+  fs.writeFileSync(`${directory}/${name}.json`, JSON.stringify(value, null, 2));
+}
+NODE
+
+cat > "$BIN/order-lstart" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+  777) printf '%s\n' 'fake alive' ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$BIN/order-lstart"
+
+cat > "$BIN/order-lstart-all" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+  777) printf '%s\n' 'fake alive' ;;
+  778) printf '%s\n' 'dead holder' ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$BIN/order-lstart-all"
+
+git -C "$ORDER_REPO" init --quiet
+git -C "$ORDER_REPO" config user.name 'Pipeline Status Order Test'
+git -C "$ORDER_REPO" config user.email 'pipeline-status-order-test@example.invalid'
+git -C "$ORDER_REPO" config commit.gpgsign false
+printf '%s\n' 'order repository' > "$ORDER_REPO/README.md"
+git -C "$ORDER_REPO" add README.md
+git -C "$ORDER_REPO" commit --quiet -m 'initial commit'
+git -C "$ORDER_REPO" branch spec-370
+git -C "$ORDER_REPO" branch spec-380
+mkdir -p "$ORDER_REPO/.git/implement-spec-split/claims"
+printf '%s\n' '{"spec":370,"branch":"spec-370","worktree":"/tmp/order-370","pid":777,"pid_start":"fake alive","claimed_at":"2026-11-12T09:00:00+08:00"}' \
+  > "$ORDER_REPO/.git/implement-spec-split/claims/spec-370.json"
+printf '%s\n' '{"spec":380,"branch":"spec-380","worktree":"/tmp/order-380","pid":778,"pid_start":"dead holder","claimed_at":"2026-11-12T09:05:00+08:00"}' \
+  > "$ORDER_REPO/.git/implement-spec-split/claims/spec-380.json"
+
+git -C "$EMPTY_REPO" init --quiet
+git -C "$EMPTY_REPO" config user.name 'Pipeline Status Empty Wave Test'
+git -C "$EMPTY_REPO" config user.email 'pipeline-status-empty-wave-test@example.invalid'
+git -C "$EMPTY_REPO" config commit.gpgsign false
+printf '%s\n' 'empty wave repository' > "$EMPTY_REPO/README.md"
+git -C "$EMPTY_REPO" add README.md
+git -C "$EMPTY_REPO" commit --quiet -m 'initial commit'
+git -C "$EMPTY_REPO" branch spec-500
+mkdir -p "$EMPTY_REPO/.git/implement-spec-split/claims"
+printf '%s\n' '{"spec":500,"branch":"spec-500","worktree":"/tmp/order-500","pid":777,"pid_start":"fake alive","claimed_at":"2026-11-12T09:10:00+08:00"}' \
+  > "$EMPTY_REPO/.git/implement-spec-split/claims/spec-500.json"
+
 run_status() {
   cwd=$1
   output=$2
@@ -266,6 +483,7 @@ run_status() {
 
 run_status "$REPO" "$WORK/main.out"
 expect_exit 0 "fixture scan succeeds"
+expect_without '开发顺序' 'without --order keeps pipeline output' "$WORK/main.out"
 expect_has '- #89 1/3' 'independent spec uses implementation children and spec number' "$WORK/main.out"
 expect_without '- #56 ' 'map implementation parent is not also a legacy spec' "$WORK/main.out"
 expect_has '已接手（分支 spec-89，最后提交 ' 'exact integration branch is taken' "$WORK/main.out"
@@ -308,6 +526,102 @@ expect_section_without '散票' '#80 ' 'spec itself is not loose' "$WORK/all.out
 expect_section_without '散票' '#70 ' 'legacy parent is not loose' "$WORK/all.out"
 expect_section_without '散票' '#71 ' 'legacy child is not loose' "$WORK/all.out"
 expect_has '  - #24 [wayfinder:grilling] Open grilling decision（有未关阻塞）（已认领：allan）' 'decision ticket state is rendered' "$WORK/all.out"
+
+run_order() {
+  output=$1
+  shift
+  (
+    cd "$ORDER_REPO" || exit 125
+    env FIXTURE_DIR="$ORDER_FIXTURE" PATH="$BIN:$PATH" \
+      ISS_PS_LSTART_CMD="$BIN/order-lstart" \
+      bash "$SCRIPT" --repo test/repo --order "$@"
+  ) > "$output" 2> "${output}.err"
+  RUN_EXIT=$?
+}
+
+run_order "$WORK/order-apart.out" --parallel 5 --apart 300:390 --cmd-suffix ''
+expect_exit 0 "order mode succeeds"
+expect_has '开发顺序（同时 5 份）' 'order heading includes requested concurrency' "$WORK/order-apart.out"
+expect_has '先恢复：#380' 'dead claim is marked for recovery' "$WORK/order-apart.out"
+expect_has '进行中：#370（spec-370）' 'live claim is running and names its branch' "$WORK/order-apart.out"
+expect_has ' 1. #300 Hub root → /implement-spec-split 300' 'spec with more idle downstream is first' "$WORK/order-apart.out"
+expect_has ' 2. #420 Spec-owned blocker root → /implement-spec-split 420' 'spec-issue source with downstream specs is ordered early' "$WORK/order-apart.out"
+expect_has ' 3. #330 Partial dependency → /implement-spec-split 330（部分等 #380；另需 #399）' 'partially blocked idle spec enters wave with annotations' "$WORK/order-apart.out"
+expect_has ' 7. #390 Tie-break spec' 'apart conflict is deferred after wave' "$WORK/order-apart.out"
+expect_has ' 6. #340 Complete dependency（等 #370）' 'fully blocked spec is numbered after wave' "$WORK/order-apart.out"
+expect_has ' 8. #410 Blocked by needs tickets（等 #400）' 'needs-tickets dependency annotates but does not delay ordering' "$WORK/order-apart.out"
+expect_has ' 4. #310 Downstream one（等 #300）' 'lower number breaks downstream tie' "$WORK/order-apart.out"
+expect_has ' 9. #430 Blocked by spec issue（等 #420）' 'blocker by another spec issue number is a spec dependency' "$WORK/order-apart.out"
+expect_has ' 10. #440 Blocked by implementation ref（等 #420）' 'blocker by a referenced implementation ticket is a spec dependency' "$WORK/order-apart.out"
+expect_without '（另需 #420）' 'spec-owned blockers are not labeled as loose tickets' "$WORK/order-apart.out"
+expect_section_without '之后' ' → /implement-spec-split' 'later entries omit commands' "$WORK/order-apart.out"
+expect_has '循环依赖：#350 #360，需要人工决定' 'cyclic specs are listed separately' "$WORK/order-apart.out"
+expect_without ' 6. #350' 'cyclic specs are not numbered' "$WORK/order-apart.out"
+expect_without ' 1. #340 ' 'fully blocked spec does not enter first wave' "$WORK/order-apart.out"
+expect_without ' 1. #430 ' 'spec-issue dependency does not enter first wave' "$WORK/order-apart.out"
+expect_without ' 1. #440 ' 'implementation-ref dependency does not enter first wave' "$WORK/order-apart.out"
+
+cat > "$WORK/order-apart.expected" <<'EOF'
+开发顺序（同时 5 份）
+先恢复：#380
+进行中：#370（spec-370）
+第 1 波：
+ 1. #300 Hub root → /implement-spec-split 300
+ 2. #420 Spec-owned blocker root → /implement-spec-split 420
+ 3. #330 Partial dependency → /implement-spec-split 330（部分等 #380；另需 #399）
+之后：
+ 4. #310 Downstream one（等 #300）
+ 5. #320 Downstream two（等 #300）
+ 6. #340 Complete dependency（等 #370）
+ 7. #390 Tie-break spec
+ 8. #410 Blocked by needs tickets（等 #400）
+ 9. #430 Blocked by spec issue（等 #420）
+ 10. #440 Blocked by implementation ref（等 #420）
+循环依赖：#350 #360，需要人工决定
+EOF
+expect_equal "$WORK/order-apart.out" "$WORK/order-apart.expected" 'order output exact and deterministic'
+
+run_order "$WORK/order-apart-repeat.out" --parallel 5 --apart 300:390 --cmd-suffix ''
+expect_equal "$WORK/order-apart-repeat.out" "$WORK/order-apart.out" 'same order inputs produce identical output'
+
+run_order "$WORK/order-no-apart.out" --parallel 5
+expect_exit 0 "order mode without apart succeeds"
+expect_has ' 1. #300 Hub root → /implement-spec-split 300 --impl codex' 'default command suffix is appended' "$WORK/order-no-apart.out"
+expect_without ' 2. #390 ' 'tie-break spec follows equal-score lower specs' "$WORK/order-no-apart.out"
+
+run_order "$WORK/order-capacity.out" --parallel 5 --apart 300:390
+expect_exit 0 "order mode subtracts active and interrupted specs"
+expect_has ' 1. #300 Hub root' 'first capacity slot selects hub root' "$WORK/order-capacity.out"
+expect_has ' 2. #420 Spec-owned blocker root' 'second capacity slot selects another ready root' "$WORK/order-capacity.out"
+expect_has ' 3. #330 Partial dependency' 'third capacity slot selects partial dependency' "$WORK/order-capacity.out"
+expect_without ' 4. #390 Tie-break spec' 'capacity subtracts running and interrupted specs' "$WORK/order-capacity.out"
+expect_has '之后：' 'remaining specs continue numbering after wave' "$WORK/order-capacity.out"
+
+run_order "$WORK/order-default-capacity.out"
+expect_exit 0 "default parallel is two"
+expect_has '第 1 波：（无，先恢复上面的规格）' 'interrupted specs occupying capacity ask for recovery first' "$WORK/order-default-capacity.out"
+
+(
+  cd "$ORDER_REPO" || exit 125
+  env FIXTURE_DIR="$ORDER_FIXTURE" PATH="$BIN:$PATH" \
+    ISS_PS_LSTART_CMD="$BIN/order-lstart-all" \
+    bash "$SCRIPT" --repo test/repo --order --parallel 2
+) > "$WORK/order-running-capacity.out" 2> "$WORK/order-running-capacity.err"
+RUN_EXIT=$?
+expect_exit 0 "all order holders alive succeeds"
+expect_has '进行中：#370（spec-370） #380（spec-380）' 'both branch-holding specs are running with alive holders' "$WORK/order-running-capacity.out"
+expect_has '第 1 波：（无，等进行中的规格合入）' 'running specs filling capacity ask user to wait' "$WORK/order-running-capacity.out"
+
+(
+  cd "$EMPTY_REPO" || exit 125
+  env FIXTURE_DIR="$EMPTY_FIXTURE" PATH="$BIN:$PATH" \
+    ISS_PS_LSTART_CMD="$BIN/order-lstart" \
+    bash "$SCRIPT" --repo test/repo --order --parallel 2
+) > "$WORK/order-blocked-capacity.out" 2> "$WORK/order-blocked-capacity.err"
+RUN_EXIT=$?
+expect_exit 0 "blocked-capacity order succeeds"
+expect_has '第 1 波：（无，都在等前置规格合入）' 'available capacity with fully blocked candidates reports dependencies' "$WORK/order-blocked-capacity.out"
+expect_has ' 1. #510 Idle blocked spec（等 #500）' 'direct spec blocker remains a dependency after source starts' "$WORK/order-blocked-capacity.out"
 
 run_status "$NOT_REPO" "$WORK/not-repo.out"
 expect_exit 0 "outside a git repository still scans issues"
