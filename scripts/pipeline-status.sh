@@ -5,7 +5,7 @@ set -u
 
 usage() {
   cat <<'EOF'
-Usage: pipeline-status.sh [--repo <owner/name>] [--all] [-h|--help]
+Usage: pipeline-status.sh [--repo <owner/name>] [--all] [--order] [-h|--help]
 
 Scan GitHub issues and local git branches, then list unfinished pipeline work by
 stage. Without --repo, the repository is detected with `gh repo view`.
@@ -14,6 +14,10 @@ Only GitHub is supported. For other issue trackers, follow that repository's
 tracker documentation instead.
 
   --all                  Also list exploring decisions, ticket-hygiene candidates, and loose issues.
+  --order                Print a deterministic development order for implementable Specs.
+  --parallel K           With --order, plan for K concurrent Specs (default: 2).
+  --apart A:B            With --order, keep A and B out of the same wave. Repeatable.
+  --cmd-suffix STR       With --order, append STR to each command (default: --impl codex).
 EOF
 }
 
@@ -24,6 +28,11 @@ die() {
 
 REPO=
 ALL=0
+ORDER=0
+PARALLEL=2
+CMD_SUFFIX='--impl codex'
+APART=()
+APART_COUNT=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --repo)
@@ -34,6 +43,33 @@ while [ $# -gt 0 ]; do
     --all)
       ALL=1
       shift
+      ;;
+    --order)
+      ORDER=1
+      shift
+      ;;
+    --parallel)
+      [ $# -ge 2 ] || die "--parallel requires <K>"
+      case "$2" in
+        *[!0-9]*|'') die "--parallel requires a positive integer" ;;
+        0) die "--parallel requires a positive integer" ;;
+      esac
+      PARALLEL=$2
+      shift 2
+      ;;
+    --apart)
+      [ $# -ge 2 ] || die "--apart requires <A:B>"
+      if ! [[ "$2" =~ ^[0-9]+:[0-9]+$ ]]; then
+        die "--apart requires <A:B> with two issue numbers"
+      fi
+      APART+=("$2")
+      APART_COUNT=$((APART_COUNT + 1))
+      shift 2
+      ;;
+    --cmd-suffix)
+      [ $# -ge 2 ] || die "--cmd-suffix requires <STR>"
+      CMD_SUFFIX=$2
+      shift 2
       ;;
     -h|--help)
       usage
@@ -347,7 +383,7 @@ if (mode === 'collect') {
 
   const needsTickets = stage.specs
     .filter((spec) => !spec.ownChildren && !spec.refs.some((ref) => implementations.has(Number(ref))))
-    .map((spec) => ({number: spec.number, title: spec.title}))
+    .map((spec) => ({number: spec.number, title: spec.title, refs: spec.refs}))
     .sort((a, b) => a.number - b.number);
 
   const referencedImplementations = new Set();
@@ -693,6 +729,376 @@ if (mode === 'render') {
   process.exit(0);
 }
 
+if (mode === 'order') {
+  const issues = readJson(args[0]);
+  const pipeline = readJson(args[1]);
+  const blockerDir = args[2];
+  const parallel = Math.max(1, Number(args[3] || 2));
+  const commandSuffix = args[4] === undefined ? '--impl codex' : args[4];
+  const suppliedClaimsDir = args[5] || '';
+  const lstartCommand = args[6] || 'ps -o lstart= -p';
+  const apartPairs = args.slice(7).map((value) => {
+    const match = String(value).match(/^([0-9]+):([0-9]+)$/);
+    if (!match) throw new Error(`invalid --apart value: ${value}`);
+    return [Number(match[1]), Number(match[2])];
+  });
+
+  function clean(value) {
+    return String(value || '').replace(/[\r\n\t]+/g, ' ').trim();
+  }
+
+  const gitState = {checked: false, inside: false};
+  function insideGit() {
+    if (!gitState.checked) {
+      try {
+        const result = cp.execFileSync('git', ['rev-parse', '--is-inside-work-tree'], {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+        }).trim();
+        gitState.inside = result === 'true';
+      } catch (_) {
+        gitState.inside = false;
+      }
+      gitState.checked = true;
+    }
+    return gitState.inside;
+  }
+
+  function integrationBranch(number) {
+    if (!insideGit()) return null;
+    try {
+      const exact = `spec-${number}`;
+      const output = cp.execFileSync('git', [
+        'branch', '--list', exact, `${exact}-*`, '--format=%(refname:short)',
+      ], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']})
+        .split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+      if (output.includes(exact)) return exact;
+      return output.find((branch) => branch.startsWith(`${exact}-`)) || null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function commonGitDir() {
+    try {
+      const value = cp.execFileSync('git', ['rev-parse', '--git-common-dir'], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }).trim();
+      return path.resolve(process.cwd(), value);
+    } catch (_) {
+      return '';
+    }
+  }
+
+  const claimsDir = suppliedClaimsDir || (() => {
+    const commonDir = commonGitDir();
+    return commonDir ? path.join(commonDir, 'implement-spec-split', 'claims') : '';
+  })();
+
+  function processStart(pid) {
+    try {
+      const output = cp.execFileSync('/bin/sh', [
+        '-c', `${lstartCommand} "$@"`, 'pipeline-status-lstart', String(pid),
+      ], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']});
+      return String(output || '').trim();
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function holderAlive(specNumber) {
+    if (!claimsDir) return false;
+    let claim;
+    try {
+      claim = readJson(path.join(claimsDir, `spec-${specNumber}.json`));
+    } catch (_) {
+      return false;
+    }
+    const pid = Number(claim.pid);
+    if (!Number.isFinite(pid) || pid <= 0) return false;
+    const expected = String(claim.pid_start || '').trim();
+    return expected !== '' && processStart(pid) === expected;
+  }
+
+  function blockersForTicket(number) {
+    try {
+      const value = readJson(path.join(blockerDir, `blocker-${number}.json`));
+      return Array.isArray(value) ? value : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  const issueByNumber = new Map(issues.map((issue) => [Number(issue.number), issue]));
+  const ticketOwner = new Map();
+  function rememberTicketOwner(number, owner) {
+    const key = Number(number);
+    if (Number.isFinite(key) && !ticketOwner.has(key)) ticketOwner.set(key, owner);
+  }
+
+  for (const spec of pipeline.implement) {
+    for (const ticket of spec.tickets) {
+      rememberTicketOwner(ticket.number, {
+        number: Number(spec.number),
+        kind: 'implement',
+      });
+    }
+  }
+
+  for (const spec of pipeline.implement) {
+    rememberTicketOwner(spec.number, {
+      number: Number(spec.number),
+      kind: 'implement',
+    });
+  }
+
+  for (const spec of pipeline.needsTickets) {
+    rememberTicketOwner(spec.number, {
+      number: Number(spec.number),
+      kind: 'needsTickets',
+    });
+  }
+  for (const spec of pipeline.implement) {
+    const issue = issueByNumber.get(Number(spec.number));
+    for (const ref of bodyReferences(issue || {})) {
+      rememberTicketOwner(ref, {
+        number: Number(spec.number),
+        kind: 'implement',
+      });
+    }
+  }
+  for (const spec of pipeline.needsTickets) {
+    const issue = issueByNumber.get(Number(spec.number));
+    for (const ref of bodyReferences(issue || {})) {
+      rememberTicketOwner(ref, {
+        number: Number(spec.number),
+        kind: 'needsTickets',
+      });
+    }
+  }
+
+  const states = new Map();
+  const branches = new Map();
+  const records = new Map();
+  for (const spec of pipeline.implement) {
+    const number = Number(spec.number);
+    const branch = integrationBranch(number);
+    const state = !branch ? 'idle' : (holderAlive(number) ? 'running' : 'interrupted');
+    branches.set(number, branch);
+    states.set(number, state);
+    records.set(number, {
+      number,
+      title: spec.title,
+      branch,
+      state,
+      dependencies: new Set(),
+      extraBlockers: new Set(),
+      complete: false,
+      partial: false,
+    });
+  }
+
+  const edges = new Map();
+  for (const spec of pipeline.implement) {
+    const target = Number(spec.number);
+    const targetTickets = new Set(spec.tickets.map((ticket) => Number(ticket.number)));
+    const openTickets = spec.tickets.filter((ticket) => ticket.state === 'open');
+    const blockersByTicket = new Map();
+    const frontier = [];
+    for (const ticket of openTickets) {
+      const openBlockers = blockersForTicket(ticket.number).filter((blocker) => (
+        blocker.state === 'open'
+      ));
+      const internal = openBlockers.filter((blocker) => (
+        targetTickets.has(Number(blocker.number))
+      ));
+      const external = openBlockers.filter((blocker) => (
+        !targetTickets.has(Number(blocker.number))
+      ));
+      blockersByTicket.set(Number(ticket.number), external);
+      if (internal.length === 0) frontier.push(ticket);
+    }
+
+    const record = records.get(target);
+    record.complete = frontier.length === 0 ||
+      frontier.every((ticket) => blockersByTicket.get(Number(ticket.number)).length > 0);
+
+    for (const ticket of openTickets) {
+      for (const blocker of blockersByTicket.get(Number(ticket.number))) {
+        const blockerNumber = Number(blocker.number);
+        const owner = ticketOwner.get(blockerNumber);
+        if (owner && owner.number !== target) {
+          record.dependencies.add(owner.number);
+          if (!edges.has(owner.number)) edges.set(owner.number, new Set());
+          edges.get(owner.number).add(target);
+        } else if (!owner) {
+          record.extraBlockers.add(blockerNumber);
+        }
+      }
+    }
+    record.partial = !record.complete &&
+      (record.dependencies.size > 0 || record.extraBlockers.size > 0);
+  }
+
+  const implementNumbers = pipeline.implement.map((spec) => Number(spec.number));
+  const idleNumbers = implementNumbers.filter((number) => states.get(number) === 'idle');
+  const idleSet = new Set(idleNumbers);
+  const idleEdges = new Map(idleNumbers.map((number) => [number, new Set()]));
+  for (const [source, targets] of edges) {
+    if (!idleSet.has(source)) continue;
+    for (const target of targets) {
+      if (idleSet.has(target)) idleEdges.get(source).add(target);
+    }
+  }
+
+  function canReach(start, target) {
+    const seen = new Set();
+    const stack = [...(idleEdges.get(start) || [])];
+    while (stack.length > 0) {
+      const current = stack.pop();
+      if (current === target) return true;
+      if (seen.has(current)) continue;
+      seen.add(current);
+      for (const next of idleEdges.get(current) || []) stack.push(next);
+    }
+    return false;
+  }
+  const cyclic = new Set(idleNumbers.filter((number) => canReach(number, number)));
+  const orderedNumbers = [];
+  const remaining = new Set(idleNumbers.filter((number) => !cyclic.has(number)));
+  const acyclicEdges = new Map();
+  for (const [source, targets] of idleEdges) {
+    if (!remaining.has(source)) continue;
+    acyclicEdges.set(source, new Set([...targets].filter((target) => remaining.has(target))));
+  }
+
+  const reachableCounts = new Map();
+  function reachableFrom(start) {
+    if (reachableCounts.has(start)) return reachableCounts.get(start);
+    const seen = new Set();
+    const stack = [...(acyclicEdges.get(start) || [])];
+    while (stack.length > 0) {
+      const current = stack.pop();
+      if (seen.has(current)) continue;
+      seen.add(current);
+      for (const next of acyclicEdges.get(current) || []) stack.push(next);
+    }
+    const value = seen.size;
+    reachableCounts.set(start, value);
+    return value;
+  }
+
+  const indegree = new Map([...remaining].map((number) => [number, 0]));
+  for (const targets of acyclicEdges.values()) {
+    for (const target of targets) indegree.set(target, indegree.get(target) + 1);
+  }
+  const available = [...remaining].filter((number) => indegree.get(number) === 0);
+  while (available.length > 0) {
+    available.sort((a, b) => (
+      reachableFrom(b) - reachableFrom(a) || a - b
+    ));
+    const current = available.shift();
+    orderedNumbers.push(current);
+    for (const target of acyclicEdges.get(current) || []) {
+      const value = indegree.get(target) - 1;
+      indegree.set(target, value);
+      if (value === 0) available.push(target);
+    }
+  }
+
+  const interrupted = implementNumbers
+    .filter((number) => states.get(number) === 'interrupted')
+    .sort((a, b) => a - b);
+  const running = implementNumbers
+    .filter((number) => states.get(number) === 'running')
+    .sort((a, b) => a - b);
+  const capacity = Math.max(0, parallel - running.length - interrupted.length);
+  const wave = [];
+  const waveSet = new Set();
+  for (const number of orderedNumbers) {
+    if (wave.length >= capacity) break;
+    const record = records.get(number);
+    if (record.complete) continue;
+    const conflicts = apartPairs.some(([left, right]) => (
+      (left === number && waveSet.has(right)) ||
+      (right === number && waveSet.has(left))
+    ));
+    if (conflicts) continue;
+    wave.push(number);
+    waveSet.add(number);
+  }
+  const later = orderedNumbers.filter((number) => !waveSet.has(number));
+
+  function formatCommand(number) {
+    const suffix = commandSuffix === '' ? '' : ` ${commandSuffix}`;
+    return `/implement-spec-split ${number}${suffix}`;
+  }
+
+  function annotation(number, firstWave) {
+    const record = records.get(number);
+    const dependencies = [...record.dependencies].sort((a, b) => a - b)
+      .map((value) => `#${value}`);
+    const extras = [...record.extraBlockers].sort((a, b) => a - b)
+      .map((value) => `#${value}`);
+    const parts = [];
+    if (dependencies.length > 0) {
+      const prefix = firstWave && record.partial ? '部分等' : '等';
+      parts.push(`${prefix} ${dependencies.join(' ')}`);
+    }
+    if (extras.length > 0) parts.push(`另需 ${extras.join(' ')}`);
+    return parts.length > 0 ? `（${parts.join('；')}）` : '';
+  }
+
+  const lines = [];
+  if (pipeline.implement.length === 0) {
+    lines.push('开发顺序：没有可以实现的规格');
+    process.stdout.write(lines.join('\n') + '\n');
+    process.exit(0);
+  }
+
+  lines.push(`开发顺序（同时 ${parallel} 份）`);
+  if (interrupted.length > 0) {
+    lines.push(`先恢复：${interrupted.map((number) => `#${number}`).join(' ')}`);
+  }
+  if (running.length > 0) {
+    lines.push(`进行中：${running.map((number) => (
+      `#${number}（${branches.get(number)}）`
+    )).join(' ')}`);
+  }
+  if (wave.length === 0) {
+    const emptyWaveMessage = capacity === 0
+      ? (interrupted.length > 0
+        ? '无，先恢复上面的规格'
+        : '无，等进行中的规格合入')
+      : '无，都在等前置规格合入';
+    lines.push(`第 1 波：（${emptyWaveMessage}）`);
+  } else {
+    lines.push('第 1 波：');
+    let index = 1;
+    for (const number of wave) {
+      const record = records.get(number);
+      lines.push(` ${index}. #${number} ${clean(record.title)} → ${formatCommand(number)}${annotation(number, true)}`);
+      index += 1;
+    }
+  }
+  if (later.length > 0) {
+    lines.push('之后：');
+    let index = wave.length + 1;
+    for (const number of later) {
+      const record = records.get(number);
+      lines.push(` ${index}. #${number} ${clean(record.title)}${annotation(number, false)}`);
+      index += 1;
+    }
+  }
+  if (cyclic.size > 0) {
+    const numbers = [...cyclic].sort((a, b) => a - b).map((number) => `#${number}`);
+    lines.push(`循环依赖：${numbers.join(' ')}，需要人工决定`);
+  }
+  process.stdout.write(lines.join('\n') + '\n');
+  process.exit(0);
+}
+
 process.stderr.write(`pipeline-status: internal error: unknown node mode ${mode}\n`);
 process.exit(70);
 NODE
@@ -750,6 +1156,26 @@ for number in $BLOCKER_REQUESTS; do
   fi
 done
 
-if ! pipeline_node render "$ISSUES_FILE" "$PIPELINE_FILE" "$WORK/blockers" "$ALL"; then
-  die "could not render pipeline status"
+if [ "$ORDER" -eq 1 ]; then
+  ORDER_ARGS=(
+    "$ISSUES_FILE"
+    "$PIPELINE_FILE"
+    "$WORK/blockers"
+    "$PARALLEL"
+    "$CMD_SUFFIX"
+    ''
+    "${ISS_PS_LSTART_CMD:-ps -o lstart= -p}"
+  )
+  if [ "$APART_COUNT" -gt 0 ]; then
+    for pair in "${APART[@]}"; do
+      ORDER_ARGS+=("$pair")
+    done
+  fi
+  if ! pipeline_node order "${ORDER_ARGS[@]}"; then
+    die "could not render development order"
+  fi
+else
+  if ! pipeline_node render "$ISSUES_FILE" "$PIPELINE_FILE" "$WORK/blockers" "$ALL"; then
+    die "could not render pipeline status"
+  fi
 fi
