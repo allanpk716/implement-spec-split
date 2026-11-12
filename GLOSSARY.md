@@ -62,6 +62,17 @@ One invocation of the skill, implementing one Spec from start to finish; several
 Continuing, in a new Run, a Spec that an earlier Run started but did not finish; triggered only by the user choosing that Spec.
 _Avoid_: takeover, Resume (that is continuing one External worker's own conversation)
 
+**Claim record**:
+The file `<git common dir>/implement-spec-split/claims/spec-<n>.json` written by `scripts/claim.sh` when a Run takes a Spec; it names the Claude Code process (PID and start time) holding the Spec, so any Run or find-next can tell an active Spec from an interrupted one without Orca.
+_Avoid_: lock file, Orca status
+
+**Landing lock**:
+The repo-wide lock (`scripts/lock.sh acquire land --scope repo`) a Run holds from merging the latest main branch into its integration branch until it has pushed the merged main branch, so that what it tested is what lands.
+_Avoid_: merge lock (mergers inside one Run are already serialised)
+
+**Worker slot**:
+One of the machine-wide places (`ISS_MAX_WORKERS`, default 4) an External worker wrapper must hold while its agent runs; wrappers beyond that queue instead of failing, because all Runs share one GLM quota.
+
 **Integration branch**:
 The single branch where every Ticket of a Spec is merged before review.
 
