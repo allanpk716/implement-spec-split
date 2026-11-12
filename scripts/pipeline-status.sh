@@ -16,8 +16,10 @@ tracker documentation instead.
   --all                  Also list exploring decisions, ticket-hygiene candidates, and loose issues.
   --order                Print a deterministic development order for implementable Specs.
   --parallel K           With --order, plan for K concurrent Specs (default: 2).
+  --workers N            With --order, split N total workers across K concurrent Specs.
   --apart A:B            With --order, keep A and B out of the same wave. Repeatable.
   --cmd-suffix STR       With --order, append STR to each command (default: --impl codex).
+  --json                 With --order, print the same plan as JSON instead of a text table.
 EOF
 }
 
@@ -30,7 +32,9 @@ REPO=
 ALL=0
 ORDER=0
 PARALLEL=2
+WORKERS=
 CMD_SUFFIX='--impl codex'
+JSON=0
 APART=()
 APART_COUNT=0
 while [ $# -gt 0 ]; do
@@ -57,6 +61,15 @@ while [ $# -gt 0 ]; do
       PARALLEL=$2
       shift 2
       ;;
+    --workers)
+      [ $# -ge 2 ] || die "--workers requires <N>"
+      case "$2" in
+        *[!0-9]*|'') die "--workers requires a positive integer" ;;
+        0) die "--workers requires a positive integer" ;;
+      esac
+      WORKERS=$2
+      shift 2
+      ;;
     --apart)
       [ $# -ge 2 ] || die "--apart requires <A:B>"
       if ! [[ "$2" =~ ^[0-9]+:[0-9]+$ ]]; then
@@ -71,6 +84,10 @@ while [ $# -gt 0 ]; do
       CMD_SUFFIX=$2
       shift 2
       ;;
+    --json)
+      JSON=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -81,6 +98,9 @@ while [ $# -gt 0 ]; do
       ;;
   esac
 done
+
+[ "$JSON" -eq 0 ] || [ "$ORDER" -eq 1 ] ||
+  die "--json is only supported with --order"
 
 command -v gh >/dev/null 2>&1 || die "gh is required but was not found on PATH"
 command -v node >/dev/null 2>&1 || die "node is required but was not found on PATH"
@@ -737,7 +757,17 @@ if (mode === 'order') {
   const commandSuffix = args[4] === undefined ? '--impl codex' : args[4];
   const suppliedClaimsDir = args[5] || '';
   const lstartCommand = args[6] || 'ps -o lstart= -p';
-  const apartPairs = args.slice(7).map((value) => {
+  const workersArgument = args[7] || '';
+  const jsonOutput = args[8] === '1';
+  const workers = workersArgument === '' ? null : Number(workersArgument);
+  const perSpecParallel = workers === null
+    ? null
+    : Math.max(1, Math.floor(workers / parallel));
+  const nowEpochArgument = process.env.ISS_NOW_EPOCH;
+  const nowEpoch = nowEpochArgument === undefined
+    ? Math.floor(Date.now() / 1000)
+    : Number(nowEpochArgument);
+  const apartPairs = args.slice(9).map((value) => {
     const match = String(value).match(/^([0-9]+):([0-9]+)$/);
     if (!match) throw new Error(`invalid --apart value: ${value}`);
     return [Number(match[1]), Number(match[2])];
@@ -779,6 +809,20 @@ if (mode === 'order') {
     }
   }
 
+  function exactIntegrationBranchExists(number) {
+    if (!insideGit()) return false;
+    try {
+      const exact = `spec-${number}`;
+      const output = cp.execFileSync('git', [
+        'branch', '--list', exact, '--format=%(refname:short)',
+      ], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']})
+        .split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+      return output.includes(exact);
+    } catch (_) {
+      return false;
+    }
+  }
+
   function commonGitDir() {
     try {
       const value = cp.execFileSync('git', ['rev-parse', '--git-common-dir'], {
@@ -807,18 +851,73 @@ if (mode === 'order') {
     }
   }
 
-  function holderAlive(specNumber) {
-    if (!claimsDir) return false;
-    let claim;
-    try {
-      claim = readJson(path.join(claimsDir, `spec-${specNumber}.json`));
-    } catch (_) {
-      return false;
+  const claimCache = new Map();
+  function claimFor(specNumber) {
+    if (claimCache.has(specNumber)) return claimCache.get(specNumber);
+    let claim = null;
+    if (claimsDir) {
+      try {
+        claim = readJson(path.join(claimsDir, `spec-${specNumber}.json`));
+      } catch (_) {
+        claim = null;
+      }
     }
+    claimCache.set(specNumber, claim);
+    return claim;
+  }
+
+  function handoffAlive(claim) {
+    if (!claim || (claim.handoff !== 'fresh' && claim.handoff !== 'resume')) return false;
+    const until = Number(claim.handoff_until_epoch);
+    return Number.isFinite(nowEpoch) && Number.isFinite(until) && nowEpoch < until;
+  }
+
+  function holderAlive(specNumber) {
+    const claim = claimFor(specNumber);
+    if (!claim) return false;
+    if (handoffAlive(claim)) return true;
     const pid = Number(claim.pid);
     if (!Number.isFinite(pid) || pid <= 0) return false;
     const expected = String(claim.pid_start || '').trim();
     return expected !== '' && processStart(pid) === expected;
+  }
+
+  function checkoutWorktree(specNumber) {
+    if (!insideGit()) return null;
+    try {
+      const output = cp.execFileSync('git', ['worktree', 'list', '--porcelain'], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      const wanted = `refs/heads/spec-${specNumber}`;
+      let worktreePath = null;
+      for (const line of output.split(/\r?\n/)) {
+        if (line.startsWith('worktree ')) {
+          worktreePath = line.slice('worktree '.length);
+        } else if (line === `branch ${wanted}` && worktreePath) {
+          return worktreePath;
+        } else if (line === '') {
+          worktreePath = null;
+        }
+      }
+    } catch (_) {
+      return null;
+    }
+    return null;
+  }
+
+  function resumeWorktree(specNumber) {
+    const claim = claimFor(specNumber);
+    const recorded = claim ? String(claim.worktree || '') : '';
+    if (recorded !== '') {
+      try {
+        const resolved = path.resolve(recorded);
+        if (fs.statSync(resolved).isDirectory()) return resolved;
+      } catch (_) {
+        // Fall through to git's worktree metadata below.
+      }
+    }
+    return checkoutWorktree(specNumber);
   }
 
   function blockersForTicket(number) {
@@ -884,14 +983,32 @@ if (mode === 'order') {
   for (const spec of pipeline.implement) {
     const number = Number(spec.number);
     const branch = integrationBranch(number);
-    const state = !branch ? 'idle' : (holderAlive(number) ? 'running' : 'interrupted');
-    branches.set(number, branch);
+    const claim = claimFor(number);
+    const exactBranchExists = exactIntegrationBranchExists(number);
+    const liveHandoff = handoffAlive(claim);
+    const reservedWithoutBranch = liveHandoff && !exactBranchExists;
+    const expiredReservation = Boolean(claim && claim.handoff && !liveHandoff);
+    let state;
+    if (holderAlive(number)) {
+      state = 'running';
+    } else if (branch && !(expiredReservation && !exactBranchExists)) {
+      state = 'interrupted';
+    } else {
+      state = 'idle';
+    }
+    const displayBranch = reservedWithoutBranch
+      ? `spec-${number}`
+      : branch;
+    branches.set(number, displayBranch);
     states.set(number, state);
     records.set(number, {
       number,
       title: spec.title,
-      branch,
+      branch: displayBranch,
+      actualBranch: branch,
       state,
+      claim,
+      worktree: branch ? String((claim || {}).worktree || '') : '',
       dependencies: new Set(),
       extraBlockers: new Set(),
       complete: false,
@@ -1032,7 +1149,8 @@ if (mode === 'order') {
 
   function formatCommand(number) {
     const suffix = commandSuffix === '' ? '' : ` ${commandSuffix}`;
-    return `/implement-spec-split ${number}${suffix}`;
+    const workerSuffix = perSpecParallel === null ? '' : ` --parallel ${perSpecParallel}`;
+    return `/implement-spec-split ${number}${suffix}${workerSuffix}`;
   }
 
   function annotation(number, firstWave) {
@@ -1050,6 +1168,59 @@ if (mode === 'order') {
     return parts.length > 0 ? `（${parts.join('；')}）` : '';
   }
 
+  const plan = {
+    parallel_specs: parallel,
+    workers,
+    per_spec_parallel: perSpecParallel,
+    resume: interrupted.map((number) => {
+      const record = records.get(number);
+      return {
+        spec: number,
+        title: clean(record.title),
+        branch: record.branch,
+        worktree: resumeWorktree(number),
+        command: formatCommand(number),
+      };
+    }),
+    active: running.map((number) => {
+      const record = records.get(number);
+      return {
+        spec: number,
+        title: clean(record.title),
+        branch: record.branch,
+      };
+    }),
+    wave1: wave.map((number) => {
+      const record = records.get(number);
+      const note = annotation(number, true).replace(/^（|）$/g, '');
+      return {
+        spec: number,
+        title: clean(record.title),
+        command: formatCommand(number),
+        note,
+      };
+    }),
+    later: later.map((number, offset) => {
+      const record = records.get(number);
+      const note = annotation(number, false).replace(/^（|）$/g, '');
+      return {
+        index: wave.length + offset + 1,
+        spec: number,
+        title: clean(record.title),
+        note,
+      };
+    }),
+    cycles: [...cyclic].sort((a, b) => a - b),
+    standalone: [...new Set(
+      implementNumbers.flatMap((number) => [...records.get(number).extraBlockers])
+    )].sort((a, b) => a - b),
+  };
+
+  if (jsonOutput) {
+    process.stdout.write(JSON.stringify(plan, null, 2) + '\n');
+    process.exit(0);
+  }
+
   const lines = [];
   if (pipeline.implement.length === 0) {
     lines.push('开发顺序：没有可以实现的规格');
@@ -1057,7 +1228,9 @@ if (mode === 'order') {
     process.exit(0);
   }
 
-  lines.push(`开发顺序（同时 ${parallel} 份）`);
+  lines.push(workers === null
+    ? `开发顺序（同时 ${parallel} 份）`
+    : `开发顺序（同时 ${parallel} 份，共 ${workers} 个 worker）`);
   if (interrupted.length > 0) {
     lines.push(`先恢复：${interrupted.map((number) => `#${number}`).join(' ')}`);
   }
@@ -1092,7 +1265,7 @@ if (mode === 'order') {
     }
   }
   if (cyclic.size > 0) {
-    const numbers = [...cyclic].sort((a, b) => a - b).map((number) => `#${number}`);
+    const numbers = plan.cycles.map((number) => `#${number}`);
     lines.push(`循环依赖：${numbers.join(' ')}，需要人工决定`);
   }
   process.stdout.write(lines.join('\n') + '\n');
@@ -1165,6 +1338,8 @@ if [ "$ORDER" -eq 1 ]; then
     "$CMD_SUFFIX"
     ''
     "${ISS_PS_LSTART_CMD:-ps -o lstart= -p}"
+    "$WORKERS"
+    "$JSON"
   )
   if [ "$APART_COUNT" -gt 0 ]; then
     for pair in "${APART[@]}"; do
