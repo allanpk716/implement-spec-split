@@ -13,7 +13,11 @@ GitHub issues. Without --apply, no write request is sent.
 Manifest fields:
   key        Required spec key, matching S<number>.
   title      Required issue title.
-  body       Required markdown file, relative to the manifest.
+  body       Required markdown file, relative to the manifest, unless
+             existing_spec is used.
+  existing_spec
+             Optional positive issue number. The group only creates execution
+             tickets and attaches them to this already-existing open spec.
   labels     Optional string array; defaults to ["ready-for-agent"].
   tickets    Array of execution tickets with T<number> keys, bodies, optional
              labels, and blocked_by references.
@@ -243,6 +247,7 @@ function parseManifest(file) {
     dir: path.dirname(absolute),
     key: value.key,
     title: value.title,
+    existingSpec: value.existing_spec,
     labels: labelList(value.labels, `manifest ${file} labels`),
     ticketDefinitions: Array.isArray(value.tickets) ? value.tickets : [],
     unresolved: Array.isArray(value.unresolved) ? value.unresolved : [],
@@ -269,6 +274,9 @@ function loadManifests() {
     check(/^S[0-9]+$/.test(String(manifest.key)) &&
       typeof manifest.title === 'string' && manifest.title.trim() !== '',
     `manifest ${file}: key must match S<number> and title must be non-empty`);
+    check(manifest.existingSpec === undefined ||
+      (Number.isInteger(manifest.existingSpec) && manifest.existingSpec > 0),
+    `manifest ${file}: existing_spec must be a positive integer`);
     manifest.tickets = [];
     const ticketKeys = new Set();
     manifest.ticketDefinitions.forEach((definition, index) => {
@@ -307,30 +315,46 @@ function loadManifests() {
         blockedBy: Array.isArray(definition.blocked_by) ? definition.blocked_by : [],
       });
     });
-    const bodyFile = manifest.source.body;
-    check(typeof bodyFile === 'string' && bodyFile !== '',
-      `manifest ${file}: body must be a relative file path`);
-    check(typeof bodyFile !== 'string' || !path.isAbsolute(bodyFile),
-      `manifest ${file}: body path must be relative: ${bodyFile}`);
-    manifest.bodyFile = bodyFile;
-    manifest.absoluteBodyFile = typeof bodyFile === 'string'
-      ? path.resolve(manifest.dir, bodyFile) : '';
-    try {
-      const stat = fs.statSync(manifest.absoluteBodyFile);
-      check(stat.isFile(), `manifest ${file}: body is not a file: ${bodyFile}`);
-      if (stat.isFile()) manifest.body = fs.readFileSync(manifest.absoluteBodyFile, 'utf8');
-    } catch (_) {
+    if (manifest.existingSpec !== undefined) {
+      check(manifest.source.body === undefined,
+        `manifest ${file}: body must be omitted when existing_spec is used`);
+      manifest.bodyFile = '';
+      manifest.absoluteBodyFile = '';
       manifest.body = '';
-      errors.push(`manifest ${file}: body file not found: ${bodyFile}`);
+    } else {
+      const bodyFile = manifest.source.body;
+      check(typeof bodyFile === 'string' && bodyFile !== '',
+        `manifest ${file}: body must be a relative file path`);
+      check(typeof bodyFile !== 'string' || !path.isAbsolute(bodyFile),
+        `manifest ${file}: body path must be relative: ${bodyFile}`);
+      manifest.bodyFile = bodyFile;
+      manifest.absoluteBodyFile = typeof bodyFile === 'string'
+        ? path.resolve(manifest.dir, bodyFile) : '';
+      try {
+        const stat = fs.statSync(manifest.absoluteBodyFile);
+        check(stat.isFile(), `manifest ${file}: body is not a file: ${bodyFile}`);
+        if (stat.isFile()) manifest.body = fs.readFileSync(manifest.absoluteBodyFile, 'utf8');
+      } catch (_) {
+        manifest.body = '';
+        errors.push(`manifest ${file}: body file not found: ${bodyFile}`);
+      }
+      check((manifest.body || '').trim() !== '',
+        `manifest ${file}: body file is empty: ${bodyFile}`);
     }
-    check((manifest.body || '').trim() !== '',
-      `manifest ${file}: body file is empty: ${bodyFile}`);
     manifests.push(manifest);
   }
   const keys = manifests.map((manifest) => String(manifest.key));
   for (const key of keys) {
     if (keys.filter((value) => value === key).length > 1) {
       errors.push(`duplicate spec key: ${key}`);
+    }
+  }
+  const existingSpecs = manifests
+    .filter((manifest) => manifest.existingSpec !== undefined)
+    .map((manifest) => manifest.existingSpec);
+  for (const number of existingSpecs) {
+    if (existingSpecs.filter((value) => value === number).length > 1) {
+      errors.push(`duplicate existing_spec: #${number}`);
     }
   }
   byKey = new Map(manifests.map((manifest) => [String(manifest.key), manifest]));
@@ -460,6 +484,7 @@ function requireResolvableReference(reference, where, sourceManifest) {
   if (reference.kind === 'existing') return true;
   const issue = recordedIssue(reference);
   if (issue) return true;
+  if (reference.target && reference.target.existingSpec !== undefined) return true;
   if (selected(reference.target)) return true;
   if (!selected(sourceManifest)) return true;
   errors.push(
@@ -574,6 +599,7 @@ function ghApi(endpoint, method, fields = []) {
 function validateExistingIssues() {
   const numbers = new Set();
   for (const manifest of manifests) {
+    if (manifest.existingSpec !== undefined) numbers.add(manifest.existingSpec);
     const add = (body) => {
       for (const raw of placeholderReferences(body)) {
         const reference = referenceSyntax(raw);
@@ -610,6 +636,58 @@ function validateExistingIssues() {
       });
     }
   }
+  inspectExistingSpecs();
+}
+
+function inspectExistingSpecs() {
+  for (const manifest of manifests) {
+    if (manifest.existingSpec === undefined) continue;
+    const issue = externalIssues.get(manifest.existingSpec);
+    if (!issue) {
+      errors.push(`manifest ${manifest.key}: existing spec #${manifest.existingSpec} was not returned by GitHub`);
+      continue;
+    }
+    check(issue.state === 'open',
+      `manifest ${manifest.key}: existing spec #${manifest.existingSpec} is not open`);
+    check(/^[ \t]*## Problem Statement[ \t\r]*$/m.test(issue.body),
+      `manifest ${manifest.key}: existing spec #${manifest.existingSpec} has no ## Problem Statement section`);
+    check(manifest.title === issue.title,
+      `manifest ${manifest.key}: title must equal existing spec #${manifest.existingSpec} title`);
+
+    const recorded = manifest.record.issues[manifest.key];
+    if (manifest.record.file && !recorded) {
+      errors.push(`invalid publish record ${manifest.record.file}: missing existing spec ${manifest.key}`);
+    }
+    if (recorded) {
+      check(recorded.number === issue.number && recorded.databaseId === issue.databaseId,
+        `manifest ${manifest.key}: publish record spec must remain #${issue.number}`);
+    } else if (!manifest.record.file) {
+      manifest.record.issues[manifest.key] = {
+        key: manifest.key,
+        type: 'spec',
+        number: issue.number,
+        databaseId: issue.databaseId,
+        title: issue.title,
+      };
+      manifest.existingSpecRecordPending = true;
+    }
+    const foreignChildren = checkExistingSpecChildren(manifest);
+    check(foreignChildren.length === 0,
+      `manifest ${manifest.key}: existing spec #${manifest.existingSpec} already has sub-issues: ${foreignChildren.map((number) => `#${number}`).join('、')}`);
+  }
+}
+
+function checkExistingSpecChildren(manifest) {
+  const spec = manifest.record.issues[manifest.key];
+  if (!spec) return [];
+  const actual = new Set(returnedIssueNumbers(JSON.parse(
+    ghApi(`repos/${repo}/issues/${spec.number}/sub_issues?per_page=100`)
+  )));
+  const own = new Set(manifest.tickets
+    .map((ticket) => manifest.record.issues[ticket.key])
+    .filter(Boolean)
+    .map((ticket) => ticket.number));
+  return [...actual].filter((number) => !own.has(number));
 }
 
 function saveRecord(manifest) {
@@ -795,7 +873,15 @@ function printDryRun(graph) {
   let newSpecs = 0;
   let newTickets = 0;
   for (const manifest of manifests.filter(selected)) {
-    if (manifest.record.issues[manifest.key]) continue;
+    if (manifest.record.issues[manifest.key]) {
+      if (manifest.existingSpec !== undefined) {
+        const spec = manifest.record.issues[manifest.key];
+        process.stdout.write(
+          `使用已有规格 ${manifest.key} #${spec.number}「${manifest.title}」（只拆票）\n`
+        );
+      }
+      continue;
+    }
     newSpecs += 1;
     process.stdout.write(
       `将新建规格 ${manifest.key}「${manifest.title}」 标签：${manifest.labels.join(',')}\n`
@@ -834,7 +920,7 @@ function printDryRun(graph) {
     `试运行：将发布 ${newSpecs} 张规格、${newTickets} 张执行票，加 --apply 执行\n`
   );
   printUnresolved();
-  printStartOrder();
+  process.stdout.write('发布后会运行 pipeline-status.sh --order 输出开发顺序。\n');
 }
 
 function printHandoffPreviews() {
@@ -862,101 +948,6 @@ function printUnresolved() {
           `- ${item.question} → 推荐：${item.proposal}（影响：${item.affects}）\n`
         );
       }
-    }
-  }
-}
-
-function issueDisplay(issue, fallback) {
-  return issue ? `#${issue.number}` : fallback;
-}
-
-function isInternalTicketReference(manifest, reference) {
-  return reference.kind === 'ticket' &&
-    (!reference.specKey || reference.target === manifest);
-}
-
-function openExternalReference(reference) {
-  if (reference.kind === 'existing') {
-    const issue = externalIssues.get(reference.number);
-    return issue && issue.state === 'open' ? {reference, issue} : null;
-  }
-  return {reference};
-}
-
-function externalBlockerDescription(reference) {
-  const external = openExternalReference(reference);
-  if (!external) return null;
-  if (reference.kind === 'existing') {
-    const isSpec = /^## Problem Statement[ \t\r]*$/m.test(external.issue.body);
-    return `#${reference.number}（${isSpec ? '已有规格' : '单独的票，implement-spec-split 不会处理，需另行安排'}）`;
-  }
-  const target = reference.target;
-  if (!target) return null;
-  if (reference.kind === 'spec') {
-    const display = issueDisplay(target.record.issues[target.key], target.key);
-    return `${display}（同批规格）`;
-  }
-  const display = issueDisplay(target.record.issues[target.key], target.key);
-  return `${display}（同批规格）`;
-}
-
-function reachableExternalBlockers(manifest, ticket, seen = new Set()) {
-  const identity = `${manifest.key}/${ticket.key}`;
-  if (seen.has(identity)) return [];
-  seen.add(identity);
-  const blockers = [];
-  for (const raw of ticket.blockedBy) {
-    const reference = resolveReference(raw, manifest, 'start order');
-    if (!reference) continue;
-    if (isInternalTicketReference(manifest, reference)) {
-      const internal = reference.target.tickets.find((item) => item.key === reference.ticketKey);
-      if (internal) blockers.push(...reachableExternalBlockers(manifest, internal, seen));
-    } else {
-      const description = externalBlockerDescription(reference);
-      if (description) blockers.push(description);
-    }
-  }
-  return unique(blockers);
-}
-
-function printStartOrder() {
-  const groups = manifests.filter(selected).map((manifest) => {
-    const tickets = manifest.tickets.map((ticket) => ({
-      ticket,
-      display: issueDisplay(manifest.record.issues[ticket.key], `${manifest.key}/${ticket.key}`),
-      blockers: reachableExternalBlockers(manifest, ticket),
-    }));
-    return {
-      manifest,
-      ready: tickets.filter((ticket) => ticket.blockers.length === 0),
-      waiting: tickets.filter((ticket) => ticket.blockers.length > 0),
-    };
-  });
-  const categories = [
-    ['现在可开', groups.filter((group) => group.waiting.length === 0)],
-    ['部分可开', groups.filter((group) =>
-      group.waiting.length > 0 && group.ready.length > 0)],
-    ['要等', groups.filter((group) =>
-      group.waiting.length > 0 && group.ready.length === 0)],
-  ];
-  process.stdout.write('开工顺序（同时做的规格不超过 2 份，几个会话共用 GLM 额度）\n');
-  for (const [label, selectedGroups] of categories) {
-    if (selectedGroups.length === 0) continue;
-    for (const group of selectedGroups) {
-      const display = issueDisplay(
-        group.manifest.record.issues[group.manifest.key], group.manifest.key
-      );
-      let line = `- ${label}：${display} ${group.manifest.title}`;
-      if (label === '部分可开') {
-        const ready = group.ready.map((ticket) => ticket.display).join('、');
-        const waiting = group.waiting.map((ticket) =>
-          `${ticket.display} 要等 ${ticket.blockers.join('、')}`).join('、');
-        line += `：可先做 ${ready}；${waiting}`;
-      } else if (label === '要等') {
-        const blockers = unique(group.waiting.flatMap((ticket) => ticket.blockers));
-        line += `：全部执行票要等 ${blockers.join('、')}`;
-      }
-      process.stdout.write(`${line}\n`);
     }
   }
 }
@@ -1039,6 +1030,7 @@ function patchIssue(manifest, key, number, body) {
 
 function applyBatch(graph) {
   const pendingPatches = [];
+  prepareExistingSpecRecords();
   for (const manifest of manifests.filter(selected)) {
     let issue = manifest.record.issues[manifest.key];
     if (!issue) {
@@ -1089,12 +1081,26 @@ function applyBatch(graph) {
   sendHandoffs();
   const verified = verifyPublication();
   printIssues();
-  const specs = manifests.filter(selected).length;
+  const specs = manifests.filter(selected)
+    .filter((manifest) => manifest.existingSpec === undefined).length;
   const tickets = manifests.filter(selected)
     .reduce((total, manifest) => total + manifest.tickets.length, 0);
   process.stdout.write(`已发布 ${specs} 张规格、${tickets} 张执行票\n`);
-  printStartOrder();
   if (!verified) fail('publication verification failed');
+}
+
+function prepareExistingSpecRecords() {
+  for (const manifest of manifests.filter(selected)) {
+    if (manifest.existingSpec === undefined) continue;
+    const foreignChildren = checkExistingSpecChildren(manifest);
+    if (foreignChildren.length > 0) {
+      fail(`manifest ${manifest.key}: existing spec #${manifest.existingSpec} already has sub-issues: ${foreignChildren.map((number) => `#${number}`).join('、')}`);
+    }
+    if (manifest.existingSpecRecordPending) {
+      saveRecord(manifest);
+      manifest.existingSpecRecordPending = false;
+    }
+  }
 }
 
 if (mode !== 'run') {
@@ -1124,4 +1130,20 @@ NODE
 export PUBLISH_SCRIPT=$0
 if ! publish_node run "$REPO" "$APPLY" "$ONLY" -- "${MANIFESTS[@]}"; then
   die "batch publication failed"
+fi
+
+if [ "$APPLY" -eq 1 ]; then
+  case "$0" in
+    */*) PUBLISH_SCRIPT_SOURCE=$0 ;;
+    *) PUBLISH_SCRIPT_SOURCE=$(command -v -- "$0") ||
+         die "could not resolve the publish script path" ;;
+  esac
+  PUBLISH_SCRIPT_DIR=$(cd -- "${PUBLISH_SCRIPT_SOURCE%/*}" && pwd) ||
+    die "could not resolve the publish script directory"
+  SKILL_ROOT=$(cd -- "$PUBLISH_SCRIPT_DIR/.." && pwd) ||
+    die "could not resolve the skill root"
+  PIPELINE_STATUS=${ISS_PIPELINE_STATUS:-$SKILL_ROOT/scripts/pipeline-status.sh}
+  if ! "$PIPELINE_STATUS" --order --repo "$REPO"; then
+    printf 'publish-batch: pipeline-status.sh --order failed; published issues were not changed by this failure\n' >&2
+  fi
 fi
