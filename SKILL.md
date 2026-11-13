@@ -38,6 +38,7 @@ With the `sonnet` backend, pass the `model` parameter explicitly on every Agent 
 
 - The goal is the entire spec implemented on a single **integration branch**, with every ticket resolved the way the issue tracker closes work.
 - The tickets are a **task graph** with blocking relationships, not a list of steps. There is always a **frontier** of tickets ready to be grabbed.
+- Start every subagent with a fresh context window, never a fork (a fork ignores the `model` override, so the per-role models would not apply).
 - Communication to and from subagents should be sparse. Communicate through **context pointers** (spec, tickets, research notes, previous commits); don't duplicate information already available via pointers.
 - Run implementer subagents in the background where possible for maximum concurrency.
 
