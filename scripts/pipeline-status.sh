@@ -172,6 +172,14 @@ function hasProblemStatement(issue) {
   return String(issue.body || '').split(/\r?\n/).some((line) => line.trim() === '## Problem Statement');
 }
 
+function isShelved(issue) {
+  if (String(issue.title || '').includes('搁置')) return true;
+  return String(issue.body || '').split(/\r?\n/).some((line) => (
+    /(?:状态|Status)\s*[:：]/i.test(line) &&
+    (line.includes('搁置') || /\bshelved\b/i.test(line))
+  ));
+}
+
 function summary(issue) {
   return issue.sub_issues_summary || {total: 0, completed: 0};
 }
@@ -197,6 +205,16 @@ function bodyReferences(issue) {
       numberPattern.lastIndex = 0;
     }
     pattern.lastIndex = 0;
+  }
+  return [...refs].sort((a, b) => a - b);
+}
+
+function bodyMapReferences(issue) {
+  const refs = new Set();
+  const pattern = /^\s*(?:[-*]\s+)?(?:\*\*\s*)?(?:(?:来源)?地图|Map)\s*(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*#([0-9]+)(?![0-9])/i;
+  for (const line of String(issue.body || '').split(/\r?\n/)) {
+    const match = pattern.exec(line.trim());
+    if (match) refs.add(Number(match[1]));
   }
   return [...refs].sort((a, b) => a - b);
 }
@@ -251,11 +269,19 @@ if (mode === 'plan') {
     const implChildren = children.filter((child) => (
       isOpen(child) && !hasWayfinderLabel(child)
     ));
+    const frontierIsEmpty = children.length > 0 && children.every((child) => (
+      hasWayfinderLabel(child) && !isOpen(child)
+    ));
     maps.push({
       number: mapIssue.number,
       state: mapIssue.state,
       title: mapIssue.title || '',
       openDecisionCount: decisions.filter(isOpen).length,
+      open: isOpen(mapIssue),
+      shelved: isShelved(mapIssue),
+      childCount: children.length,
+      frontierIsEmpty,
+      openImplementationCount: implChildren.length,
     });
     for (const child of implChildren) {
       const record = compactIssue(child);
@@ -278,8 +304,10 @@ if (mode === 'plan') {
     ownChildren: Number(summary(issue).total || 0) > 0,
     ownChildCount: Number(summary(issue).total || 0),
     ownChildCompleted: Number(summary(issue).completed || 0),
+    mapRefs: bodyMapReferences(issue),
   })).sort((a, b) => a.number - b.number);
   const coveredRefs = uniqueNumbers(allProblemSpecs.flatMap((spec) => spec.refs));
+  const coveredMapRefs = uniqueNumbers(allProblemSpecs.flatMap((spec) => spec.mapRefs));
   const problemSpecs = allProblemSpecs.filter((spec) => isOpen(spec));
 
   const oldCandidates = issues.filter((issue) => (
@@ -323,6 +351,7 @@ if (mode === 'plan') {
     specs: problemSpecs,
     allProblemSpecs: all ? allProblemSpecs : [],
     coveredRefs,
+    coveredMapRefs,
     oldCandidates,
     subRequests: requests,
     closedSpecs,
@@ -427,6 +456,19 @@ if (mode === 'collect') {
     }
   }
   missing.sort((a, b) => a.number - b.number);
+
+  const referencedMaps = new Set((stage.coveredMapRefs || []).map(Number));
+  const mapSpecs = stage.maps
+    .filter((map) => (
+      map.open &&
+      !map.shelved &&
+      map.childCount > 0 &&
+      map.frontierIsEmpty &&
+      Number(map.openImplementationCount || 0) === 0 &&
+      !referencedMaps.has(Number(map.number))
+    ))
+    .map((map) => ({number: map.number, title: map.title}))
+    .sort((a, b) => a.number - b.number);
 
   const exploring = stage.maps
     .filter((map) => map.openDecisionCount > 0)
@@ -553,6 +595,7 @@ if (mode === 'collect') {
     implement,
     needsTickets,
     missing,
+    mapSpecs,
     exploring,
     blockerRequests,
     hygiene: all ? hygiene : [],
@@ -713,6 +756,16 @@ if (mode === 'render') {
           lines.push(`  - #${decision.number} [${decision.label}] ${clean(decision.title)}${state}`);
         }
       }
+    }
+  }
+
+  lines.push('');
+  lines.push('地图缺规格');
+  if (pipeline.mapSpecs.length === 0) {
+    lines.push('（无）');
+  } else {
+    for (const map of pipeline.mapSpecs) {
+      lines.push(`- #${map.number} ${clean(map.title)} → to-spec`);
     }
   }
 

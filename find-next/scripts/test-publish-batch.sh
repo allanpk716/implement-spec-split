@@ -129,6 +129,23 @@ make_mixed_case() {
     > "$directory/S2/manifest.json"
 }
 
+make_map_case() {
+  directory=$1
+  map_number=$2
+  mkdir -p "$directory/S1/tickets"
+  printf '%s\n' "地图：#$map_number" > "$directory/S1/spec.md"
+  cat >> "$directory/S1/spec.md" <<'EOF'
+
+## Problem Statement
+
+Map-level spec body.
+EOF
+  printf '%s\n' $'## Parent\n#{{S1}}\nMap spec ticket.' \
+    > "$directory/S1/tickets/T1.md"
+  printf '%s\n' "{\"key\":\"S1\",\"map_number\":$map_number,\"title\":\"Map-level spec\",\"body\":\"spec.md\",\"tickets\":[{\"key\":\"T1\",\"title\":\"Map spec ticket\",\"body\":\"tickets/T1.md\",\"blocked_by\":[]}]}" \
+    > "$directory/S1/manifest.json"
+}
+
 mkdir -p "$BIN" || exit 1
 printf '%s\n' '{"nextNumber":300}' > "$STATE"
 : > "$LOG"
@@ -163,6 +180,7 @@ state.issues = state.issues || {
   49: {number: 49, id: 10000049, title: 'Closed blocker', state: 'closed', body: ''},
   84: {number: 84, id: 10000084, title: 'Existing handoff', state: 'open', body: ''},
   98: {number: 98, id: 10000098, title: 'Foreign execution ticket', state: 'open', body: ''},
+  22: {number: 22, id: 10000022, title: 'Closed frontier map', state: 'open', body: ''},
   224: {
     number: 224,
     id: 10000224,
@@ -612,6 +630,68 @@ expect_exit 0 'mixed existing-spec rerun succeeds'
 expect_without '"write":true' 'mixed rerun does not duplicate issues' "$LOG"
 expect_has 'PIPELINE-ORDER output' 'successful rerun still outputs pipeline order' \
   "$WORK/mixed-existing-rerun.out"
+
+make_map_case "$WORK/map-spec" 22
+MAP_SPEC_NUMBER=$(STATE="$STATE" node -e '
+  const state = JSON.parse(require("fs").readFileSync(process.env.STATE, "utf8"));
+  process.stdout.write(String(state.nextNumber));
+')
+MAP_TICKET_NUMBER=$((MAP_SPEC_NUMBER + 1))
+: > "$LOG"
+run_publish "$WORK/map-spec-dry.out" --no-order "$WORK/map-spec/S1/manifest.json"
+expect_exit 0 'map-spec dry run succeeds'
+expect_has '将新建规格 S1「Map-level spec」（来源地图 #22） 标签：ready-for-agent' \
+  'dry run identifies a map-level spec' "$WORK/map-spec-dry.out"
+expect_has '将新建执行票 S1/T1「Map spec ticket」 → 挂到 S1 下' \
+  'map-spec execution ticket attaches to its new spec' "$WORK/map-spec-dry.out"
+expect_has '"endpoint":"repos/test/repo/issues/22"' \
+  'map-spec dry run verifies source map' "$LOG"
+expect_without '"write":true' 'map-spec dry run sends no write request' "$LOG"
+
+: > "$LOG"
+: > "$PIPELINE_LOG"
+run_publish "$WORK/map-spec-apply.out" --apply --no-order \
+  "$WORK/map-spec/S1/manifest.json"
+expect_exit 0 'map-spec apply succeeds'
+expect_has "已新建规格 S1 #${MAP_SPEC_NUMBER}「Map-level spec」" \
+  'map-spec apply creates a spec' "$WORK/map-spec-apply.out"
+expect_has "已新建执行票 S1/T1 #${MAP_TICKET_NUMBER}「Map spec ticket」" \
+  'map-spec apply creates an execution ticket' "$WORK/map-spec-apply.out"
+expect_has '核对：子票与阻塞关系都对上了' 'map-spec publication is verified' \
+  "$WORK/map-spec-apply.out"
+expect_has "地图：#22" 'map-spec body points back to its map' "$WORK/map-spec/S1/spec.md"
+STATE="$STATE" MAP_SPEC_NUMBER="$MAP_SPEC_NUMBER" node -e '
+  const fs = require("fs");
+  const state = JSON.parse(fs.readFileSync(process.env.STATE, "utf8"));
+  fs.writeFileSync(process.argv[1], state.issues[Number(process.env.MAP_SPEC_NUMBER)].body);
+' "$WORK/map-spec-published-body.md"
+expect_has '地图：#22' 'published map-spec body points back to its map' \
+  "$WORK/map-spec-published-body.md"
+expect_without '实现票：' 'published map-spec body has no implementation line' \
+  "$WORK/map-spec-published-body.md"
+expect_has "\"endpoint\":\"repos/test/repo/issues/${MAP_SPEC_NUMBER}/sub_issues\"" \
+  'map-spec ticket is attached to the new spec' "$LOG"
+expect_without '"endpoint":"repos/test/repo/issues/22/sub_issues"' \
+  'map-spec ticket is not attached to the map' "$LOG"
+expect_has '"map_number":22' 'map manifest field is preserved' \
+  "$WORK/map-spec/S1/manifest.json"
+
+: > "$LOG"
+run_publish "$WORK/map-spec-rerun.out" --apply --no-order \
+  "$WORK/map-spec/S1/manifest.json"
+expect_exit 0 'map-spec rerun succeeds'
+expect_without '"write":true' 'map-spec rerun does not duplicate issues' "$LOG"
+
+make_map_case "$WORK/map-spec-bad-body" 22
+printf '%s\n' $'实现票：#65\n地图：#22' \
+  > "$WORK/map-spec-bad-body/S1/spec.md"
+: > "$LOG"
+run_publish "$WORK/map-spec-bad-body.out" --apply --no-order \
+  "$WORK/map-spec-bad-body/S1/manifest.json"
+expect_exit 1 'map-spec implementation line is rejected'
+expect_has 'map-level spec body must not contain an 实现票 line' \
+  'map-spec body error is named' "$WORK/map-spec-bad-body.out.err"
+expect_without '"write":true' 'map-spec body failure sends no write' "$LOG"
 
 cat > "$WORK/failing-pipeline-status.sh" <<'EOF'
 #!/usr/bin/env bash

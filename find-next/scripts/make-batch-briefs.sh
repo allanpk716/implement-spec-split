@@ -9,12 +9,15 @@ Usage: make-batch-briefs.sh [--repo <owner/name>] --example <issue>
                             [--note S<k>=<file>]... [--force]
                             <run-directory> S1=62 S2=63,64...
                                                    S3=spec:224...
+                                                   S4=map:41...
 
 Generate <run-directory>/S<k>/brief.md from the batch Brief template. Tickets
 in one group must have the same parent issue (the wayfinder map). A group of
 the form S<k>=spec:<issue> drafts execution tickets for that already-existing
-spec instead of creating a new spec. Existing brief.md files are rejected
-unless --force is passed.
+spec instead of creating a new spec. A group of the form S<k>=map:<issue>
+drafts one map-level spec and its execution tickets; --example is optional and
+is needed only when an existing spec can serve as the style reference. Existing
+brief.md files are rejected unless --force is passed.
 EOF
 }
 
@@ -40,6 +43,7 @@ GROUP_TICKETS=()
 GROUP_MODES=()
 NOTE_KEYS=()
 NOTE_FILES=()
+SEEN_MAPS=()
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -100,8 +104,9 @@ while [ $# -gt 0 ]; do
 done
 
 [ -n "$RUN_DIR" ] || die "a run directory is required"
-[ "${#GROUP_KEYS[@]}" -gt 0 ] || die "at least one S<k>=<ticket,...> group is required"
-[[ "$EXAMPLE" =~ ^[1-9][0-9]*$ ]] || die "--example must be an issue number without #"
+[ "${#GROUP_KEYS[@]}" -gt 0 ] || die "at least one S<k>=<group> argument is required"
+[ -z "$EXAMPLE" ] || [[ "$EXAMPLE" =~ ^[1-9][0-9]*$ ]] ||
+  die "--example must be an issue number without #"
 if [ -n "$REPO" ]; then
   [[ "$REPO" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]] || die "--repo must be <owner/name>"
 fi
@@ -115,7 +120,7 @@ while [ "$index" -lt "${#GROUP_KEYS[@]}" ]; do
   ticket_argument=${GROUP_TICKETS[$index]}
   [[ "$key" =~ ^S[1-9][0-9]*$ ]] || die "group key must be S<number>: $key"
   [[ "$ticket_argument" != "$key" ]] ||
-    die "group $key must be S<number>=<ticket,...> or S<number>=spec:<issue>"
+    die "group $key must be S<number>=<ticket,...>, S<number>=spec:<issue>, or S<number>=map:<issue>"
   seen_index=0
   while [ "$seen_index" -lt "${#SEEN_KEYS[@]}" ]; do
     [ "${SEEN_KEYS[$seen_index]}" != "$key" ] || die "duplicate group key: $key"
@@ -141,6 +146,18 @@ while [ "$index" -lt "${#GROUP_KEYS[@]}" ]; do
     done
     SEEN_EXISTING_SPECS+=("$spec_number")
     GROUP_MODES+=("existing-spec")
+  elif [[ "$ticket_argument" == map:* ]]; then
+    map_number=${ticket_argument#map:}
+    [[ "$map_number" =~ ^[1-9][0-9]*$ ]] ||
+      die "group $key has an invalid map number: $map_number"
+    seen_index=0
+    while [ "$seen_index" -lt "${#SEEN_MAPS[@]}" ]; do
+      [ "${SEEN_MAPS[$seen_index]}" != "$map_number" ] ||
+        die "map #$map_number appears in more than one map group"
+      seen_index=$((seen_index + 1))
+    done
+    SEEN_MAPS+=("$map_number")
+    GROUP_MODES+=("map")
   else
     IFS=, read -r -a tickets <<< "$ticket_argument"
     [ "${#tickets[@]}" -gt 0 ] || die "group $key has no tickets"
@@ -270,6 +287,18 @@ existing_spec_implementation_numbers() {
   '
 }
 
+map_facts() {
+  printf '%s' "$1" | node -e '
+    let value;
+    try {
+      value = JSON.parse(require("fs").readFileSync(0, "utf8"));
+    } catch (_) {
+      process.exit(1);
+    }
+    process.stdout.write(String(value && value.state || ""));
+  '
+}
+
 gh_sub_issue_count() {
   gh api "repos/$REPO/issues/$1/sub_issues" --jq length
 }
@@ -307,33 +336,38 @@ while [ "$index" -lt "${#GROUP_KEYS[@]}" ]; do
       die "existing spec #$spec_number has no 实现票： line"
     impl_numbers=${implementation_numbers//$'\n'/,}
     IFS=, read -r -a tickets <<< "$impl_numbers"
+  elif [ "${GROUP_MODES[$index]}" = "map" ]; then
+    group_map=${ticket_argument#map:}
+    tickets=()
   else
     IFS=, read -r -a tickets <<< "$ticket_argument"
   fi
 
-  for ticket in "${tickets[@]}"; do
-    if [ "${GROUP_MODES[$index]}" = "existing-spec" ]; then
-      seen_index=0
-      while [ "$seen_index" -lt "${#SEEN_TICKETS[@]}" ]; do
-        [ "${SEEN_TICKETS[$seen_index]}" != "$ticket" ] ||
-          die "implementation ticket #$ticket appears in more than one group"
-        seen_index=$((seen_index + 1))
-      done
-    fi
-    issue_json=$(gh_issue_view "$ticket" number,title,parent) ||
-      die "could not read issue #$ticket with gh issue view"
-    ticket_map=$(issue_parent "$issue_json") ||
-      die "issue #$ticket in group $key has no parent map"
-    if [ -z "$group_map" ]; then
-      group_map=$ticket_map
-    elif [ "$group_map" != "$ticket_map" ]; then
-      die "group $key has tickets with different parent maps: #$group_map and #$ticket_map"
-    fi
-    group_issues+="${group_issues:+$'\037'}$issue_json"
-    if [ "${GROUP_MODES[$index]}" = "existing-spec" ]; then
-      SEEN_TICKETS+=("$ticket")
-    fi
-  done
+  if [ "${GROUP_MODES[$index]}" != "map" ]; then
+    for ticket in "${tickets[@]}"; do
+      if [ "${GROUP_MODES[$index]}" = "existing-spec" ]; then
+        seen_index=0
+        while [ "$seen_index" -lt "${#SEEN_TICKETS[@]}" ]; do
+          [ "${SEEN_TICKETS[$seen_index]}" != "$ticket" ] ||
+            die "implementation ticket #$ticket appears in more than one group"
+          seen_index=$((seen_index + 1))
+        done
+      fi
+      issue_json=$(gh_issue_view "$ticket" number,title,parent) ||
+        die "could not read issue #$ticket with gh issue view"
+      ticket_map=$(issue_parent "$issue_json") ||
+        die "issue #$ticket in group $key has no parent map"
+      if [ -z "$group_map" ]; then
+        group_map=$ticket_map
+      elif [ "$group_map" != "$ticket_map" ]; then
+        die "group $key has tickets with different parent maps: #$group_map and #$ticket_map"
+      fi
+      group_issues+="${group_issues:+$'\037'}$issue_json"
+      if [ "${GROUP_MODES[$index]}" = "existing-spec" ]; then
+        SEEN_TICKETS+=("$ticket")
+      fi
+    done
+  fi
 
   map_json=
   cache_index=0
@@ -345,10 +379,16 @@ while [ "$index" -lt "${#GROUP_KEYS[@]}" ]; do
     cache_index=$((cache_index + 1))
   done
   if [ -z "$map_json" ]; then
-    map_json=$(gh_issue_view "$group_map" title) ||
+    map_json=$(gh_issue_view "$group_map" number,title,state) ||
       die "could not read map #$group_map with gh issue view"
     MAP_CACHE_KEYS+=("$group_map")
     MAP_CACHE_JSON+=("$map_json")
+  fi
+  if [ "${GROUP_MODES[$index]}" = "map" ]; then
+    map_state=$(map_facts "$map_json") ||
+      die "could not parse map #$group_map"
+    [ "$map_state" = "open" ] ||
+      die "map #$group_map is not open (state: $map_state)"
   fi
 
   GROUP_ISSUES+=("$group_issues")
@@ -369,6 +409,9 @@ TEMPLATE=$SCRIPT_DIR/../templates/brief-spec-batch.md
 TICKETS_TEMPLATE=$SCRIPT_DIR/../templates/brief-tickets-batch.md
 [ -f "$TICKETS_TEMPLATE" ] || die "Brief template was not found: $TICKETS_TEMPLATE"
 [ -r "$TICKETS_TEMPLATE" ] || die "Brief template is not readable: $TICKETS_TEMPLATE"
+MAP_TEMPLATE=$SCRIPT_DIR/../templates/brief-map-spec-batch.md
+[ -f "$MAP_TEMPLATE" ] || die "Brief template was not found: $MAP_TEMPLATE"
+[ -r "$MAP_TEMPLATE" ] || die "Brief template is not readable: $MAP_TEMPLATE"
 SKILLS_ROOT=${FIND_NEXT_SKILLS_ROOT:-$HOME/.claude/plugins/cache/mattpocock/mattpocock-skills}
 [ -d "$SKILLS_ROOT" ] || die "skills root was not found: $SKILLS_ROOT"
 
@@ -382,7 +425,7 @@ while [ "$index" -lt "${#GROUP_KEYS[@]}" ]; do
   index=$((index + 1))
 done
 
-set -- "$TEMPLATE" "$TICKETS_TEMPLATE" "$REPO_PATH" "$REPO" "$EXAMPLE" \
+set -- "$TEMPLATE" "$TICKETS_TEMPLATE" "$MAP_TEMPLATE" "$REPO_PATH" "$REPO" "$EXAMPLE" \
   "$RUN_DIR" "$SKILLS_ROOT"
 index=0
 while [ "$index" -lt "${#GROUP_KEYS[@]}" ]; do
@@ -403,7 +446,8 @@ const path = require('path');
 
 const argv = process.argv.slice(2);
 const [
-  templatePath, ticketsTemplatePath, repoPath, repo, example, runDir, skillsRoot,
+  templatePath, ticketsTemplatePath, mapTemplatePath, repoPath, repo, example, runDir,
+  skillsRoot,
 ] = argv;
 const groups = [];
 const notes = new Map();
@@ -474,12 +518,14 @@ const toTickets = latestSkill('to-tickets');
 const parsedGroups = [];
 for (const group of groups) {
   const existingSpecMode = group.mode === 'existing-spec';
-  if (!existingSpecMode && group.mode !== 'tickets') {
+  const mapMode = group.mode === 'map';
+  if (!existingSpecMode && !mapMode && group.mode !== 'tickets') {
     fail(`internal error: unknown group mode ${group.mode}`);
   }
   const ticketNumbers = existingSpecMode
     ? []
     : group.ticketArgument.split(',');
+  const expectedIssues = existingSpecMode ? 1 : (mapMode ? 0 : ticketNumbers.length);
   const issueRecords = group.issuesArgument
     .split('\u001f')
     .filter(value => value !== '')
@@ -490,8 +536,8 @@ for (const group of groups) {
         fail(`could not parse the gh issue view result for group ${group.key}`);
       }
     });
-  if (!existingSpecMode && issueRecords.length !== ticketNumbers.length) {
-    fail(`gh returned ${issueRecords.length} issues for ${ticketNumbers.length} tickets`);
+  if (issueRecords.length !== expectedIssues) {
+    fail(`gh returned ${issueRecords.length} issues for ${expectedIssues} tickets`);
   }
 
   let mapTitle;
@@ -558,6 +604,7 @@ for (const group of groups) {
     key: group.key,
     map: Number(group.mapArgument),
     mapTitle,
+    mode: group.mode,
     tickets,
     existingSpec,
     existingSpecTitle,
@@ -583,11 +630,14 @@ function ticketList(tickets) {
   return tickets.map(ticket => `#${ticket.number}「${ticket.title}」`).join('、');
 }
 
-const groupLines = parsedGroups.map(group =>
-  group.existingSpec === null
+const groupLines = parsedGroups.map(group => {
+  if (group.mode === 'map') {
+    return `- ${group.key}：地图 #${group.map} ${group.mapTitle}（地图级规格）`;
+  }
+  return group.existingSpec === null
     ? `- ${group.key} · 地图 #${group.map} · 覆盖 ${ticketList(group.tickets)}`
-    : `- ${group.key}：已有规格 #${group.existingSpec} ${group.existingSpecTitle}（只拆票）`
-).join('\n');
+    : `- ${group.key}：已有规格 #${group.existingSpec} ${group.existingSpecTitle}（只拆票）`;
+}).join('\n');
 
 let template;
 try {
@@ -605,15 +655,29 @@ try {
 }
 ticketsTemplate = ticketsTemplate.replace(/^\s*<!--[\s\S]*?-->\s*/, '');
 
+let mapTemplate;
+try {
+  mapTemplate = fs.readFileSync(mapTemplatePath, 'utf8');
+} catch (error) {
+  fail(`could not read the Brief template: ${error.message}`);
+}
+mapTemplate = mapTemplate.replace(/^\s*<!--[\s\S]*?-->\s*/, '');
+
+const exampleGuidance = example
+  ? `- 风格参考：本仓库已有的一份规格和它的执行票 #${example}（\`gh issue view ${example}\`，执行票用 \`gh api repos/${repo}/issues/${example}/sub_issues\` 列出）。执行票标题沿用仓库已有标题的格式（看 #${example} 的执行票和地图下的实现票，包括前缀和冒号的全角半角）。`
+  : `- 风格参考：仓库里还没有规格。执行票标题参考地图下已有票的标题格式（包括前缀和冒号的全角半角）。`;
+
 const renderedGroups = [];
 for (const group of parsedGroups) {
-  let output = group.existingSpec === null ? template : ticketsTemplate;
+  let output = group.mode === 'map'
+    ? mapTemplate
+    : (group.existingSpec === null ? template : ticketsTemplate);
   const values = new Map([
     ['REPO_PATH', repoPath],
     ['REPO', repo],
     ['MAP', group.map],
     ['MAP_TITLE', group.mapTitle],
-    ['EXAMPLE', example],
+    ['EXAMPLE_GUIDANCE', exampleGuidance],
     ['KEY', group.key],
     ['GROUP_DIR', group.dir],
     ['TO_SPEC', toSpec],

@@ -21,7 +21,7 @@ find-next --batch 起草 Brief 模板：一份已有规格 → 只起草它的�
 - 已有规格：`gh issue view @@SPEC_NUM@@ --comments`，逐节读。它的「实现票：」行指向 @@TICKET_NUMS@@；规格里的实现决定、Out of Scope 和测试切入点是拆票的主要依据。
 - 实现票本身：`gh issue view <n> --comments`（逐张读 @@TICKET_NUMS@@），确认规格没有漏掉它们正文里的验收要求。实现票指向的已关闭决策票，若规格没有吸收结论，按未决处理，不要自行补规格。
 - 必要时读地图 #@@MAP@@（`gh issue view @@MAP@@ --comments`）和相关代码，只为了确认拆分边界、测试切入点、已有可复用模块和命名习惯。
-- 风格参考：本仓库已有的一份规格和它的执行票 #@@EXAMPLE@@（`gh issue view @@EXAMPLE@@`，执行票用 `gh api repos/@@REPO@@/issues/@@EXAMPLE@@/sub_issues` 列出）。执行票标题沿用仓库已有标题的格式（看 #@@EXAMPLE@@ 的执行票和地图下的实现票，包括前缀和冒号的全角半角）。
+@@EXAMPLE_GUIDANCE@@
 
 ## 同批的其他组（用来写跨规格的阻塞）
 

@@ -24,7 +24,7 @@ find-next --batch 起草 Brief 模板：一组地图实现票 → 一份规格 +
 - 目标仓库的 `CLAUDE.md`（写作规范）、`CONTEXT.md`（领域词）、`docs/adr/`、`docs/agents/issue-tracker.md`（规格与地图实现票的关联写法）。
 - 地图和决策：`gh issue view @@MAP@@ --comments`；地图下已关闭的决策票（`gh api repos/@@REPO@@/issues/@@MAP@@/sub_issues`，挑带 `wayfinder:*` 标签、已关闭的），读每张的结论评论。实现票正文的 Source decisions 一节列出的票要重点读。
 - 实现票本身：`gh issue view <n> --comments`（逐张读 @@TICKET_NUMS@@）。正文里的 Open questions 先在决策票、地图、文档和现有代码里找定论，找不到再按下文「未决的两种处理」处理。
-- 风格参考：本仓库已有的一份规格和它的执行票 #@@EXAMPLE@@（`gh issue view @@EXAMPLE@@`，执行票用 `gh api repos/@@REPO@@/issues/@@EXAMPLE@@/sub_issues` 列出）。执行票标题沿用仓库已有标题的格式（看 #@@EXAMPLE@@ 的执行票和地图下的实现票，包括前缀和冒号的全角半角）。
+@@EXAMPLE_GUIDANCE@@
 - 相关代码：按需读，只为了找测试切入点、已有可复用的模块、需要先做的整理、现有命名习惯。
 
 ## 同批的其他组（用来写跨规格的阻塞）

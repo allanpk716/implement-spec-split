@@ -252,6 +252,31 @@ expect_has '不要写 `body`' 'existing-spec manifest omits spec body' \
 expect_has '不要生成 `spec.md`' 'existing-spec brief does not draft a spec' \
   "$EXISTING_SPEC/S2/brief.md"
 
+MAP_SPEC=$WORK/map-spec
+run_brief "$WORK/map-spec.out" "$MAP_SPEC" S1=map:22
+expect_exit 0 'map group generates without an example'
+expect_has "$MAP_SPEC/S1/brief.md" 'map brief path is printed' "$WORK/map-spec.out"
+expect_first_line '# 任务：为地图 #22 起草一份规格和它的执行票（只写草稿，不发布）' \
+  'map-spec template opening is used' "$MAP_SPEC/S1/brief.md"
+expect_has '地图 #22「Map twenty-two」的子票全部是已关闭的决策票' \
+  'map-spec target is substituted' "$MAP_SPEC/S1/brief.md"
+expect_has '- S1：地图 #22 Map twenty-two（地图级规格）' \
+  'map-spec group is substituted' "$MAP_SPEC/S1/brief.md"
+expect_has '仓库里还没有规格。执行票标题参考地图下已有票的标题格式' \
+  'missing example becomes map-ticket style guidance' "$MAP_SPEC/S1/brief.md"
+expect_has '`地图：#22`' 'map-spec body line is fixed' "$MAP_SPEC/S1/brief.md"
+expect_has '"map_number": 22' 'map-spec manifest field is documented' \
+  "$MAP_SPEC/S1/brief.md"
+expect_pattern_without '@@[A-Z_]+@@' 'map-spec brief has no variable left' \
+  "$MAP_SPEC/S1/brief.md"
+
+DUPLICATE_MAP=$WORK/duplicate-map
+run_brief "$WORK/duplicate-map.out" "$DUPLICATE_MAP" S1=map:22 S2=map:22
+expect_exit 1 'a map in two map groups is rejected'
+expect_has 'map #22 appears in more than one map group' \
+  'duplicate-map error is explained' "$WORK/duplicate-map.out.err"
+expect_no_directory "$DUPLICATE_MAP" 'duplicate-map failure writes no files' "$DUPLICATE_MAP"
+
 CHILDREN=$WORK/existing-spec-children
 run_brief "$WORK/existing-spec-children.out" --example 205 "$CHILDREN" \
   S1=spec:225

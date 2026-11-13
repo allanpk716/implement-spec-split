@@ -117,6 +117,8 @@
     - 用 Orca 建的 worktree 才在 Orca 侧栏里可见（用户把外部 worktree 设成了隐藏），所以新规格的集成 worktree 由 Orca 建，不在 `<仓库>-wt/` 下；早先建在 `<仓库>-wt/` 下的中断规格不可见，脚本只给手动命令。
     - Orca 启动 Claude 时带 `--dangerously-skip-permissions`，自动开的会话不会卡在权限提示上；会话仍会在合入前确认 push、GLM 出错时停下等人。
 
+13. **2026-11-14：`--batch` 也覆盖「地图本身该出一份规格」（起因：oa-helper 地图 #1）。** 它的子票全是已关闭的 `wayfinder:*` 决策票、前沿已空，且没有任何 Spec 用 `地图：#N` / `来源地图：#N` 行指回这张地图；此前脚本既不算 `missing` 也不算 `exploring`，`--batch` 只能手工走 `/to-spec`、`/to-tickets`。决定：`pipeline-status.sh` 新增 `mapSpecs` 段（默认与 `--all` 都输出），被 Spec 指回的地图不再进 `mapSpecs`（`exploring` 不受影响：批量起草的实现票规格也写 `地图：#N`，有规格不代表地图的决策都收口了）；指回行后面允许跟说明文字（#11 写的是 `来源地图：#1（全部决策见…）`）；批量组写法为 `S<k>=map:<地图号>`，一次起草一份地图级规格和执行票，规格正文只写 `地图：#N` 行、不写 `实现票：` 行，发布时新建规格并把执行票挂到它下面。
+
 ## 同步上游
 
 `upstream/` 里存着原版 `SKILL.md` 和对应的上游 commit（`upstream/COMMIT`）。

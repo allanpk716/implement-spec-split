@@ -114,6 +114,12 @@ const issues = [
   issue(21, 'Exploration map', 'open', ['wayfinder:map'], '', sub(1, 0)),
   issue(22, 'Client map', 'closed', ['wayfinder:map'], '', sub(8, 6)),
   issue(31, 'Server map', 'closed', ['wayfinder:map'], '', sub(1, 0)),
+  issue(41, 'Map needing a spec', 'open', ['wayfinder:map'], '状态：进行中', sub(2, 2)),
+  issue(42, 'Map covered by source-map spec', 'open', ['wayfinder:map'], '', sub(2, 2)),
+  issue(43, 'Map covered by map line', 'open', ['wayfinder:map'], '', sub(2, 2)),
+  issue(44, 'Map with open decision', 'open', ['wayfinder:map'], '', sub(2, 1)),
+  issue(45, 'Map with open implementation', 'open', ['wayfinder:map'], '', sub(2, 1)),
+  issue(46, 'Shelved map（搁置）', 'open', ['wayfinder:map'], '状态：搁置', sub(1, 1)),
   issue(23, 'Open research decision', 'open', ['wayfinder:research'], ''),
   issue(24, 'Open grilling decision', 'open', ['wayfinder:grilling'], ''),
   issue(56, 'Implement client version', 'open', ['ready-for-agent'], '', sub(3, 0)),
@@ -146,6 +152,13 @@ const issues = [
   issue(100, 'External blocker one', 'open', [], ''),
   issue(101, 'External blocker two', 'open', [], ''),
   issue(102, 'Closed external blocker', 'closed', [], ''),
+  issue(110, 'Closed map decision A', 'closed', ['wayfinder:research'], ''),
+  issue(111, 'Closed map decision B', 'closed', ['wayfinder:grilling'], ''),
+  issue(112, 'Open map decision', 'open', ['wayfinder:research'], ''),
+  issue(113, 'Map implementation', 'open', ['ready-for-agent'], ''),
+  issue(114, 'Shelved map decision', 'closed', ['wayfinder:research'], ''),
+  issue(140, 'Spec citing source map', 'closed', [], '## Problem Statement\n来源地图：#42（全部决策见其 Decisions so far 与 #2–#10）'),
+  issue(141, 'Spec citing map line', 'closed', [], '## Problem Statement\n**地图: #43**'),
   issue(121, 'Loose bug issue', 'open', ['bug'], ''),
   issue(122, 'Loose unlabeled issue', 'open', [], ''),
 ];
@@ -171,6 +184,29 @@ const responses = {
     issue(68, 'Implementation referenced with connector', 'open', ['ready-for-agent'], ''),
     issue(69, 'Implementation mentioned before spec ticket phrase', 'open', ['ready-for-agent'], ''),
     issue(96, 'Implementation narrated without separator', 'open', ['ready-for-agent'], ''),
+  ],
+  'sub-41': [
+    issue(110, 'Closed map decision A', 'closed', ['wayfinder:research'], ''),
+    issue(111, 'Closed map decision B', 'closed', ['wayfinder:grilling'], ''),
+  ],
+  'sub-42': [
+    issue(110, 'Closed map decision A', 'closed', ['wayfinder:research'], ''),
+    issue(111, 'Closed map decision B', 'closed', ['wayfinder:grilling'], ''),
+  ],
+  'sub-43': [
+    issue(110, 'Closed map decision A', 'closed', ['wayfinder:research'], ''),
+    issue(111, 'Closed map decision B', 'closed', ['wayfinder:grilling'], ''),
+  ],
+  'sub-44': [
+    issue(110, 'Closed map decision A', 'closed', ['wayfinder:research'], ''),
+    issue(112, 'Open map decision', 'open', ['wayfinder:research'], ''),
+  ],
+  'sub-45': [
+    issue(110, 'Closed map decision A', 'closed', ['wayfinder:research'], ''),
+    issue(113, 'Map implementation', 'open', ['ready-for-agent'], ''),
+  ],
+  'sub-46': [
+    issue(114, 'Shelved map decision', 'closed', ['wayfinder:research'], ''),
   ],
   'sub-56': [
     issue(90, 'Client ticket one', 'open', [], ''),
@@ -511,6 +547,15 @@ expect_has '地图 #22 Client map' 'missing specs are grouped by map' "$WORK/mai
 expect_has '#57 Missing client spec → to-spec' 'unreferenced map implementation needs to-spec' "$WORK/main.out"
 expect_has '地图 #31 Server map' 'second map group is shown' "$WORK/main.out"
 expect_has '#21 Exploration map' 'map with open decisions needs wayfinder' "$WORK/main.out"
+expect_has '地图缺规格' 'map specs section is shown by default' "$WORK/main.out"
+expect_has '- #41 Map needing a spec → to-spec' 'map with only closed decisions needs a spec' "$WORK/main.out"
+expect_section_without '地图缺规格' '#42 ' 'source-map reference covers whole map' "$WORK/main.out"
+expect_section_without '地图缺规格' '#43 ' 'map reference covers whole map' "$WORK/main.out"
+expect_has '#44 Map with open decision' 'map with an open decision stays in exploring' "$WORK/main.out"
+expect_section_without '地图缺规格' '#44 ' 'open decision prevents a map-level spec' "$WORK/main.out"
+expect_has '地图 #45 Map with open implementation' 'map with open implementation still uses missing' "$WORK/main.out"
+expect_section_without '地图缺规格' '#45 ' 'open implementation prevents a map-level spec' "$WORK/main.out"
+expect_section_without '地图缺规格' '#46 ' 'shelved map is not a spec candidate' "$WORK/main.out"
 
 expect_without '#66 Implementation covered by closed spec → to-spec' 'closed spec coverage removes implementation from missing specs' "$WORK/main.out"
 expect_has '#67 Implementation mentioned outside spec ticket line → to-spec' 'incidental map reference does not cover implementation' "$WORK/main.out"
@@ -538,6 +583,7 @@ expect_section_without '散票' '#80 ' 'spec itself is not loose' "$WORK/all.out
 expect_section_without '散票' '#70 ' 'legacy parent is not loose' "$WORK/all.out"
 expect_section_without '散票' '#71 ' 'legacy child is not loose' "$WORK/all.out"
 expect_has '  - #24 [wayfinder:grilling] Open grilling decision（有未关阻塞）（已认领：allan）' 'decision ticket state is rendered' "$WORK/all.out"
+expect_has '- #41 Map needing a spec → to-spec' 'all output includes map-level spec candidate' "$WORK/all.out"
 
 run_order() {
   output=$1

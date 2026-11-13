@@ -18,6 +18,9 @@ Manifest fields:
   existing_spec
              Optional positive issue number. The group only creates execution
              tickets and attaches them to this already-existing open spec.
+  map_number
+             Optional positive issue number. The group creates a map-level spec
+             whose body points back to that map, plus its execution tickets.
   labels     Optional string array; defaults to ["ready-for-agent"].
   tickets    Array of execution tickets with T<number> keys, bodies, optional
              labels, and blocked_by references.
@@ -34,6 +37,7 @@ blocked_by and {{...}} body placeholders may refer to:
   S2/T1      A ticket in another passed manifest (or its record).
   #212       An existing issue in the target repository.
 Only these four formats are placeholders; other {{...}} text is preserved as-is.
+A manifest must use at most one of existing_spec and map_number.
 
 Execution tickets are created after all selected specs, in dependency order.
 Each is immediately attached as a sub-issue and given its blocked-by edges.
@@ -179,6 +183,17 @@ function hasPlaceholder(body) {
   return result;
 }
 
+function mapReferenceLineNumber(body) {
+  const match = /^[ \t]*(?:[-*][ \t]+)?(?:\*\*[ \t]*)?地图[ \t]*[:：][ \t]*#([0-9]+)[ \t]*(?:\*\*)?$/im
+    .exec(String(body || ''));
+  return match ? Number(match[1]) : null;
+}
+
+function hasImplementationReferenceLine(body) {
+  return /^[ \t]*(?:[-*][ \t]+)?(?:\*\*[ \t]*)?(?:实现票[ \t]*(?:[:：]|为|是)|Implementation[ \t]+tickets?[ \t]*[:：])[ \t]*#[0-9]+/im
+    .test(String(body || ''));
+}
+
 function issueFromRecord(value, key, type) {
   if (!isPlainObject(value)) return null;
   const number = Number(value.number);
@@ -254,6 +269,7 @@ function parseManifest(file) {
     key: value.key,
     title: value.title,
     existingSpec: value.existing_spec,
+    mapNumber: value.map_number,
     labels: labelList(value.labels, `manifest ${file} labels`),
     ticketDefinitions: Array.isArray(value.tickets) ? value.tickets : [],
     unresolved: Array.isArray(value.unresolved) ? value.unresolved : [],
@@ -283,6 +299,11 @@ function loadManifests() {
     check(manifest.existingSpec === undefined ||
       (Number.isInteger(manifest.existingSpec) && manifest.existingSpec > 0),
     `manifest ${file}: existing_spec must be a positive integer`);
+    check(manifest.mapNumber === undefined ||
+      (Number.isInteger(manifest.mapNumber) && manifest.mapNumber > 0),
+    `manifest ${file}: map_number must be a positive integer`);
+    check(manifest.existingSpec === undefined || manifest.mapNumber === undefined,
+    `manifest ${file}: existing_spec and map_number are mutually exclusive`);
     manifest.tickets = [];
     const ticketKeys = new Set();
     manifest.ticketDefinitions.forEach((definition, index) => {
@@ -347,6 +368,12 @@ function loadManifests() {
       check((manifest.body || '').trim() !== '',
         `manifest ${file}: body file is empty: ${bodyFile}`);
     }
+    if (manifest.mapNumber !== undefined) {
+      check(mapReferenceLineNumber(manifest.body) === manifest.mapNumber,
+        `manifest ${file}: body must contain the fixed line 地图：#${manifest.mapNumber}`);
+      check(!hasImplementationReferenceLine(manifest.body),
+        `manifest ${file}: map-level spec body must not contain an 实现票 line`);
+    }
     manifests.push(manifest);
   }
   const keys = manifests.map((manifest) => String(manifest.key));
@@ -361,6 +388,14 @@ function loadManifests() {
   for (const number of existingSpecs) {
     if (existingSpecs.filter((value) => value === number).length > 1) {
       errors.push(`duplicate existing_spec: #${number}`);
+    }
+  }
+  const mapNumbers = manifests
+    .filter((manifest) => manifest.mapNumber !== undefined)
+    .map((manifest) => manifest.mapNumber);
+  for (const number of mapNumbers) {
+    if (mapNumbers.filter((value) => value === number).length > 1) {
+      errors.push(`duplicate map_number: #${number}`);
     }
   }
   byKey = new Map(manifests.map((manifest) => [String(manifest.key), manifest]));
@@ -606,6 +641,7 @@ function validateExistingIssues() {
   const numbers = new Set();
   for (const manifest of manifests) {
     if (manifest.existingSpec !== undefined) numbers.add(manifest.existingSpec);
+    if (manifest.mapNumber !== undefined) numbers.add(manifest.mapNumber);
     const add = (body) => {
       for (const raw of placeholderReferences(body)) {
         const reference = referenceSyntax(raw);
@@ -643,6 +679,7 @@ function validateExistingIssues() {
     }
   }
   inspectExistingSpecs();
+  inspectMapNumbers();
 }
 
 function inspectExistingSpecs() {
@@ -680,6 +717,19 @@ function inspectExistingSpecs() {
     const foreignChildren = checkExistingSpecChildren(manifest);
     check(foreignChildren.length === 0,
       `manifest ${manifest.key}: existing spec #${manifest.existingSpec} already has sub-issues: ${foreignChildren.map((number) => `#${number}`).join('、')}`);
+  }
+}
+
+function inspectMapNumbers() {
+  for (const manifest of manifests) {
+    if (manifest.mapNumber === undefined) continue;
+    const issue = externalIssues.get(manifest.mapNumber);
+    if (!issue) {
+      errors.push(`manifest ${manifest.key}: map #${manifest.mapNumber} was not returned by GitHub`);
+      continue;
+    }
+    check(issue.state === 'open',
+      `manifest ${manifest.key}: map #${manifest.mapNumber} is not open`);
   }
 }
 
@@ -889,8 +939,11 @@ function printDryRun(graph) {
       continue;
     }
     newSpecs += 1;
+    const mapSuffix = manifest.mapNumber === undefined
+      ? ''
+      : `（来源地图 #${manifest.mapNumber}）`;
     process.stdout.write(
-      `将新建规格 ${manifest.key}「${manifest.title}」 标签：${manifest.labels.join(',')}\n`
+      `将新建规格 ${manifest.key}「${manifest.title}」${mapSuffix} 标签：${manifest.labels.join(',')}\n`
     );
   }
   for (const node of order) {
