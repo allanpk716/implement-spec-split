@@ -3,6 +3,8 @@
 # A pid is considered alive only when its current process start time matches the
 # recorded start time. This prevents a recycled pid from looking like the old owner.
 
+OWNER_LIB_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+
 owner_trim() {
   local value="$1"
   value="${value#"${value%%[![:space:]]*}"}"
@@ -56,7 +58,7 @@ owner_start_for() {
     # a test helper path containing spaces usable.
     output=$(eval "\"\$ISS_PS_LSTART_CMD\" \"\$pid\"" 2>/dev/null || true)
   else
-    output=$(ps -o lstart= -p "$pid" 2>/dev/null || true)
+    output=$("$OWNER_LIB_DIR/pid-start.sh" "$pid" 2>/dev/null || true)
   fi
   owner_trim "$output"
 }

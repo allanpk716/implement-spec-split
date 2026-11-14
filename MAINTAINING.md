@@ -69,7 +69,7 @@
     - 合入：第 9 步全程持有合入锁（`lock.sh acquire land --scope repo`），在临时 worktree 里合入并 push，不碰主 checkout；push 被拒就回到第一步，不强推。
     - worker 数量：`--parallel` 仍按 Run 计；另有全机共用的 worker 槽位（`ISS_MAX_WORKERS`，否则读 `~/.cache/implement-spec-split/max-workers`，默认 4；find-next 的 `--workers` 会写这个文件，因为 Orca 新开的会话拿不到环境变量），所有仓库所有 Run 的 wrapper 都要先拿槽位，拿不到排队、不计入 Time limit。
     - 中途被别的规格挡住的票一律等待，绝不在本规格里实现别的规格的范围；要判断对方状态时现查 `claim.sh status`，不能只看 issue 开着就说没人做。
-    - 锁都用 `mkdir` 原子创建（macOS 没有 `flock`），持有者信息写进锁目录；持有者进程死了（PID 不在或启动时间对不上）由下一个等待者接管，所以会话崩溃不会留下永久的锁。
+    - 锁都用 `mkdir` 原子创建（macOS 没有 `flock`），持有者信息写进锁目录；持有者进程死了（PID 不在或启动时间对不上）由下一个等待者接管，所以会话崩溃不会留下永久的锁。启动标识默认经 `scripts/pid-start.sh` 获取：优先保持 `ps -o lstart=` 的旧值；Windows Git Bash/MSYS 的 `ps` 没有 `-o` 时回退读 `/proc/<pid>/stat` 的 starttime 并记作 `proc:<starttime>`，因此锁和 claim 在记录与判断时必须同用这一取法。
     - 运行目录改为 `runs/<仓库名>-<n>-<时间>/`。ticket worktree/分支命名仍是 `spec-<n>-t<m>`，Recovery 靠这两点找到上一个 Run 的残留。
     - 只覆盖同一个 clone 的多个 worktree（分支、领取记录、合入锁都在这个 clone 的 git 公共目录里）。
 

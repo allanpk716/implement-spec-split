@@ -28,6 +28,9 @@ die() {
   exit 1
 }
 
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+PID_START="$HERE/pid-start.sh"
+
 REPO=
 ALL=0
 ORDER=0
@@ -133,7 +136,7 @@ PIPELINE_FILE=$WORK/pipeline.json
 pipeline_node() {
   mode=$1
   shift
-  node - "$mode" "$@" <<'NODE'
+  ISS_PID_START_SCRIPT="$PID_START" node - "$mode" "$@" <<'NODE'
 const fs = require('fs');
 const path = require('path');
 const cp = require('child_process');
@@ -809,7 +812,7 @@ if (mode === 'order') {
   const parallel = Math.max(1, Number(args[3] || 2));
   const commandSuffix = args[4] === undefined ? '--impl codex' : args[4];
   const suppliedClaimsDir = args[5] || '';
-  const lstartCommand = args[6] || 'ps -o lstart= -p';
+  const lstartCommand = args[6] || process.env.ISS_PID_START_SCRIPT;
   const workersArgument = args[7] || '';
   const jsonOutput = args[8] === '1';
   const workers = workersArgument === '' ? null : Number(workersArgument);
@@ -895,8 +898,9 @@ if (mode === 'order') {
 
   function processStart(pid) {
     try {
-      const output = cp.execFileSync('/bin/sh', [
-        '-c', `${lstartCommand} "$@"`, 'pipeline-status-lstart', String(pid),
+      // Bare 'sh': Windows node cannot resolve '/bin/sh' (ENOENT), Git Bash puts sh on PATH.
+      const output = cp.execFileSync('sh', [
+        '-c', '"$1" "$2"', 'pipeline-status-lstart', String(lstartCommand), String(pid),
       ], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']});
       return String(output || '').trim();
     } catch (_) {
@@ -1390,7 +1394,7 @@ if [ "$ORDER" -eq 1 ]; then
     "$PARALLEL"
     "$CMD_SUFFIX"
     ''
-    "${ISS_PS_LSTART_CMD:-ps -o lstart= -p}"
+    "${ISS_PS_LSTART_CMD:-$PID_START}"
     "$WORKERS"
     "$JSON"
   )

@@ -733,7 +733,8 @@ const assertions = [
   [plan.workers === 4, 'workers'],
   [plan.per_spec_parallel === 1, 'per_spec_parallel'],
   [plan.resume.length === 1 && plan.resume[0].spec === 380, 'resume spec'],
-  [plan.resume[0].worktree === expectedWorktree, 'resume worktree from git metadata'],
+  // Windows realpath uses backslashes, git metadata uses forward slashes.
+  [String(plan.resume[0].worktree).replace(/\\/g, '/') === expectedWorktree.replace(/\\/g, '/'), 'resume worktree from git metadata'],
   [plan.resume[0].command.endsWith('--parallel 1'), 'resume command'],
   [plan.active.length === 1 && plan.active[0].spec === 370 && plan.active[0].branch === 'spec-370', 'active spec'],
   [plan.wave1.map((item) => item.spec).join(',') === '300,420,330', 'wave order'],

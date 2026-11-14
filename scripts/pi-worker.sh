@@ -222,7 +222,7 @@ if [ -r "/proc/$$/winpid" ]; then
   if [[ "$WORKER_START_TICKS" =~ ^[0-9]+$ ]]; then echo "$WORKER_WINPID $WORKER_START_TICKS" > "$RUN_DIR/pid"
   else echo "$WORKER_WINPID" > "$RUN_DIR/pid"; fi
 else
-  WORKER_START_ID=$(ps -o lstart= -p "$$" 2>/dev/null | tr -d '[:space:]')
+  WORKER_START_ID=$("$HERE/pid-start.sh" "$$" 2>/dev/null | tr -d '[:space:]')
   if [ -n "$WORKER_START_ID" ]; then echo "$$ $WORKER_START_ID" > "$RUN_DIR/pid"
   else echo $$ > "$RUN_DIR/pid"; fi
 fi

@@ -157,6 +157,41 @@ wait_pid_exit "$P1" && wait_pid_exit "$P2"
 check "both sequential holders acquire" test "$(find "$TEST_ROOT" -maxdepth 1 -name 'holder-*-got' | wc -l | tr -d ' ')" = 2
 check "contention lock is free" bash -c "[ \"\$($LOCK status contended --scope global)\" = free ]"
 
+echo "process start fallback and lock identity on MSYS-like ps"
+mkdir -p "$TEST_ROOT/msys-bin" "$TEST_ROOT/proc/$$"
+cat > "$TEST_ROOT/msys-bin/ps" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$TEST_ROOT/msys-bin/ps"
+printf '%s\n' "$$ (msys-test) Z 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 12345" \
+  > "$TEST_ROOT/proc/$$/stat"
+MSYS_ENV=(
+  PATH="$TEST_ROOT/msys-bin:$PATH"
+  ISS_PROC_ROOT="$TEST_ROOT/proc"
+  ISS_OWNER_PID=$$
+)
+FALLBACK_START=$(env "${MSYS_ENV[@]}" "$HERE/pid-start.sh" "$$")
+check "pid-start falls back to proc starttime" test "$FALLBACK_START" = "proc:12345"
+env "${MSYS_ENV[@]}" "$LOCK" acquire msys-start --scope global >/dev/null
+expect_rc "MSYS-like lock acquire succeeds" 0 $?
+MSYS_RECORDED_START=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).pid_start)' \
+  "$ISS_STATE_DIR/locks/msys-start.lock/owner.json")
+check "MSYS-like lock records proc start" bash -c "[[ \"\$1\" == proc:* ]]" _ "$MSYS_RECORDED_START"
+env "${MSYS_ENV[@]}" "$LOCK" release msys-start --scope global >/dev/null
+expect_rc "MSYS-like lock release succeeds" 0 $?
+
+echo "process start fallback matches ps lstart"
+PID_START_OUTPUT=$("$HERE/pid-start.sh" "$$")
+PS_LSTART_OUTPUT=$(ps -o lstart= -p "$$" 2>/dev/null)
+PS_LSTART_OUTPUT=${PS_LSTART_OUTPUT#"${PS_LSTART_OUTPUT%%[![:space:]]*}"}
+PS_LSTART_OUTPUT=${PS_LSTART_OUTPUT%"${PS_LSTART_OUTPUT##*[![:space:]]}"}
+if [ -n "$PS_LSTART_OUTPUT" ]; then
+  check "pid-start uses lstart when available" test "$PID_START_OUTPUT" = "$PS_LSTART_OUTPUT"
+else
+  echo "SKIP pid-start uses lstart when available (ps has no -o, e.g. MSYS)"
+fi
+
 echo "stale takeover, release, and wait behavior"
 ISS_OWNER_PID=$$ "$LOCK" acquire stale --scope global >/dev/null
 OLD_START=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).pid_start)' "$ISS_STATE_DIR/locks/stale.lock/owner.json")
