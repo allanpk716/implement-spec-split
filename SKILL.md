@@ -119,6 +119,15 @@ Continue the Spec on its existing integration branch and integration worktree (`
    4. `lock.sh release land --scope repo`. Release it on every exit path, including failures and the user saying stop.
 
    If the tracker closes work through PRs instead (a draft PR exists), skip 2–3: mark the PR ready for review and release the lock. Then resolve each ticket the way the tracker closes work. Close the Spec too, and every map implementation ticket on its `实现票` line, even when that implementation ticket has its own sub-issues: an implementation ticket left open after its Spec closes looks unfinished to the tracker, and `find-next` / `pipeline-status.sh` may list it as needing a spec again. When tickets still wait for another Spec, land what is done but keep the Spec, those tickets and the implementation ticket open.
+   5. **Start the next wave only after a completed direct landing.** If and only if step 2's `git push` succeeded, step 3 has handled the local main branch (including the safe case where it had to be left untouched and reported), and the tickets and Spec have been closed as described above (check with `gh issue view <n> --json state`; `Closes #n` closes asynchronously, and a Spec still open makes its dependents look blocked, so the script would report “无可启动”), run exactly this one launch script:
+
+      ```bash
+      <skill dir>/find-next/scripts/launch-wave.sh --repo <owner/name> --next-wave --apply
+      ```
+
+      `find-next/` is deliberately relative to this skill's root: the symlink installation points at the same repository checkout, so this works without another configuration variable.
+      Relay its result lines verbatim, then finish this Run: do the step-10 cleanup and final report, and **do not pick up another Spec in this session**. The report must name the Specs it started, or say “无可启动”. The script recalculates the order, reuses only the cached workers/specs/apart choices, holds a repository-wide `launch-wave` lock while reserving and starting Specs, and starts each newly free first-wave Spec in a fresh Orca session. Starting fresh is deliberate: by landing time this session is full, while the next Spec's facts are all in its issue and main, so a new session saves tokens and avoids dragging in this Spec's context. Do not run this substep for the PR path, a rejected push, a user-declined landing, or an unfinished merge; if the script exits nonzero (for example a dependency cycle), relay its message and stop—do not launch anything else here.
+
 10. Clean up all implementer worktrees, then `claim.sh release <n>`. A Spec left open because tickets wait for another Spec keeps its `spec-<n>` branch, so later it shows as interrupted ("先恢复" in find-next's order) and the next Run resumes it. In Orca, set the session's worktree to `--workspace-status in-review` (PR open) or `completed`, and retitle the tab `spec-<n> ✓`.
 
 ## External workers (backends `codex` and `pi`)

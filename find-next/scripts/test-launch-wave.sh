@@ -18,6 +18,10 @@ EMPTY_PLAN=$WORK/empty-plan.json
 EMPTY_PLAN_TEXT=$WORK/empty-plan.txt
 ONLY_INVISIBLE_PLAN=$WORK/only-invisible-plan.json
 ONLY_INVISIBLE_PLAN_TEXT=$WORK/only-invisible-plan.txt
+CYCLE_PLAN=$WORK/cycle-plan.json
+CYCLE_PLAN_TEXT=$WORK/cycle-plan.txt
+RESUME_ONLY_PLAN=$WORK/resume-only-plan.json
+RESUME_ONLY_PLAN_TEXT=$WORK/resume-only-plan.txt
 ORCA_LIST=$WORK/orca-list.json
 ORCA_LIST_NO_MAIN=$WORK/orca-list-no-main.json
 ORCA_LOG=$WORK/orca.log
@@ -25,6 +29,10 @@ CLAIM_LOG=$WORK/claim.log
 MAX_LOG=$WORK/max-workers.log
 PIPELINE_LOG=$WORK/pipeline.log
 SEQUENCE_LOG=$WORK/sequence.log
+WORKER_STATE_DIR=$WORK/worker-state
+LAUNCH_STATE_DIR=$WORK/launch-state
+LAUNCH_STATE_FILE=$LAUNCH_STATE_DIR/test__repo.json
+LOCK_DIR=$REPO/.git/implement-spec-split/locks/launch-wave.lock
 PASSED=0
 FAILED=0
 RUN_EXIT=
@@ -111,7 +119,7 @@ expect_sequence() {
   fi
 }
 
-mkdir -p "$BIN" "$REPO" || exit 1
+mkdir -p "$BIN" "$REPO" "$WORKER_STATE_DIR" "$LAUNCH_STATE_DIR" || exit 1
 mkdir -p "$WORK/test" && git init --quiet --bare --initial-branch=master "$ORIGIN"
 git -C "$REPO" init --quiet --initial-branch=master
 git -C "$REPO" config user.name 'Launch Wave Test'
@@ -187,6 +195,21 @@ NODE
 cat > "$ONLY_INVISIBLE_PLAN_TEXT" <<'EOF'
 开发顺序（同时 1 份，共 4 个 worker）
 先恢复：#224
+EOF
+
+printf '%s\n' '{"parallel_specs":2,"workers":4,"per_spec_parallel":2,"resume":[],"active":[],"wave1":[{"spec":237,"title":"New spec","command":"/implement-spec-split 237 --impl codex --parallel 2","note":""}],"later":[],"cycles":[222,237],"standalone":[]}' \
+  > "$CYCLE_PLAN"
+cat > "$CYCLE_PLAN_TEXT" <<'EOF'
+开发顺序（同时 2 份，共 4 个 worker）
+循环依赖：#222 #237，需要人工决定
+EOF
+
+printf '%s\n' '{"parallel_specs":1,"workers":4,"per_spec_parallel":4,"resume":[{"spec":222,"title":"Visible resume","branch":"spec-222","worktree":"'"$WT222"'","command":"/implement-spec-split 222 --impl codex --parallel 4"}],"active":[],"wave1":[],"later":[],"cycles":[],"standalone":[]}' \
+  > "$RESUME_ONLY_PLAN"
+cat > "$RESUME_ONLY_PLAN_TEXT" <<'EOF'
+开发顺序（同时 1 份，共 4 个 worker）
+先恢复：#222
+第 1 波：（无，先恢复上面的规格）
 EOF
 
 node - "$WT222" "$MAIN_WORKTREE_PATH" > "$ORCA_LIST" <<'NODE'
@@ -319,6 +342,9 @@ chmod +x "$BIN/fake-orca"
 run_launch() {
   output=$1
   shift
+  if [ "${LAUNCH_OMIT_WORKERS:-0}" != 1 ]; then
+    set -- --workers 4 "$@"
+  fi
   (
     cd "$REPO" || exit 125
     env LAUNCH_PLAN_FILE="${LAUNCH_PLAN_FILE_OVERRIDE:-$PLAN}" \
@@ -331,8 +357,11 @@ run_launch() {
       LAUNCH_SEQUENCE_LOG="$SEQUENCE_LOG" \
       ISS_PIPELINE_STATUS="$BIN/fake-pipeline" ISS_CLAIM="$BIN/fake-claim" \
       ISS_MAX_WORKERS_CMD="$BIN/fake-max-workers" ISS_ORCA="$BIN/fake-orca" \
+      ISS_LAUNCH_STATE_DIR="${LAUNCH_STATE_DIR_OVERRIDE:-$LAUNCH_STATE_DIR}" \
+      ISS_STATE_DIR="${LAUNCH_WORKER_STATE_DIR_OVERRIDE:-$WORKER_STATE_DIR}" \
+      ISS_LAUNCH_WAVE_LOCK_WAIT="${ISS_LAUNCH_WAVE_LOCK_WAIT_OVERRIDE:-0}" \
       PATH="$BIN:$PATH" \
-      bash "$SCRIPT" --repo "${LAUNCH_REPO_OVERRIDE:-test/repo}" --workers 4 "$@"
+      bash "$SCRIPT" --repo "${LAUNCH_REPO_OVERRIDE:-test/repo}" "$@"
   ) > "$output" 2> "${output}.err"
   RUN_EXIT=$?
 }
@@ -389,7 +418,7 @@ unset LAUNCH_ORCA_OFFLINE
 
 : > "$PIPELINE_LOG"; : > "$CLAIM_LOG"; : > "$MAX_LOG"
 : > "$ORCA_LOG"; : > "$SEQUENCE_LOG"
-run_launch "$WORK/apply.out" --apply --only 222,237,999
+run_launch "$WORK/apply.out" --apply --apart 237:239 --only 222,237,999
 expect_exit 0 "filtered apply succeeds"
 expect_has '#999 已不可启动，跳过' 'unavailable only spec is skipped' "$WORK/apply.out"
 expect_has '#222 已启动' 'visible resume is launched' "$WORK/apply.out"
@@ -414,6 +443,150 @@ expect_has '--base-branch' 'Orca create uses base branch' "$ORCA_LOG"
 expect_has 'origin/master' 'main branch comes from origin HEAD' "$ORCA_LOG"
 expect_has "$WT222" 'resume launch uses reserve stdout path' "$ORCA_LOG"
 expect_has '--prompt' 'Orca calls pass prompt explicitly' "$ORCA_LOG"
+
+if [ ! -e "$LOCK_DIR" ]; then
+  record PASS 'apply releases the launch-wave repository lock'
+else
+  record FAIL 'apply releases the launch-wave repository lock'
+fi
+if node -e '
+  const fs = require("fs");
+  const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  if (value.workers !== 4 || value.specs !== 2 || !Array.isArray(value.apart) ||
+      value.apart.length !== 1 || value.apart[0] !== "237:239" ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(value.updated)) process.exit(1);
+' "$LAUNCH_STATE_FILE"; then
+  record PASS 'apply writes launch state'
+else
+  record FAIL 'apply writes launch state'
+fi
+
+rm -f "$LAUNCH_STATE_FILE"
+cat > "$LAUNCH_STATE_FILE" <<'EOF'
+{"workers":7,"specs":3,"apart":["237:239"],"updated":"2000-01-01T00:00:00Z"}
+EOF
+: > "$PIPELINE_LOG"; : > "$CLAIM_LOG"; : > "$MAX_LOG"
+: > "$ORCA_LOG"; : > "$SEQUENCE_LOG"
+LAUNCH_OMIT_WORKERS=1
+export LAUNCH_OMIT_WORKERS
+run_launch "$WORK/next-wave-state.out" --next-wave --apply
+expect_exit 0 "next wave reads launch state successfully"
+expect_has ' #222（中断，先恢复；--next-wave 不自动恢复）' \
+  'next wave hints an interrupted spec' "$WORK/next-wave-state.out"
+expect_has '#237 已启动' 'next wave starts a free first-wave spec' "$WORK/next-wave-state.out"
+expect_has '已启动 1 份，跳过 0 份，失败 0 份。' \
+  'next wave ignores interrupted specs in its summary' "$WORK/next-wave-state.out"
+expect_without --resume 'next wave does not reserve interrupted specs' "$CLAIM_LOG"
+expect_has '7' 'next wave uses workers from launch state' "$PIPELINE_LOG"
+expect_has '3' 'next wave uses spec count from launch state' "$PIPELINE_LOG"
+expect_has '237:239' 'next wave uses apart pairs from launch state' "$PIPELINE_LOG"
+expect_has '7' 'next wave writes workers from launch state to max-workers' "$MAX_LOG"
+if node -e '
+  const fs = require("fs");
+  const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  if (value.workers !== 7 || value.specs !== 3 || value.apart[0] !== "237:239" ||
+      value.updated === "2000-01-01T00:00:00Z") process.exit(1);
+' "$LAUNCH_STATE_FILE"; then
+  record PASS 'next wave refreshes launch state timestamp'
+else
+  record FAIL 'next wave refreshes launch state timestamp'
+fi
+unset LAUNCH_OMIT_WORKERS
+
+rm -f "$LAUNCH_STATE_FILE" "$WORKER_STATE_DIR/max-workers"
+printf '%s\n' 6 > "$WORKER_STATE_DIR/max-workers"
+: > "$PIPELINE_LOG"; : > "$MAX_LOG"
+LAUNCH_OMIT_WORKERS=1
+export LAUNCH_OMIT_WORKERS
+run_launch "$WORK/next-wave-max-workers.out" --next-wave --apply --only 237
+expect_exit 0 "next wave falls back to the max-workers file"
+expect_has '6' 'max-workers fallback is passed to pipeline' "$PIPELINE_LOG"
+expect_has '6' 'max-workers fallback is persisted globally' "$MAX_LOG"
+expect_has '"workers": 6' 'max-workers fallback is written to launch state' "$LAUNCH_STATE_FILE"
+unset LAUNCH_OMIT_WORKERS
+rm -f "$WORKER_STATE_DIR/max-workers"
+
+EMPTY_LAUNCH_STATE=$WORK/empty-launch-state
+EMPTY_WORKER_STATE=$WORK/empty-worker-state
+mkdir -p "$EMPTY_LAUNCH_STATE" "$EMPTY_WORKER_STATE"
+LAUNCH_STATE_DIR_OVERRIDE=$EMPTY_LAUNCH_STATE
+LAUNCH_WORKER_STATE_DIR_OVERRIDE=$EMPTY_WORKER_STATE
+export LAUNCH_STATE_DIR_OVERRIDE LAUNCH_WORKER_STATE_DIR_OVERRIDE
+LAUNCH_OMIT_WORKERS=1
+export LAUNCH_OMIT_WORKERS
+run_launch "$WORK/next-wave-no-workers.out" --next-wave --apply
+expect_exit 1 "next wave without worker configuration fails"
+expect_has 'no launch state or max-workers file' \
+  'missing worker configuration asks for --workers' "$WORK/next-wave-no-workers.out.err"
+unset LAUNCH_STATE_DIR_OVERRIDE LAUNCH_WORKER_STATE_DIR_OVERRIDE LAUNCH_OMIT_WORKERS
+
+LAUNCH_PLAN_FILE_OVERRIDE=$RESUME_ONLY_PLAN
+LAUNCH_PLAN_TEXT_FILE_OVERRIDE=$RESUME_ONLY_PLAN_TEXT
+export LAUNCH_PLAN_FILE_OVERRIDE LAUNCH_PLAN_TEXT_FILE_OVERRIDE
+cat > "$LAUNCH_STATE_FILE" <<'EOF'
+{"workers":7,"specs":1,"apart":[],"updated":"2000-01-01T00:00:00Z"}
+EOF
+: > "$PIPELINE_LOG"; : > "$CLAIM_LOG"; : > "$MAX_LOG"; : > "$ORCA_LOG"
+LAUNCH_OMIT_WORKERS=1
+export LAUNCH_OMIT_WORKERS
+run_launch "$WORK/next-wave-empty.out" --next-wave --apply
+expect_exit 0 "next wave with nothing free exits zero"
+expect_has '无可启动' 'next wave with nothing free says so' "$WORK/next-wave-empty.out"
+expect_has ' #222（中断，先恢复；--next-wave 不自动恢复）' \
+  'next wave with nothing free only hints interrupted work' "$WORK/next-wave-empty.out"
+expect_without 'reserve' 'next wave with nothing free claims nothing' "$CLAIM_LOG"
+expect_without 'orca' 'next wave with nothing free launches nothing' "$ORCA_LOG"
+expect_without 'max-workers' 'next wave with nothing free does not set worker limit' "$MAX_LOG"
+unset LAUNCH_OMIT_WORKERS
+
+LAUNCH_PLAN_FILE_OVERRIDE=$CYCLE_PLAN
+LAUNCH_PLAN_TEXT_FILE_OVERRIDE=$CYCLE_PLAN_TEXT
+export LAUNCH_PLAN_FILE_OVERRIDE LAUNCH_PLAN_TEXT_FILE_OVERRIDE
+: > "$PIPELINE_LOG"; : > "$CLAIM_LOG"; : > "$MAX_LOG"; : > "$ORCA_LOG"
+run_launch "$WORK/next-wave-cycle.out" --next-wave --apply
+expect_exit 2 "next wave refuses a dependency cycle"
+expect_has '循环依赖：#222、#237，不自动启动。请运行 /find-next。' \
+  'next wave cycle report names specs and next action' "$WORK/next-wave-cycle.out"
+expect_without 'reserve' 'next wave cycle claims nothing' "$CLAIM_LOG"
+expect_without 'create' 'next wave cycle launches nothing' "$ORCA_LOG"
+expect_without 'max-workers' 'next wave cycle does not set worker limit' "$MAX_LOG"
+unset LAUNCH_PLAN_FILE_OVERRIDE LAUNCH_PLAN_TEXT_FILE_OVERRIDE
+
+LOCK_READY=$WORK/occupied-lock.ready
+(
+  cd "$REPO" || exit 125
+  bash "$ROOT/scripts/lock.sh" acquire launch-wave --scope repo --wait 0 --owner-pid "$$" &&
+    : > "$LOCK_READY"
+  while [ -e "$LOCK_DIR" ]; do sleep 1; done
+) &
+LOCK_HOLDER=$!
+LOCK_WAIT_ROUNDS=0
+while [ ! -e "$LOCK_READY" ] && [ "$LOCK_WAIT_ROUNDS" -lt 50 ]; do
+  sleep 0.1
+  LOCK_WAIT_ROUNDS=$((LOCK_WAIT_ROUNDS + 1))
+done
+[ -e "$LOCK_READY" ] || {
+  printf '%s\n' 'could not occupy launch-wave lock' >&2
+  exit 125
+}
+: > "$PIPELINE_LOG"; : > "$CLAIM_LOG"; : > "$ORCA_LOG"
+run_launch "$WORK/occupied-launch.out" --apply --only 237
+expect_exit 1 "occupied launch-wave lock fails"
+expect_has 'could not acquire the launch-wave repository lock' \
+  'occupied lock failure names launch-wave lock' "$WORK/occupied-launch.out.err"
+expect_without --json 'occupied lock never calculates an order' "$PIPELINE_LOG"
+expect_without 'reserve' 'occupied lock claims nothing' "$CLAIM_LOG"
+expect_without 'create' 'occupied lock launches nothing' "$ORCA_LOG"
+(
+  cd "$REPO" && bash "$ROOT/scripts/lock.sh" release launch-wave --scope repo --force
+) >/dev/null 2>&1 || record FAIL 'test releases occupied launch-wave lock'
+kill "$LOCK_HOLDER" >/dev/null 2>&1 || true
+wait "$LOCK_HOLDER" 2>/dev/null || true
+if [ ! -e "$LOCK_DIR" ]; then
+  record PASS 'occupied lock test leaves no lock behind'
+else
+  record FAIL 'occupied lock test leaves no lock behind'
+fi
 
 : > "$CLAIM_LOG"; : > "$ORCA_LOG"; : > "$SEQUENCE_LOG"
 run_launch "$WORK/only-invisible.out" --apply --only 224

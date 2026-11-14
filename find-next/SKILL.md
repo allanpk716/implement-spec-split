@@ -1,18 +1,21 @@
 ---
 name: find-next
-description: 扫描当前仓库的 wayfinder 地图与票，只挑出一个下一步（该 /to-tickets、该 /to-spec、还是该 grilling/research 哪张票）并给出要敲的命令；加 --list 时改为列出全部待办清单；加 --batch 时批量起草缺规格的票或已收口地图的规格与执行票、给有规格未拆票的规格起草执行票，用户确认一轮后发布，最后给出可以开发的规格的编号顺序，并直接在 Orca 里自动开 worktree、启动第 1 波的 implement-spec-split 会话（不再单独确认）。用户问"下一步做什么""该推哪张票""哪个该 to-spec / to-tickets / grill 了""还有什么没做完""给我待办清单""批量写规格 / 批量拆票""接下来开发哪几份规格""开发顺序"，或输入 /find-next 时使用。参数 --list、--batch、--workers N、--specs K、--worker codex|pi|self。
+description: 默认进入推进模式：循环扫描当前 GitHub 仓库的 wayfinder 地图与票，自动调查并关闭可关的 research 票、为决策票准备选项、批量起草规格和执行票，把所有需要人拍板的问题合成一轮，答完后自动发布并启动第 1 波 implement-spec-split 会话；规格合入 main 后可由 implement-spec-split 调 --next-wave 自动开下一波。--suggest 保留原先只推荐一个下一步的只读行为；--list 列出待办清单；--batch 是推进模式别名。用户问"下一步做什么""推进仓库""该推哪张票""哪个该 to-spec / to-tickets / grill 了""还有什么没做完""给我待办清单""批量写规格 / 批量拆票""接下来开发哪几份规格""开发顺序"，或输入 /find-next 时使用。参数 --suggest、--list、--batch、--workers N（可选）、--specs K、--worker codex|pi|self。
 ---
 
 # find-next
 
-在当前仓库里扫描跟踪器，**只给出一个 Next step**和要敲的命令，外加最多 3 行备选。术语（Spec、Closing ticket、Decision ticket、Map frontier、Next step）见 implement-spec-split 的 `GLOSSARY.md`，设计理由见其 `MAINTAINING.md`「find-next 设计要点」。对跟踪器只读：不改票头、不认领、不打标签、不写地图。唯一例外是 `--batch` 的发布步骤，它在用户确认后新建规格票和执行票。
+默认在当前仓库进入**推进模式**：尽可能把 wayfinder 地图和票推进到可开发状态，只在真正需要人拍板时把所有问题合成一轮。`--suggest` 才是原先的只读建议模式，**只给出一个 Next step**和要敲的命令，外加最多 3 行备选。术语（Spec、Closing ticket、Decision ticket、Map frontier、Next step、推进模式）见 implement-spec-split 的 `GLOSSARY.md`，设计理由见其 `MAINTAINING.md`「find-next 设计要点」。
+
+对跟踪器的写操作只允许出现在推进模式：按用户答案为调研票/决策票写 Resolution、关票、更新地图；发布草稿时新建规格票和执行票；启动规格前写领取记录。`--suggest` 和 `--list` 恒为只读。
 
 ## 用法
 
-- `/find-next`：等同于 `--worker codex`
-- `/find-next --worker codex|pi|self`：判断部分交给谁做（见「流程」）
+- `/find-next [--workers N] [--specs K] [地图号、实现票号或规格号…]`：默认推进模式（见「推进模式」）。它循环执行：扫描 → 自动调查/关闭 research 票 → 准备决策题 → 起草规格和执行票 → 有问题就一轮问用户 → 应用答案并再扫描 → 发布 → 启动第 1 波。起草、调研和决策准备总是交给 codex worker，`--worker` 被忽略。只支持 GitHub 跟踪器；本地 markdown 跟踪器请用 `--suggest` 或 `--list`
+- `/find-next --suggest [--worker codex|pi|self]`：原先的默认行为，只读挑一个 Next step（见「建议模式流程」）；未给 `--worker` 时等同于 `codex`。支持 GitHub 和本地 markdown 跟踪器
 - `/find-next --list`：不挑一个，列出当前仓库的全部待办清单（见「清单模式」）。总是我自己做，不派 worker，`--worker` 被忽略
-- `/find-next --batch --workers N [--specs K] [地图号、实现票号或规格号…]`：把「缺规格」的票和已收口的地图批量起草成规格和执行票、给「有规格、未拆票」的规格起草执行票，用户确认一轮后发布，最后输出可以开发的规格的编号顺序，并直接在 Orca 里自动启动第 1 波（见「批量模式」）。`--workers N` 是全机 GLM worker 总数，必填，没给就先问用户；`--specs K` 是同时开几份规格，默认 2；每份规格的 `--parallel` = N ÷ K（至少 1）。不带票号时处理全部。没有要起草的就直接输出开发顺序。只支持 GitHub 跟踪器；起草总是交给 codex worker，`--worker` 被忽略。**同一仓库同一时间只在一个会话里运行 `--batch`**：起草和发布没有加锁，两个会话同时跑会重复起草
+- `/find-next --batch …`：推进模式别名，兼容旧用法
+- `--workers N` 可选，是全机 GLM worker 总数；每份规格的 `--parallel` = N ÷ K（至少 1）。没给时读 `~/.cache/implement-spec-split/max-workers`（`scripts/max-workers.sh` 用的同一文件）；文件也没有就把 worker 上限并入本轮最后一个问题问用户。`--specs K` 是同时开几份规格，默认 2。**同一仓库同一时间只在一个会话里运行推进模式**：起草、发布和地图更新没有全流程锁，两个会话同时跑会重复起草或重复关票
 
 只扫当前仓库，不跨仓库汇总。
 
@@ -36,9 +39,9 @@ description: 扫描当前仓库的 wayfinder 地图与票，只挑出一个下�
 
 跳过：Notes、标题或状态行里标了「搁置」的地图和票。
 
-**不做**：默认模式不推荐「执行票已拆、可以开工」这一阶段（`/implement-spec-split`），`--list` 会列出但不作为 Next step，开发顺序由 `--batch` 给出；不跨仓库汇总。
+**不做**：建议模式不推荐「执行票已拆、可以开工」这一阶段（`/implement-spec-split`），`--list` 会列出但不作为 Next step，开发顺序由推进模式给出；不跨仓库汇总。
 
-## 流程
+## 建议模式流程（`--suggest`）
 
 1. 读 `docs/agents/issue-tracker.md`，确认跟踪器形态。
 2. **机械扫描**（本地 markdown 跟踪器，也就是 `tracker/map*.md` + `tracker/tickets/NN-*.md`）：
@@ -90,106 +93,106 @@ F. 散票（bug / needs-triage 等，含疑似重复标注）
 建议先做：<一两句，按「阶段与优先级」挑出的那一个>
 ```
 
-   称呼票时写「#编号 标题」。清单最后给出单个 Next step 的结论，口径与默认模式一致。
+   称呼票时写「#编号 标题」。清单最后给出单个 Next step 的结论，口径与建议模式一致。
 4. 仓库里另有自由格式的 backlog 文档（如 `docs/backlog.md`）时，不机械解析，只在末尾提醒一句「另有 backlog 文档未纳入，建议把仍有效的条目迁成 issue」。
 
-## 批量模式（`--batch`）
+## 推进模式（默认；`--batch` 是别名）
 
-用途：一条命令做完两件事。前半把「缺规格」的票、前沿已空但还没有规格指回的地图起草成规格和执行票，把「有规格、未拆票」的规格起草成执行票，代替逐张走「`/to-spec` → `/to-tickets` → `/clear`」，中间确认一轮；后半给出全仓库可以开发的规格的编号顺序，不再询问，直接由脚本在 Orca 里为第 1 波和要恢复的规格各开一个会话，自动运行 `/implement-spec-split <规格号> --impl codex --parallel <P>`。读材料、写长文都在 worker 那边做，我只花在分组、审稿、发布和排序判断上。
+用途：把用户从「逐张判断、逐个技能、逐轮确认」里解放出来。主会话只保留必须跨全批做的判断：分组、审稿、把关 Resolution、判断 `--apart`；读长材料和写长文都交给新的 codex worker。每一轮尽可能自动推进，只有真正的取舍题才问用户，而且所有问题合成一轮。
 
-不能调用 `/to-spec`、`/to-tickets` 本身（`disable-model-invocation`），所以起草 worker 直接读这两个上游技能的 `SKILL.md`，照它们的模板和规则写。两个技能里「问用户」的步骤合并成下面第 5 步的一轮。
+推进模式只支持 GitHub 跟踪器。先读 `docs/agents/issue-tracker.md`；发现本地 markdown 跟踪器时，说明推进模式不支持，改按 `--suggest` 或 `--list` 执行。**同一仓库同一时间只在一个会话里运行推进模式**；开工前确认没有另一个本仓库推进器会话。
 
-1. **扫描**：`pipeline-status.sh --all`，取「缺规格」「地图缺规格」和「有规格、未拆票」三段；带参数时只留参数里的地图、实现票或规格。所在地图还在「地图仍在探索」段、并且决策票会影响这张实现票的，不进批量，在输出里说明还差哪张决策票。三段都没有要起草的，直接跳到第 7 步。
-2. **分组（我做）**：看标题，必要时 `gh issue view` 实现票正文（不读决策票全文），把同一地图里紧密相关的实现票合成一份规格，其余一张一份；每份「有规格、未拆票」的规格单独成一组（写法 `S<k>=spec:<规格号>`，只起草执行票，发布时挂到这份已有规格下面，不新建规格票）；每张「地图缺规格」的地图也单独成一组（写法 `S<k>=map:<地图号>`，起草一份地图级规格和执行票）。每组编号 `S1`、`S2`…。分组原则：一份规格是一个可独立交付、可独立验收的竖切；明显串行依赖的（如整体验收册依赖所有功能）单独成组，靠阻塞关系衔接。
-3. **起草（worker 并行）**：
-   - 运行目录 `~/.cache/codex-runs/<仓库名>-<YYYYmmdd-HHMM>-spec-batch/`，每组一个子目录 `S<k>/`，它就是那个 worker 的运行目录。
-   - Brief 不手写，用脚本从 [templates/brief-spec-batch.md](templates/brief-spec-batch.md) 或 map 组的 [templates/brief-map-spec-batch.md](templates/brief-map-spec-batch.md) 生成（它自己取票和地图标题、最新的 to-spec / to-tickets 路径，并在每份里列出所有组，用来写跨规格阻塞）：
+1. **扫描**：
 
-     ```bash
-     <本技能目录>/scripts/make-batch-briefs.sh [--example <已有规格号>] [--note S2=<补充说明文件>] <运行目录> S1=62 S2=63,64 S3=spec:224 S4=map:41
-     ```
-
-     某组需要额外提示（比如某张 ADR 要重点读、正文里的 Open questions 要先查代码）时，写成小文件用 `--note` 传入，不改生成结果。仓库里已有规格时传 `--example` 做风格参考；一份规格都没有时可不传，Brief 会改用地图下已有票的标题格式做参考。
-   - 脚本最后打印每组的运行命令。后台运行，最多 3 个同时跑，组更多就分批派：
-
-     ```bash
-     ~/.claude/skills/implement-spec-split/scripts/codex-worker.sh --cwd <仓库> --brief <运行目录>/S<k>/brief.md \
-       --run-dir <运行目录>/S<k> --read-only --time-limit 2400 --idle-timeout 600
-     ```
-
-     草稿写在运行目录里，不在仓库内，所以用 `--read-only` 守住仓库。出错按全局 CLAUDE.md 的处理表。
-4. **审稿（我做）**：读每组的 `result.md`、`manifest.json`、`spec.md` 和执行票正文，逐份检查：
-   - 实现决定都注明了出处，并且出处里确实这么定了（抽查几条）；
-   - `实现票：`、`地图：` 两行正确（map 组只写 `地图：`，不写 `实现票：`）；
-   - 执行票是竖切、粒度合适，阻塞边合理，跨组阻塞两边对得上（A 写了被 S2 挡住，S2 的范围确实提供 A 需要的东西）；
-   - `blocked_by` 不挂在还没有规格的实现票上；该交给别的票的部分写进了 `handoffs`；
-   - `unresolved` 里只有真正要用户拍板的事（命令名、界面、安全语义、范围归属），每条带推荐答案；字段名、审计动作名这类按先例能定的细节应写进正文由实现者定，误放进来的我挪回正文；
-   - 执行票标题格式与仓库已有的票一致；
-   - 用 `publish-batch.sh <全部 manifest.json>` 试运行：有未决也会打印完整计划、未决清单和留言预告，确认阻塞关系正确。
-
-   小问题我直接改草稿文件；需要重读材料的大问题，写意见进新 Brief、换新运行目录重派那一组。
-5. **问用户一轮**：一次性列出，适合手机阅读：
-
-   ```
-   批量起草 · <仓库名> · N 份规格、M 张执行票
-
-   S1 <规格标题>（覆盖 #62、#63）
-   摘要：<一两句>
-   测试切入点：<一句>，对吗？
-   执行票：
-   1. <标题> — 交付：<一句>；被挡：无
-   2. <标题> — 交付：<一句>；被挡：1、S2
-   交接：<#84（要它写规格时纳入什么）；没有写「无」>
-   未决（按推荐答案已写进草稿）：
-   a. <问题> → 建议：<推荐答案>
-   b. …
-
-   S2 …（未决编号接着排：c、d…）
-
-   请确认：各份的测试切入点、拆分粒度、阻塞关系，以及 a–<末号> 的建议（可以只回「都同意」，或指出要改哪几条）。
-   确认后我发布（会新建 N + M 张 issue，并在交接的票下留言）。
+   ```bash
+   ~/.claude/skills/implement-spec-split/scripts/pipeline-status.sh --all
    ```
 
-   未决编号全批连续，让用户能一句话回复。用户同意的建议：把草稿里对应的「（待确认）」去掉，出处写「（owner <日期> 批量起草确认）」，清空那份的 `unresolved`。用户改了某份的测试切入点或拆分：小改我直接改草稿；大改那份退回 worker 重写，其他份照常发布。用户要再想想的未决，那份先不发布，留给 `/wayfinder` 或 `/grill-with-docs`。
-6. **发布（我做，用户确认后）**：
+   保存为运行目录 `~/.cache/codex-runs/<仓库名>-<YYYYmmdd-HHMM>-find-next-advance/scan-<轮次>.txt`。带地图号、实现票号或规格号时，只推进参数指向的范围；不带时处理全仓库。
+
+2. **research 票（自动，不问用户）**：从「地图仍在探索」每张地图的前沿里找出 open、阻塞全关、无 Assignee、标签为 `wayfinder:research` 的票。pipeline 输出已标注「有未关阻塞」「已认领」；漏信息时用 `gh issue view <n> --json assignees,labels` 和 tracker 文档的 blocker 查询补齐。每张票一个子目录 `research-<票号>/`，用 [templates/brief-research.md](templates/brief-research.md) 填 Brief，后台运行：
+
+   ```bash
+   ~/.claude/skills/implement-spec-split/scripts/codex-worker.sh --cwd <仓库> --brief <运行目录>/research-<票号>/brief.md \
+     --run-dir <运行目录>/research-<票号> --read-only --time-limit 2400 --idle-timeout 600
+   ```
+
+   我审读 `result.md` 和 `resolution.md`：事实有出处、没有把推断写成决定、Resolution 和地图索引行符合 wayfinder 格式。通过后按 tracker 文档写票：在票下发 Resolution 评论、关票、把一行 gist 追加到地图 `## Decisions so far`（保留其他段落和已有顺序）。小语病我直接改；材料不足就换新运行目录重派一次。**结论里出现需要取舍的问题时不关票**，把它改写成一条决策题，并入本轮第 5 步；已有的调研事实仍留在草稿里供用户参考。
+
+3. **决策票（worker 准备，一轮问用户）**：research 票全部处置完后重新运行 `pipeline-status.sh --all`，看最新前沿。open、阻塞全关、无 Assignee、标签为 `wayfinder:grilling` 的票每张派一个只读 worker，子目录 `decision-<票号>/`，用 [templates/brief-decision.md](templates/brief-decision.md)。worker 读票、地图、相关 ADR、规格和代码，产出问题陈述、2–4 个选项及代价、推荐答案和理由，写在 `decision.md`；不写票、不关票、不改地图。命令同上。worker 判断「无需用户决策」（已有 ADR/地图决定）时，我复核依据，仍把它作为一条「建议直接关：<依据>」放进第 5 步那一轮，用户同意后再写 Resolution、关票：grilling 是 HITL，wayfinder 规定代理不能替人回答。`wayfinder:prototype`、`wayfinder:task` 票不自动处理（要做原型或手工操作，不是选项题），在第 10 步收尾里列出，提示用户用 `/wayfinder <地图> <票>` 处理。
+
+4. **起草规格/执行票**：沿用下面 4.1–4.4（对应原批量模式第 2–4 步）。此轮没有可起草组就跳过。
+   1. **分组（我做）**：取「缺规格」「地图缺规格」和「有规格、未拆票」三段；所在地图仍在探索、且决策票会影响这张实现票的，不进起草，在输出里说明还差哪张决策票。看标题，必要时 `gh issue view` 实现票正文，把同一地图里紧密相关的实现票合成一份规格，其余一张一份；每份已有规格单独成组（`S<k>=spec:<规格号>`，只拆票）；每张已收口地图单独成组（`S<k>=map:<地图号>`）。一份规格是一个可独立交付、可独立验收的竖切；明显串行依赖的单独成组，靠阻塞关系衔接。
+   2. **生成 Brief**：运行目录下每组 `S<k>/`，不手写，用脚本生成：
+
+      ```bash
+      <本技能目录>/scripts/make-batch-briefs.sh [--example <已有规格号>] [--note S2=<补充说明文件>] <运行目录> S1=62 S2=63,64 S3=spec:224 S4=map:41
+      ```
+
+      某组需要额外提示时写成小文件用 `--note` 传入。仓库已有规格时传 `--example`；一份都没有可不传。
+   3. **worker 并行起草**：按脚本打印的命令后台运行，最多 3 个同时，组更多分批：
+
+      ```bash
+      ~/.claude/skills/implement-spec-split/scripts/codex-worker.sh --cwd <仓库> --brief <运行目录>/S<k>/brief.md \
+        --run-dir <运行目录>/S<k> --read-only --time-limit 2400 --idle-timeout 600
+      ```
+
+      草稿只在运行目录，不在仓库内。不能调用 `/to-spec`、`/to-tickets` 本身；worker 直接读最新上游技能规则。
+   4. **审稿（我做）**：读 `result.md`、`manifest.json`、`spec.md` 和执行票正文，检查实现决定都有出处且出处确实这么定了；`实现票：`、`地图：`两行正确；执行票是竖切、阻塞合理、跨组阻塞对得上；`blocked_by` 不挂还没有规格的实现票，该交接的写进 `handoffs`；`unresolved` 只留真正要用户拍板的事，每条带推荐答案；标题格式与仓库一致。用 `publish-batch.sh <全部 manifest.json>` 试运行核对计划。小问题直接改；大问题换新 Brief 重派那一组。
+
+5. **一轮问用户（没有问题就跳过）**：把第 3 步决策题、第 2 步转来的取舍题、第 4 步每组 `unresolved`、以及缺少的全机 worker 上限，合成一条手机友好的消息。编号全批连续（a、b、c…），每组只给一两行摘要和必要上下文，选项各占一行；最后一个问题可以是「全机 GLM worker 总数用 N 吗？」。结尾写：
+
+   ```
+   推进器 · <仓库名> · 需要拍板 <N> 条
+
+   a. #<票号> <票名>：<问题一两句>
+      A. <选项> — <代价>
+      B. <选项> — <代价>
+      建议 A：<理由>
+   b. S1 <规格标题>：<未决问题> → 建议：<推荐答案>
+   ...
+   ```
+
+   ```
+   请回复「都同意」，或指出要改哪几条（例如：a 选 B、c 再想想、worker 用 6）。
+   ```
+
+   没有任何要问的，直接做第 7 步的复查扫描。
+
+6. **应用答案**：用户同意的决策票/取舍题，把答案写进 Resolution 评论、关票、更新地图 Decisions so far；草稿未决按原批量规则处理：对应草稿去掉「（待确认）」，出处写「（owner <日期> 推进器确认）」，清空该组 `unresolved`；小改动我直接改草稿，大改动重派该组；用户说「再想想」的那张票或那组草稿不发布、不再追问，保留给 `/wayfinder` 或后续推进。用户给出的 worker 数在启动时传给 `launch-wave.sh`，由脚本写入全机 worker 上限文件。
+
+7. **再扫描**：第 6 步关票可能解锁新的 research/决策票，或让某张地图前沿清空并出现在 `mapSpecs`。重新运行 `pipeline-status.sh --all`：有新可自动处理的对象就回到第 2 步；新对象带来新取舍时，只把新增问题问一轮；扫描不再出现新对象就往下走。若某张票反复生成同一未决问题、或用户明确说再想想，终止这条分支并在收尾说明阻塞点，不循环追问。
+
+8. **发布**：没有 `unresolved` 的组直接发布，**不再确认**（owner 2026-11-14 定）。有问题但用户已答的组在应用答案后发布；用户说再想想的组不发布。发布用：
 
    ```bash
    <本技能目录>/scripts/publish-batch.sh --apply --no-order [--only S1,S3] <运行目录>/S*/manifest.json
    ```
 
-   先建规格票（`spec:<规格号>` 组不建，直接用已有规格；`map:<地图号>` 组会新建规格），再按阻塞顺序建执行票、挂成规格的子票、加原生阻塞边，占位符换成真实票号，最后在 `handoffs` 指向的票下留言。每一步记进各组的 `published.json`，中途失败修好后直接重跑，不会重复建票或重复留言。结束时脚本读回子票和阻塞关系核对，通过后进入第 7 步（`--no-order` 让它不再自己打印顺序，由第 7 步统一输出）。核对没过（退出码非零）就把缺的项报给用户，不手工补。
-7. **开发顺序与启动（每次都做）**：发布完或不需要发布时，运行：
+   脚本建规格票和执行票、挂子票、加阻塞、回填占位符、写交接留言，并记录 `published.json`；中途失败修好后重跑，不手工补。核对失败就把缺项报给用户并停止。
+
+9. **开发顺序与启动（每次都做）**：发布完或不需要发布时，先运行：
 
    ```bash
-   <本技能目录>/scripts/launch-wave.sh --repo <owner/name> --workers N [--specs K] [--apart 224:239 …]
+   <本技能目录>/scripts/launch-wave.sh --repo <owner/name> [--workers N] [--specs K] [--apart 224:239 …]
    ```
 
-   不带 `--apply` 时它只打印开发顺序表和每个会话要运行的命令（预告，不启动）。排序由 `pipeline-status.sh --order` 按固定规则算（被依赖的先做 → 解锁下游多的先做 → 编号小的先做；完全被挡住的不进第 1 波；中断的标「先恢复」，进行中的不排）。规格是空闲、进行中还是中断，脚本看本地分支和领取记录，不看 Orca。
+   排序由 `pipeline-status.sh --order` 确定性计算：被依赖的先做 → 解锁下游多的先做 → 编号小的先做；完全被挡住的不进第 1 波；进行中的不排；中断的标「先恢复」。我只补「改同一块代码」的 `--apart A:B` 判断，依据规格正文里的模块；拿不准不传。有 `--apart` 时按重跑后的结果为准。`--apply` 会把本次 workers/specs/apart 写入 `~/.cache/implement-spec-split/launch/<owner>__<name>.json`，供合入后的 `--next-wave` 复用；开发顺序本身每次重算。没给 `--workers` 时脚本按第 5 步得到的答案传入；第 5 步也没问（已有 max-workers 文件）就不传，让脚本读状态文件或 max-workers 文件。
 
-   我只补一类判断：「改同一块代码」的两份可以开工的规格，用 `--apart A:B` 传给脚本，它会把后一份顺延到下一波。依据是两份规格正文里写的模块，拿不准就不传。有 `--apart` 时重跑一次，用重跑的结果。
+   **原样转述试运行输出，不加解释**，不问用户，紧接着用同样参数加 `--apply` 再运行一次。唯一例外：出现「循环依赖」时不加 `--apply`，问用户怎么定。另需单独提醒一行：表里写「另需 #N」的规格要另开会话处理那张票。脚本会写全机 worker 上限、预留规格、在 Orca 里建 worktree 并启动 `/implement-spec-split <n> --impl codex --parallel <P>`；「需手动」条目按脚本输出提醒。合入后的自动下一波见 implement-spec-split 根技能第 9 步。
 
-   **原样转述脚本的输出，不加解释**，不问用户，紧接着用同样的参数加 `--apply` 再运行一次，启动全部可启动的条目（owner 2026-11-12 定：发布后直接启动，不再确认）。唯一例外：出现「循环依赖」时先不加 `--apply`，问用户怎么定。另外只补一类一行提醒：被「单独的票」（表里写「另需 #N」）挡住的，提醒另开会话处理那张票。
+10. **收尾**：原样转述启动结果，列出已启动、跳过、失败和需手动的规格。提醒用户：之后每份规格合入 main 时，implement-spec-split 会在第 9 步末尾只运行一条 `launch-wave.sh --next-wave --apply` 开新会话；本推进器会话可以 `/clear`。各规格会话仍会在 push 前确认、GLM 额度/auth/transient 出错、worker 连续失败时停下等人。
 
-   ```
-   开发顺序（同时 2 份，共 4 个 worker）
-   先恢复：#222
-   第 1 波：
-    1. #237 新增服务器与锚定 → /implement-spec-split 237 --impl codex --parallel 2
-   之后：
-    2. #238 …（等 #237）
+## 推进模式出错处理与终止
 
-   现在启动吗？会在 Orca 里自动运行：     ← 预告分支的固定文字，接着就加 --apply，不等回答
-    #222（恢复，原 worktree）→ /implement-spec-split 222 --impl codex --parallel 2
-    #237（新 worktree）→ /implement-spec-split 237 --impl codex --parallel 2
-   ```
+- worker `auth` / `quota` / `transient`：停止后续自动动作，把错误和已完成的安全结果告诉用户，问是等、换 `pi` 还是停止；不自动降级为 `self` 或其他模型。
+- worker `stalled` / `error`：把失败原因补进 Brief，换新运行目录重跑一次；再失败就停下报告。
+- worker `violation`：报告作废，把 `changed_paths` 交给用户；不发布、不关票。
+- GitHub 或发布脚本失败：停止在当前操作，不手工补已由脚本负责的创建/核对；可修复后重跑幂等脚本。
+- 一轮扫描没有任何 research、决策、起草、发布或启动可做：输出当前最接近的阻塞点并结束。
+- 用户要求停止：不再发任何写请求；已在后台的 worker 等它结束后只读结果，不应用自动写操作。
 
-   - `--apply` 运行：脚本把全机 worker 上限写成 N，为新规格在 Orca 里建 worktree（分支 `spec-<n>`，挂上 issue）并启动 Claude 会话；为恢复的规格在原 worktree 里启动会话，原 worktree 不在 Orca 列表里时（多是早先建在 `<仓库>-wt/` 下的），在 Orca 管理的主工作树下开一个标题为 `spec-<n>` 的终端标签，先 `cd` 过去再启动。每个会话开工前都先预留规格（交接预留），不会和别的会话撞车。原样转述它的结果行；有「启动失败」的，把原因告诉用户。
-   - 仍写着「需手动」的条目（找不到 worktree，或主工作树也不在 Orca 里），以及不在 Orca 里运行时的全部条目，提醒用户自己在对应目录运行那条命令。
-   - 用户事后要撤掉某份：在 Orca 里关掉那个会话，再在主工作树运行 `~/.claude/skills/implement-spec-split/scripts/claim.sh release <规格号> --force`。
-
-   最后提醒用户：会话只在合入前确认 push、GLM 额度出错、worker 连续失败时停下等人，看 Orca 标签页的状态即可；一波合入后再跑一次 `/find-next --batch --workers N` 开下一波。然后提醒 `/clear`。
-
-## 输出（适合手机阅读）
+## 建议模式输出（适合手机阅读）
 
 ```
 下一步：<阶段> · <地图名 / 票名>

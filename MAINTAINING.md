@@ -75,10 +75,10 @@
 
 ## find-next 设计要点（2026-11-01 grilling 定稿）
 
-`find-next/` 是放在本仓库里的另一个技能：扫描当前仓库的 wayfinder 地图与票，只给出一个 Next step（GLOSSARY.md）。起因：在手机上用 wayfinder 讨论出一大堆票后，不知道下一步该对哪张做 to-spec / to-tickets / grilling。原版技能都要人自己去找。
+`find-next/` 是放在本仓库里的另一个技能：扫描当前仓库的 wayfinder 地图与票。它最初只给出一个 Next step（GLOSSARY.md），2026-11-14 起默认进入推进模式，`--suggest` 保留这个旧行为。起因：在手机上用 wayfinder 讨论出一大堆票后，不知道下一步该对哪张做 to-spec / to-tickets / grilling。原版技能都要人自己去找。
 
-1. **只给一个 Next step 和要敲的命令，外加最多 3 行备选。** 输出要适合在手机上读；没有候选时，说出最接近的一个和它还差什么。
-   - **例外：`--list` 清单模式（2026-11-11 加）。** 起因：一个项目讨论了好几张地图、做了不少之后，用户想看「还剩什么」的全貌，单个 Next step 回答不了。清单主体来自 `pipeline-status.sh --all` 的机械输出，模型只补「疑似重复」「等 #N」这类轻量标注，所以不派 worker。清单末尾仍给出一个 Next step，口径与默认模式一致。
+1. **只给一个 Next step 和要敲的命令，外加最多 3 行备选。** 输出要适合在手机上读；没有候选时，说出最接近的一个和它还差什么。（2026-11-14 注：这是 `--suggest` 的规则；默认推进模式见第 14 条。）
+   - **例外：`--list` 清单模式（2026-11-11 加）。** 起因：一个项目讨论了好几张地图、做了不少之后，用户想看「还剩什么」的全貌，单个 Next step 回答不了。清单主体来自 `pipeline-status.sh --all` 的机械输出，模型只补「疑似重复」「等 #N」这类轻量标注，所以不派 worker。清单末尾仍给出一个 Next step，口径与建议模式一致。
    - `--all` 比默认输出多三块：探索中地图的决策票、「状态没收尾」（规格已关闭但执行票还开着；实现票只被已关闭的规格覆盖）、「散票」（不属于任何地图或规格的 open issue）。不加 `--all` 时输出不变，`implement-spec-split --status` 不受影响。
    - 自由格式的 backlog 文档不机械解析：格式不统一，误判代价大于收益。清单只提醒用户把仍有效的条目迁成 issue。
 2. **一个技能覆盖所有阶段，不拆成 find-to-spec、find-issue-grill 等多个。** 拆开的话，同样的地图要扫好几遍，用户还得记住该先敲哪个命令，又回到了「人去找」。
@@ -91,7 +91,7 @@
    - 本地 markdown 跟踪器用 `find-next/scripts/scan.py`（只用 Python 标准库，输出 JSON），GitHub 复用 `scripts/pipeline-status.sh`，两套识别规则不分叉。对应关系：`needsTickets` → to-tickets，`missing` → to-spec，`exploring` → Decision ticket（具体哪张再用 `gh` 查），`implement` 不用。
    - 两种跟踪器判断「该 to-spec」的口径不同。本地是地图的 Map frontier 已空，或只剩 Closing ticket；GitHub 是地图下的 Map ticket 还没被任何 Spec 覆盖。
 9. **判断部分默认交给 codex worker（`--worker codex`），带 `--read-only`。** 要读多张地图 Notes 和票正文，体量大但判断稀疏。worker 出错按全局 CLAUDE.md 的处理表，不自动降级为 `self`。
-10. **默认模式不推荐「执行票已拆、可以开工」这一阶段**（开发顺序由 `--batch` 的后半给出，`/implement-spec-split --status` 也能看），也不跨仓库汇总。
+10. **建议模式不推荐「执行票已拆、可以开工」这一阶段**（开发顺序由推进模式的后半给出，`/implement-spec-split --status` 也能看），也不跨仓库汇总。
 11. **允许模型自动触发**（不设 `disable-model-invocation`）：它只读，误触发的代价只是一次扫描。
 12. **`--batch` 批量模式（2026-11-11 加）：批量起草规格和执行票，用户确认一轮后发布。**
     - 起因：缺规格的票一多（ssh-manager-mcp 一次 9 张），逐张走「to-spec → 确认 → to-tickets → 确认 → clear」要几十次操作，每轮我还要重读同一张地图的材料。
@@ -109,15 +109,17 @@
     - 输出要精简（用户 2026-11-12 要求）：每份规格一行，只给第 1 波命令，不写排序理由。
     - 起因：11-11 夜里三个会话同时运行 implement-spec-split，各自扫描、各自判断，#223 的会话以为 #222 没人做（其实一分钟前被领走），在 #228 里把 #222 的「权威端是否过旧」判断又写了一遍。开发顺序事先写清「#223 等 #222」就不会发生。
     - 只支持 GitHub 跟踪器：本地 markdown 跟踪器的规格写进 `SPEC.md` 章节，形态不同，需求出现再做。
-    - **2026-11-12 改为确认后自动开会话**（之前定的是只输出顺序）。用户要以 find-next 为总入口：`--batch --workers N [--specs K]`，最后由 `launch-wave.sh` 先试运行（打印顺序表和每个会话要跑的命令），用户确认后加 `--apply --only` 在 Orca 里为新规格 `orca worktree create --branch spec-<n> --agent claude --prompt …`、为中断的规格在原 worktree `orca agent launch`。保留这一次确认：开工要花 GLM 额度。
-    - **同日再改为不确认、直接启动**（owner 2026-11-12 定）：`--batch` 发布后试运行打印顺序，紧接着加 `--apply` 启动全部可启动的条目；只有出现循环依赖时停下来问。规格发布前那一轮确认保留。合入后不自动接力开下一份，仍由用户再跑一次 `--batch`。
+    - **2026-11-12 改为确认后自动开会话**（之前定的是只输出顺序）。用户要以 find-next 为总入口：`--batch --workers N [--specs K]`，最后由 `launch-wave.sh` 先试运行（打印顺序表和每个会话要跑的命令），用户确认后加 `--apply --only` 在 Orca 里为新规格 `orca worktree create --branch spec-<n> --agent claude --prompt …`、为中断的规格在原 worktree `orca agent launch`。保留这一次确认：开工要花 GLM 额度。（2026-11-14 注：这个确认已被第 14 条取代。）
+    - **同日再改为不确认、直接启动**（owner 2026-11-12 定）：`--batch` 发布后试运行打印顺序，紧接着加 `--apply` 启动全部可启动的条目；只有出现循环依赖时停下来问。规格发布前那一轮确认保留。合入后不自动接力开下一份，仍由用户再跑一次 `--batch`。（2026-11-14 注：最后一句已被第 14 条取代。）
     - **原 worktree 不在 Orca 列表里的恢复规格**（早先用 git 建在 `<仓库>-wt/` 下的）：Orca 命令行没有纳管已有 worktree 的命令，所以预留后在 Orca 管理的主工作树下 `orca terminal create --title spec-<n> --command "cd <worktree> && claude <命令>"`；主工作树也不在 Orca 里时才标「需手动」。代价是会话挂在主工作树的终端标签下，结束后不留输出。
-    - `--workers N` 必填，是全机 worker 总数：每份 `--parallel` = N ÷ K，同时写进全机 worker 上限文件。否则 K 份各开 4 个会远超槽位，全在排队。
+    - `--workers N` 必填，是全机 worker 总数：每份 `--parallel` = N ÷ K，同时写进全机 worker 上限文件。否则 K 份各开 4 个会远超槽位，全在排队。（2026-11-14 注：必填已被第 14 条取代，现在先读状态文件和 max-workers。）
     - 先预留再启动：脚本先 `claim.sh reserve`（交接预留，带有效期，期间算进行中），再让 Orca 建分支和 worktree；新会话里的 `claim.sh take` 发现自己就在 `spec-<n>` 上，就接手预留，不再另建 worktree。若让 Orca 先建分支，`take` 会把它当成「中断」去问用户；若 Orca 用别的分支名，每份规格会多一个空 worktree。
     - 用 Orca 建的 worktree 才在 Orca 侧栏里可见（用户把外部 worktree 设成了隐藏），所以新规格的集成 worktree 由 Orca 建，不在 `<仓库>-wt/` 下；早先建在 `<仓库>-wt/` 下的中断规格不可见，脚本只给手动命令。
     - Orca 启动 Claude 时带 `--dangerously-skip-permissions`，自动开的会话不会卡在权限提示上；会话仍会在合入前确认 push、GLM 出错时停下等人。
 
 13. **2026-11-14：`--batch` 也覆盖「地图本身该出一份规格」（起因：oa-helper 地图 #1）。** 它的子票全是已关闭的 `wayfinder:*` 决策票、前沿已空，且没有任何 Spec 用 `地图：#N` / `来源地图：#N` 行指回这张地图；此前脚本既不算 `missing` 也不算 `exploring`，`--batch` 只能手工走 `/to-spec`、`/to-tickets`。决定：`pipeline-status.sh` 新增 `mapSpecs` 段（默认与 `--all` 都输出），被 Spec 指回的地图不再进 `mapSpecs`（`exploring` 不受影响：批量起草的实现票规格也写 `地图：#N`，有规格不代表地图的决策都收口了）；指回行后面允许跟说明文字（#11 写的是 `来源地图：#1（全部决策见…）`）；批量组写法为 `S<k>=map:<地图号>`，一次起草一份地图级规格和执行票，规格正文只写 `地图：#N` 行、不写 `实现票：` 行，发布时新建规格并把执行票挂到它下面。
+
+14. **2026-11-14：`find-next` 默认改为推进模式，规格合入后自动开下一波。** 用户目标是提高自动化程度：原先「只给一个 Next step」的行为改名 `--suggest`，`--batch` 只是推进模式别名。推进模式每轮扫描后自动派 worker 调查前沿 research 票，主会话复核结论、按 wayfinder 格式写 Resolution、关票、更新地图；`grilling` 票由 worker 准备问题/选项/推荐（`prototype`、`task` 要做原型或手工操作，仍交给 `/wayfinder`；worker 认为已有决定、无需再问的 grilling 票也要放进那一轮由用户点头才关，因为 wayfinder 规定 grilling 是 HITL、代理不能替人回答），主会话把决策题、调研转来的取舍题和规格草稿 `unresolved` 合成一轮问用户。人工关口保留三处：取舍/决策题的一轮确认、有未决的组发布前需答案、implement-spec-split push 前确认。research 结论清晰时不再问用户；草稿没有未决的组自动发布、不再单独确认。`/find-next --workers` 变为可选：推进器没读到全机 `max-workers` 文件才问用户；`launch-wave.sh --next-wave` 则先读启动状态，再读 `max-workers` 文件。规格直接合入 main 后，当前 Run 只在第 9 步末尾运行一条 `launch-wave.sh --next-wave --apply` 就收尾，不接力做下一份：合入时上下文已满，而下一份规格的事实都在 issue 和 main 上，新 Orca 会话从零开工更省 token、不串味。开发顺序每次由 `pipeline-status.sh --order` 重算，不缓存顺序本身；只缓存 workers/specs/apart 这些需要人或主会话判断的结果（`~/.cache/implement-spec-split/launch/<owner>__<name>.json`），避免下一波重复问或重复读规格。`launch-wave.sh --apply` 和 `--next-wave` 全程持仓库级 `launch-wave` 锁，防止两份规格几乎同时合入时重复计算、重复领取或重复启动；`--next-wave` 只启动空闲第 1 波，不自动恢复中断规格，遇到循环依赖非零退出交回 `/find-next`。
 
 ## 同步上游
 
@@ -139,7 +141,7 @@
 - **批量 Brief 生成**：`bash find-next/scripts/test-make-batch-briefs.sh`。用假 `gh` 测变量替换、上游技能版本选择与参数校验。
 - **流水线状态**：`bash scripts/test-pipeline-status.sh`。它用假 `gh` 和临时 git 仓库测独立规格、单票规格、原版父规格、旧父 issue 形状、缺规格分组、探索中的地图、分支接手、外部阻塞、`--order` 开发顺序（状态、排序、波次、`--apart`、循环依赖）和 gh 失败，不访问网络。
 - **锁与领取记录**：`bash scripts/test-locks.sh`。测 `lock.sh` 的互斥、重入、等待超时、死持有者接管、槽位排队，`claim.sh` 的领取、并发领取、恢复与释放权限、交接预留与接手，worker 上限配置文件，以及两个 `codex-worker.sh` 在 `ISS_MAX_WORKERS=1` 下排队，不访问网络。
-- **自动启动第 1 波**：`bash find-next/scripts/test-launch-wave.sh`。用假 pipeline-status、claim、max-workers、orca 测试运行输出、不在 Orca 时的手动输出、预留后再启动、预留冲突跳过、启动失败撤销预留并删空分支、`--only` 过滤和恢复条目（含原 worktree 不在 Orca 时在主工作树开终端标签、路径带空格的转义），不调用真实 orca。
+- **自动启动第 1 波**：`bash find-next/scripts/test-launch-wave.sh`。用假 pipeline-status、claim、max-workers、orca 测试运行输出、不在 Orca 时的手动输出、预留后再启动、预留冲突跳过、启动失败撤销预留并删空分支、`--only` 过滤和恢复条目（含原 worktree 不在 Orca 时在主工作树开终端标签、路径带空格的转义）、`--apply` 写启动状态、`--next-wave` 读取状态/max-workers、跳过中断条目、无可启动、循环依赖和仓库锁占用，不调用真实 orca。
 - **codex 后端**：`scripts/selftest-codex.sh [--only L1|V1|V2|V3]`。各级的内容见脚本开头的注释和 `docs/codex-backend.md` 第三节：
   - V1：假 codex，确定性，不花 GLM；
   - V2：真 codex 连假服务器（`scripts/testing/mock-responses.js`），不花 GLM，要跑 6–7 分钟；

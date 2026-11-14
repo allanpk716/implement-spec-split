@@ -55,6 +55,10 @@ _Avoid_: Frontier (that is implementation Tickets)
 **Next step**:
 The single action find-next recommends: a stage (to-tickets, to-spec, or a Decision ticket), its target, and the command to type.
 
+**Advance mode**:
+find-next's default GitHub-tracker behaviour: repeatedly scan, auto-resolve clear research tickets, prepare decision questions, draft Specs/Tickets, ask one combined round for real trade-offs, publish, and launch the first wave. `--suggest` requests the old read-only Next-step behaviour.
+_Avoid_: batch mode as a different mode (`--batch` is only an alias)
+
 **Run**:
 One invocation of the skill, implementing one Spec from start to finish; several Runs may work on different Specs at the same time.
 
@@ -73,6 +77,10 @@ _Avoid_: merge lock (mergers inside one Run are already serialised)
 **Handoff reservation**:
 A Claim record that `find-next/scripts/launch-wave.sh` writes with `claim.sh reserve` before it starts a session in Orca; it counts as active until `handoff_until_epoch` even though no live process holds it, and `claim.sh take` run inside that Spec's worktree adopts it (exit 4 when it was a resume).
 _Avoid_: pre-claim, lease
+
+**Launch state**:
+The file `~/.cache/implement-spec-split/launch/<owner>__<name>.json` where `launch-wave.sh --apply` records the chosen worker count, wave size, and apart pairs for a repository; `--next-wave` reuses those judgments while recalculating the order.
+_Avoid_: order cache (the order itself is recalculated)
 
 **Worker slot**:
 One of the machine-wide places an External worker wrapper must hold while its agent runs; wrappers beyond that queue instead of failing, because all Runs share one GLM quota. The count is `ISS_MAX_WORKERS` if set, else the file `~/.cache/implement-spec-split/max-workers` (written by `scripts/max-workers.sh`, which find-next calls with its `--workers`), else 4.

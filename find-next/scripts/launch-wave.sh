@@ -5,10 +5,15 @@ set -u
 
 usage() {
   cat <<'EOF'
-Usage: launch-wave.sh --repo <owner/name> --workers N [--specs K] [--apart A:B]... [--only 222,237] [--apply]
+Usage: launch-wave.sh --repo <owner/name> [--workers N] [--specs K] [--apart A:B]...
+                      [--only 222,237] [--apply] [--next-wave]
 
 Print the development order, then optionally reserve and launch its first wave.
 Without --apply, this script only shows what would run and makes no claims.
+--workers falls back to the launch state and then the machine-wide max-workers
+file. In --next-wave, --specs and --apart also fall back to the launch state.
+--next-wave is for the end of an implement-spec-split Run: it launches only free
+first-wave Specs, never resumes interrupted ones, and refuses cycles.
 When the main worktree is Orca-managed, resumed worktrees outside Orca use a terminal tab in it.
 EOF
 }
@@ -33,6 +38,10 @@ SPECS=2
 APART=()
 ONLY=
 APPLY=0
+NEXT_WAVE=0
+WORKERS_GIVEN=0
+SPECS_GIVEN=0
+APART_GIVEN=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --repo)
@@ -47,6 +56,7 @@ while [ $# -gt 0 ]; do
         0) die "--workers requires a positive integer" ;;
       esac
       WORKERS=$2
+      WORKERS_GIVEN=1
       shift 2
       ;;
     --specs)
@@ -56,6 +66,7 @@ while [ $# -gt 0 ]; do
         0) die "--specs requires a positive integer" ;;
       esac
       SPECS=$2
+      SPECS_GIVEN=1
       shift 2
       ;;
     --apart)
@@ -64,6 +75,7 @@ while [ $# -gt 0 ]; do
         die "--apart requires <A:B> with two issue numbers"
       fi
       APART+=("$2")
+      APART_GIVEN=1
       shift 2
       ;;
     --only)
@@ -73,6 +85,10 @@ while [ $# -gt 0 ]; do
       ;;
     --apply)
       APPLY=1
+      shift
+      ;;
+    --next-wave)
+      NEXT_WAVE=1
       shift
       ;;
     -h|--help)
@@ -87,12 +103,18 @@ while [ $# -gt 0 ]; do
 done
 
 [ -n "$REPO" ] || die "--repo is required"
-[ -n "$WORKERS" ] || die "--workers is required"
+[[ "$REPO" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]] ||
+  die "--repo must be <owner/name>"
 
 PIPELINE_STATUS=${ISS_PIPELINE_STATUS:-$SKILL_ROOT/scripts/pipeline-status.sh}
 CLAIM=${ISS_CLAIM:-$SKILL_ROOT/scripts/claim.sh}
 MAX_WORKERS_CMD=${ISS_MAX_WORKERS_CMD:-$SKILL_ROOT/scripts/max-workers.sh}
 ORCA=${ISS_ORCA:-orca}
+LOCK=${ISS_LOCK:-$SKILL_ROOT/scripts/lock.sh}
+LAUNCH_STATE_DIR=${ISS_LAUNCH_STATE_DIR:-$HOME/.cache/implement-spec-split/launch}
+WORKER_STATE_DIR=${ISS_STATE_DIR:-$HOME/.cache/implement-spec-split}
+LAUNCH_STATE_FILE="$LAUNCH_STATE_DIR/${REPO/\//__}.json"
+MAX_WORKERS_FILE="$WORKER_STATE_DIR/max-workers"
 
 command -v node >/dev/null 2>&1 || die "node is required but was not found on PATH"
 command -v git >/dev/null 2>&1 || die "git is required but was not found on PATH"
@@ -129,6 +151,108 @@ decode_json_string() {
     process.stdout.write(typeof value === "string" ? value : "");
   '
 }
+
+state_string() {
+  STATE_FILE_ACT="$LAUNCH_STATE_FILE" STATE_FIELD="$1" node -e '
+    const fs = require("fs");
+    let value = null;
+    try { value = JSON.parse(fs.readFileSync(process.env.STATE_FILE_ACT, "utf8")); }
+    catch (_) { process.exit(0); }
+    const field = value && value[process.env.STATE_FIELD];
+    process.stdout.write(
+      typeof field === "number" && Number.isFinite(field) ? String(field) :
+      (typeof field === "string" ? field : "")
+    );
+  '
+}
+
+state_apart() {
+  STATE_FILE_ACT="$LAUNCH_STATE_FILE" node -e '
+    const fs = require("fs");
+    let value = null;
+    try { value = JSON.parse(fs.readFileSync(process.env.STATE_FILE_ACT, "utf8")); }
+    catch (_) { process.exit(0); }
+    if (!Array.isArray(value.apart)) process.exit(0);
+    for (const item of value.apart) {
+      if (typeof item === "string" && item !== "") process.stdout.write(item + "\n");
+    }
+  '
+}
+
+valid_positive() {
+  [[ "$1" =~ ^[1-9][0-9]*$ ]]
+}
+
+read_workers_without_flag() {
+  local value
+  if [ -n "${ISS_MAX_WORKERS:-}" ]; then
+    valid_positive "$ISS_MAX_WORKERS" || die "ISS_MAX_WORKERS must be a positive integer"
+    WORKERS=$ISS_MAX_WORKERS
+    return
+  fi
+  value=$(state_string workers)
+  if valid_positive "$value"; then
+    WORKERS=$value
+    return
+  fi
+  if [ -f "$MAX_WORKERS_FILE" ]; then
+    value=$(sed -n '1p' "$MAX_WORKERS_FILE" 2>/dev/null || true)
+    if valid_positive "$value"; then
+      WORKERS=$value
+      return
+    fi
+    die "invalid integer in $MAX_WORKERS_FILE; ask the user for --workers"
+  fi
+  die "--workers is required: no launch state or max-workers file; ask the user for --workers"
+}
+
+read_next_wave_state() {
+  local value pair
+  if [ "$WORKERS_GIVEN" -eq 0 ]; then
+    read_workers_without_flag
+  fi
+  if [ "$SPECS_GIVEN" -eq 0 ]; then
+    value=$(state_string specs)
+    if valid_positive "$value"; then SPECS=$value; fi
+  fi
+  if [ "$APART_GIVEN" -eq 0 ]; then
+    while IFS= read -r pair; do
+      [ -n "$pair" ] || continue
+      [[ "$pair" =~ ^[0-9]+:[0-9]+$ ]] ||
+        die "launch state contains an invalid --apart pair: $pair"
+      APART+=("$pair")
+    done < <(state_apart)
+  fi
+}
+
+write_launch_state() {
+  mkdir -p "$LAUNCH_STATE_DIR" || die "could not create launch state directory: $LAUNCH_STATE_DIR"
+  state_apart_value=''
+  if [ "${#APART[@]}" -gt 0 ]; then
+    state_apart_value=$(printf '%s\n' "${APART[@]}")
+  fi
+  STATE_DIR_ACT="$LAUNCH_STATE_DIR" STATE_FILE_ACT="$LAUNCH_STATE_FILE" \
+  STATE_WORKERS="$WORKERS" STATE_SPECS="$SPECS" STATE_APART="$state_apart_value" \
+  STATE_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ) node -e '
+    const fs = require("fs"), path = require("path");
+    const apart = process.env.STATE_APART.split(/\r?\n/).filter(Boolean);
+    const value = JSON.stringify({
+      workers: +process.env.STATE_WORKERS,
+      specs: +process.env.STATE_SPECS,
+      apart,
+      updated: process.env.STATE_AT,
+    }, null, 2) + "\n";
+    const temporary = path.join(process.env.STATE_DIR_ACT, `.${path.basename(process.env.STATE_FILE_ACT)}.write.${process.pid}`);
+    fs.writeFileSync(temporary, value);
+    fs.renameSync(temporary, process.env.STATE_FILE_ACT);
+  ' || die "could not write launch state: $LAUNCH_STATE_FILE"
+}
+
+if [ "$NEXT_WAVE" -eq 1 ]; then
+  read_next_wave_state
+elif [ "$WORKERS_GIVEN" -eq 0 ]; then
+  read_workers_without_flag
+fi
 
 first_line() {
   sed -n '1p' "$1" 2>/dev/null
@@ -175,6 +299,35 @@ for (const item of rows) {
 NODE
 }
 
+plan_cycles() {
+  PLAN_JSON=$PLAN_JSON node <<'NODE'
+const plan = JSON.parse(process.env.PLAN_JSON);
+for (const spec of Array.isArray(plan.cycles) ? plan.cycles : []) {
+  process.stdout.write(`${spec}\n`);
+}
+NODE
+}
+
+cycle_report() {
+  CYCLES=$1 node <<'NODE'
+const rows = process.env.CYCLES.split(/\r?\n/).filter(Boolean).map((spec) => `#${spec}`);
+process.stdout.write(`循环依赖：${rows.join("、")}，不自动启动。请运行 /find-next。\n`);
+NODE
+}
+
+next_wave_entries() {
+  plan_entries | awk -F '\t' '$1 == "wave" { print }'
+}
+
+next_wave_resume_hints() {
+  PLAN_JSON=$PLAN_JSON node <<'NODE'
+const plan = JSON.parse(process.env.PLAN_JSON);
+for (const item of Array.isArray(plan.resume) ? plan.resume : []) {
+  process.stdout.write(` #${item.spec}（中断，先恢复；--next-wave 不自动恢复）\n`);
+}
+NODE
+}
+
 orca_worktrees() {
   ORCA_LIST=$("$ORCA" worktree list --json 2>/dev/null)
   node -e 'JSON.parse(process.argv[1])' "$ORCA_LIST" >/dev/null 2>&1
@@ -205,15 +358,55 @@ NODE
 
 run_out=$(mktemp "${TMPDIR:-/tmp}/launch-wave-out.XXXXXX") || die "could not create a temporary output file"
 run_err=$(mktemp "${TMPDIR:-/tmp}/launch-wave-err.XXXXXX") || die "could not create a temporary error file"
-trap 'rm -f "$run_out" "$run_err"' EXIT
+LOCK_HELD=0
+
+cleanup() {
+  status=$?
+  trap - EXIT HUP INT TERM
+  if [ "$LOCK_HELD" -eq 1 ]; then
+    "$LOCK" release launch-wave --scope repo >/dev/null 2>&1 || true
+  fi
+  rm -f "$run_out" "$run_err"
+  exit "$status"
+}
+trap cleanup EXIT HUP INT TERM
+
+acquire_launch_lock() {
+  "$LOCK" acquire launch-wave --scope repo --wait "${ISS_LAUNCH_WAVE_LOCK_WAIT:-540}" ||
+    die "could not acquire the launch-wave repository lock"
+  LOCK_HELD=1
+}
 
 pipeline_args
 
-if [ "$APPLY" -eq 0 ]; then
+if [ "$APPLY" -eq 1 ]; then
+  acquire_launch_lock
+fi
+
+if [ "$NEXT_WAVE" -eq 1 ]; then
   "$PIPELINE_STATUS" "${PIPELINE_ARGS[@]}" || die "pipeline-status failed"
   printf '\n'
   read_plan "${PIPELINE_ARGS[@]}" --json
-  ENTRIES=$(plan_entries)
+  CYCLES=$(plan_cycles)
+  if [ -n "$CYCLES" ]; then
+    cycle_report "$CYCLES"
+    exit 2
+  fi
+  ENTRIES=$(next_wave_entries)
+  next_wave_resume_hints
+  if [ -z "$ENTRIES" ]; then
+    printf '%s\n' '无可启动'
+    exit 0
+  fi
+fi
+
+if [ "$APPLY" -eq 0 ]; then
+  if [ "$NEXT_WAVE" -ne 1 ]; then
+    "$PIPELINE_STATUS" "${PIPELINE_ARGS[@]}" || die "pipeline-status failed"
+    printf '\n'
+    read_plan "${PIPELINE_ARGS[@]}" --json
+    ENTRIES=$(plan_entries)
+  fi
 
   IN_ORCA=0
   if "$ORCA" status --json > "$run_out" 2> "$run_err" && orca_worktrees; then
@@ -268,8 +461,12 @@ if ! "$MAX_WORKERS_CMD" "$WORKERS"; then
   die "max-workers failed"
 fi
 
-read_plan "${PIPELINE_ARGS[@]}" --json
-ENTRIES=$(plan_entries)
+if [ "$NEXT_WAVE" -ne 1 ]; then
+  read_plan "${PIPELINE_ARGS[@]}" --json
+  ENTRIES=$(plan_entries)
+fi
+
+write_launch_state
 
 ONLY_SPECS=()
 if [ -n "$ONLY" ]; then
