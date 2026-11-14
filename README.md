@@ -2,8 +2,10 @@
 
 A Claude Code skill: [Matt Pocock's `implement-spec`](https://github.com/mattpocock/skills/tree/main/skills/engineering/implement-spec) with **per-role models**.
 
-- Exploration / implementer / merger / fix run on a cheaper model: `sonnet` subagents by default, or GLM-5.3 through headless External workers, which spends no Claude quota on coding: `--impl codex` ([codex](https://github.com/openai/codex) `exec --json`, with live progress via `scripts/progress.sh`) or `--impl pi` ([pi](https://github.com/earendil-works/pi-mono)).
+- Exploration / implementer / merger / fix run on a cheaper model: in-session subagents by default (`--impl agent`, model chosen with `--agent-model sonnet|opus|haiku|fable`, default `sonnet`; `--impl sonnet` is the legacy alias), or GLM-5.3 through headless External workers, which spends no Claude quota on coding: `--impl codex` ([codex](https://github.com/openai/codex) `exec --json`, with live progress via `scripts/progress.sh`) or `--impl pi` ([pi](https://github.com/earendil-works/pi-mono)).
 - The two code-review subagents (Standards and Spec, from `mattpocock-skills:code-review`) always run on a stronger model (`opus`, or `fable`).
+
+The `agent` backend exists for machines where the Agent tool's model names reach a non-Anthropic endpoint — for example, in a GLM proxy environment, explicitly passing `model: opus` actually runs GLM-5.3, so `/implement-spec-split <n> --impl agent --agent-model opus` lets in-session subagents do the coding without a local codex/pi setup. Unlike the External backends, `--parallel` there caps this Run's concurrent implementing subagents (unlimited when omitted), and agent subagents take no machine-wide worker slots.
 
 The original skill lets every subagent inherit the session model, so you pay top-tier prices for coding or get a weaker review. This version passes `model` explicitly on every subagent call. It also auto-discovers open, unfinished specs when invoked without an argument.
 
@@ -39,13 +41,13 @@ git clone https://github.com/allanpk716/implement-spec-split ~/.claude/skills/im
 ```
 Then run scripts/doctor.sh to check your setup.
 
-Invoke manually with `/implement-spec-split [spec ref] [--impl codex|pi|sonnet] [--parallel n]`. Change the defaults in the "Config" section of `SKILL.md`.
+Invoke manually with `/implement-spec-split [spec ref] [--impl agent [--agent-model sonnet|opus|haiku|fable] | codex | pi | sonnet] [--parallel n]`. Change the defaults in the "Config" section of `SKILL.md`.
 
 AI agents installing or operating the skill should read [docs/ai-agents.md](docs/ai-agents.md) first: it gives the quick start, backend requirements, preflight commands, progress inspection, and agent-specific safety rules.
 
 ## Companion skill: `find-next`
 
-`find-next/` is a second skill in this repo. It scans the current repo's wayfinder maps and tickets and recommends **one** next step with the command to type: `/to-tickets` for a Spec with no tickets yet, `/to-spec` for a map whose decisions are all made, or `/wayfinder <map> <ticket>` for the Decision ticket that unblocks the most. Read-only; the judgment runs on a read-only codex worker by default (`/find-next [--worker codex|pi|self]`). `/find-next --list` instead prints the full to-do list (in progress, needs tickets, needs a spec, open decisions, unfinished bookkeeping, loose issues) from `pipeline-status.sh --all`, without a worker. `/find-next --batch` drafts a spec plus its tickets for every ticket that needs a spec, one codex worker per group in parallel, asks the user one round of questions, then publishes them with `find-next/scripts/publish-batch.sh` and prints a start order for `/implement-spec-split`. Local markdown trackers are scanned by `find-next/scripts/scan.py`, GitHub by `scripts/pipeline-status.sh`.
+`find-next/` is a second skill in this repo. It scans the current repo's wayfinder maps and tickets and recommends **one** next step with the command to type: `/to-tickets` for a Spec with no tickets yet, `/to-spec` for a map whose decisions are all made, or `/wayfinder <map> <ticket>` for the Decision ticket that unblocks the most. Read-only; the judgment runs on a read-only codex worker by default (`/find-next [--worker codex|pi|self|agent]`). `--worker agent --agent-model <model>` swaps every codex-worker step (suggest-mode judgment, advance-mode research/decision/drafting) for an Agent subagent on that model, and makes the generated development commands use `--impl agent --agent-model <model>` too; launch-wave records the backend so later `--next-wave` runs reuse it. `/find-next --list` instead prints the full to-do list (in progress, needs tickets, needs a spec, open decisions, unfinished bookkeeping, loose issues) from `pipeline-status.sh --all`, without a worker. `/find-next --batch` drafts a spec plus its tickets for every ticket that needs a spec, one codex worker per group in parallel, asks the user one round of questions, then publishes them with `find-next/scripts/publish-batch.sh` and prints a start order for `/implement-spec-split`. Local markdown trackers are scanned by `find-next/scripts/scan.py`, GitHub by `scripts/pipeline-status.sh`.
 
 Install it next to the main skill:
 

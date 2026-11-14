@@ -9,7 +9,7 @@ The main agent running in the user's Claude Code session; it owns the task graph
 _Avoid_: coordinator, lead
 
 **In-session subagent**:
-A subagent spawned by the Orchestrator inside the Claude Code session, with its model chosen by name (sonnet, opus, fable).
+A subagent spawned by the Orchestrator inside the Claude Code session, with its model chosen by name (sonnet, opus, haiku, fable).
 _Avoid_: native subagent, Claude subagent
 
 **External worker**:
@@ -17,8 +17,12 @@ A separate coding-agent CLI process (codex or pi, running GLM) that the Orchestr
 _Avoid_: delegate, GLM subagent, headless subagent
 
 **Implement backend**:
-Which kind of executor runs the implementing roles for a run: an In-session subagent on sonnet, or an External worker on GLM.
+Which kind of executor runs the implementing roles for a run: an In-session subagent on the agent model (`agent` backend; `sonnet` is the legacy alias for it with the model pinned to sonnet), or an External worker on GLM (`codex` / `pi`).
 _Avoid_: implement model (GLM is not a model the session can select)
+
+**Agent model**:
+The model the `agent` backend passes explicitly on every Agent call, selected per run with `--agent-model <sonnet|opus|haiku|fable>`; defaults to `IMPLEMENT_MODEL` (sonnet). In a GLM proxy environment an explicit `opus` may actually run GLM-5.3.
+_Avoid_: implement model (ambiguous with CODEX_MODEL/GLM_MODEL)
 
 **Implementing roles**:
 The exploration, implementer, merger and fix roles; everything except review.
@@ -79,7 +83,7 @@ A Claim record that `find-next/scripts/launch-wave.sh` writes with `claim.sh res
 _Avoid_: pre-claim, lease
 
 **Launch state**:
-The file `~/.cache/implement-spec-split/launch/<owner>__<name>.json` where `launch-wave.sh --apply` records the chosen worker count, wave size, and apart pairs for a repository; `--next-wave` reuses those judgments while recalculating the order.
+The file `~/.cache/implement-spec-split/launch/<owner>__<name>.json` where `launch-wave.sh --apply` records the chosen worker count, wave size, apart pairs, and (when the `agent` backend was chosen) backend and agent model for a repository; `--next-wave` reuses those judgments while recalculating the order. State files from before the agent backend have no backend field and keep behaving like `--impl codex`.
 _Avoid_: order cache (the order itself is recalculated)
 
 **Worker slot**:

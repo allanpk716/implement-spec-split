@@ -21,6 +21,7 @@
    - Agent 工具的 `model` 参数只能选 `sonnet`、`opus`、`haiku`、`fable`。
    - 服务地址和 token 是整个进程共用的，所以没法让会话里的某一个子代理单独走 GLM。
    - 所以要另起一个 CLI 进程来跑 GLM，会话里只留下主代理和 review。
+   - 2026-11-14 例外：新增 `agent` 后端。在 GLM 代理环境下，Agent 工具显式传 `model: opus` 实际会映射到 GLM-5.3（已实测），此时实现角色可以直接开会话内子代理，不必另起 codex/pi 进程。这是用户显式选择的后端（`--impl agent [--agent-model <model>]`），不是 codex/pi 出错后的降级路径；模型只允许 `sonnet|opus|haiku|fable`，`--impl sonnet` 是把模型钉在 sonnet 的兼容别名。
 9. **External worker 用 codex（首选）或 pi，不用 `claude -p`。**
    - `claude -p` 接 GLM 跑无头模式，会被检测、被限流，下午高峰期更明显。这是用户实际用下来的经验。
    - 以前不用 codex 的几条理由，2026-10-17 的实验大多推翻了（证据见 `docs/codex-backend.md`）：
@@ -35,7 +36,7 @@
     - 再根据 `errorMessage` 判断错误类型：auth、quota、transient 或 error。
     - 改 wrapper 时别把这一点改回成看退出码。
 11. **worker 的自我报告不能信。** `status: ok` 只说明它跑完了、没碰到 API 错误。主代理还要检查三件事：有新 commit、工作区是干净的、集成分支的最新提交已经合进来。最后测试结果以 merger 重跑的为准。
-12. **GLM 不可用时不能自动换回 sonnet。** 用 GLM 就是为了省 CC 额度，自动切回去这个目的就没了。碰到 auth、quota 错误，或者重试完还是失败，要先停下来问用户。
+12. **GLM 不可用时不能自动换回 sonnet，也不能自动改用 agent。** 用 GLM 就是为了省 CC 额度，自动切回去这个目的就没了；`agent` 同理是用户显式选择的后端，不是备用路线。碰到 auth、quota 错误，或者重试完还是失败，要先停下来问用户。
 13. **merger 一次只能跑一个，GLM worker 最多同时跑 `GLM_MAX_PARALLEL` 个。** 智谱高峰期会限流，所以并发数不能开大；默认 2，可用 `--parallel <n>` 按次覆盖，但开高了 429/quota 会触发整次 run 停下来问用户，得不偿失。
 14. **pi 用 `--no-extensions --no-skills` 启动，只用 `--skill` 加载 tdd 技能。** 这样 Orca 装在 `~/.pi/agent` 下的扩展和 orchestration 技能不会混进 worker。
 15. **External worker 的停止条件是两道，不再共用一个 30 分钟墙钟。**
@@ -72,6 +73,11 @@
     - 锁都用 `mkdir` 原子创建（macOS 没有 `flock`），持有者信息写进锁目录；持有者进程死了（PID 不在或启动时间对不上）由下一个等待者接管，所以会话崩溃不会留下永久的锁。启动标识默认经 `scripts/pid-start.sh` 获取：优先保持 `ps -o lstart=` 的旧值；Windows Git Bash/MSYS 的 `ps` 没有 `-o` 时回退读 `/proc/<pid>/stat` 的 starttime 并记作 `proc:<starttime>`，因此锁和 claim 在记录与判断时必须同用这一取法。
     - 运行目录改为 `runs/<仓库名>-<n>-<时间>/`。ticket worktree/分支命名仍是 `spec-<n>-t<m>`，Recovery 靠这两点找到上一个 Run 的残留。
     - 只覆盖同一个 clone 的多个 worktree（分支、领取记录、合入锁都在这个 clone 的 git 公共目录里）。
+19. **`agent` 后端（2026-11-14 加）：会话内子代理跑实现角色，模型显式传。**
+    - 起因：同一套技能要在两台机器上用。一台照旧 codex/pi 外部 worker；另一台 Claude Code 经代理走 GLM，Agent 工具显式传 `model: opus` 实际跑 GLM-5.3，体力活直接开内置子代理即可，不必装 codex/pi。默认行为零变化：`IMPLEMENT_BACKEND`、find-next 默认 worker、生成命令默认后缀都不动，不给新参数时 `launch-wave.sh` 的输出和状态文件与旧版逐字一致。
+    - 命名固定为 `agent` / `--agent-model`，两个技能同名同义。`--impl sonnet` 保留为兼容别名（= `--impl agent --agent-model sonnet`），但 `--impl sonnet --agent-model X`、以及 `--agent-model` 配 `codex`/`pi` 都是参数冲突，要报错让用户改，不能悄悄忽略。模型只允许 `sonnet|opus|haiku|fable`。
+    - `--parallel` 对 `agent` 后端数的是本 Run 同时在跑的实现类子代理（implementer/fix/merger/exploration），不给时不限（沿用原 sonnet 行为）；agent 子代理不取全机 worker 槽位（那是给 External worker 限 GLM 额度用的），总量由 find-next 的 workers ÷ specs 保证。这是给「多个子代理共用同一 GLM 账号」的机器限流用的，别把它改回只数 External worker。
+    - find-next 只有一个开关 `--worker agent [--agent-model <model>]`，同时管自己的调研/决策/起草方式和生成的开发命令后端，不提供混搭。agent 路径与 codex 路径同构：照旧建运行目录、写 `brief.md`，子代理 prompt 固定为「读 brief.md 并照做，把最终报告写到 result.md，同时作为你的最终回复」，主会话照旧审 `result.md`；没有 `status.json`，以子代理返回为准。`launch-wave.sh` 新增 `--impl codex|agent [--agent-model X]`，agent 时透传 `--cmd-suffix "--impl agent --agent-model X"` 给 `pipeline-status.sh` 并写进启动状态，`--next-wave` 读回；旧状态文件没有该字段按 codex 处理。
 
 ## find-next 设计要点（2026-11-01 grilling 定稿）
 
@@ -141,7 +147,7 @@
 - **批量 Brief 生成**：`bash find-next/scripts/test-make-batch-briefs.sh`。用假 `gh` 测变量替换、上游技能版本选择与参数校验。
 - **流水线状态**：`bash scripts/test-pipeline-status.sh`。它用假 `gh` 和临时 git 仓库测独立规格、单票规格、原版父规格、旧父 issue 形状、缺规格分组、探索中的地图、分支接手、外部阻塞、`--order` 开发顺序（状态、排序、波次、`--apart`、循环依赖）和 gh 失败，不访问网络。
 - **锁与领取记录**：`bash scripts/test-locks.sh`。测 `lock.sh` 的互斥、重入、等待超时、死持有者接管、槽位排队，`claim.sh` 的领取、并发领取、恢复与释放权限、交接预留与接手，worker 上限配置文件，以及两个 `codex-worker.sh` 在 `ISS_MAX_WORKERS=1` 下排队，不访问网络。
-- **自动启动第 1 波**：`bash find-next/scripts/test-launch-wave.sh`。用假 pipeline-status、claim、max-workers、orca 测试运行输出、不在 Orca 时的手动输出、预留后再启动、预留冲突跳过、启动失败撤销预留并删空分支、`--only` 过滤和恢复条目（含原 worktree 不在 Orca 时在主工作树开终端标签、路径带空格的转义）、`--apply` 写启动状态、`--next-wave` 读取状态/max-workers、跳过中断条目、无可启动、循环依赖和仓库锁占用，不调用真实 orca。
+- **自动启动第 1 波**：`bash find-next/scripts/test-launch-wave.sh`。用假 pipeline-status、claim、max-workers、orca 测试运行输出、不在 Orca 时的手动输出、预留后再启动、预留冲突跳过、启动失败撤销预留并删空分支、`--only` 过滤和恢复条目（含原 worktree 不在 Orca 时在主工作树开终端标签、路径带空格的转义）、`--apply` 写启动状态、`--next-wave` 读取状态/max-workers、跳过中断条目、无可启动、循环依赖和仓库锁占用，以及 `--impl agent --agent-model` 的命令后缀、状态写入/读回、旧状态回退 codex 与非法参数，不调用真实 orca。
 - **codex 后端**：`scripts/selftest-codex.sh [--only L1|V1|V2|V3]`。各级的内容见脚本开头的注释和 `docs/codex-backend.md` 第三节：
   - V1：假 codex，确定性，不花 GLM；
   - V2：真 codex 连假服务器（`scripts/testing/mock-responses.js`），不花 GLM，要跑 6–7 分钟；
@@ -168,7 +174,7 @@
      - fix 也是由 External worker（codex 或 pi）来跑的；
      - （codex）跑完没有残留的 codex/node 进程，`progress.sh` 的输出和 `status.json` 一致；
      - 最后的报告里列出了每次运行的目录，并且标注了是否在高峰期。
-  5. 用 `--impl sonnet` 再跑一遍。这次重点看：实现类的子代理确实用了 `IMPLEMENT_MODEL`，而且全程没有调用 `pi-worker.sh`。
+  5. 用 `--impl agent`（或别名 `--impl sonnet`）再跑一遍。这次重点看：实现类的子代理确实用了 agent 模型（`--agent-model`，默认 `IMPLEMENT_MODEL`），而且全程没有调用 `pi-worker.sh`；给了 `--parallel N` 时实现类子代理的并发确实不超过 N。
 
 ## 安装方式
 
@@ -232,7 +238,7 @@
 
 ## 尚未验证的事项
 
-- 用 `--impl sonnet` 跑一遍完整流程，确认实现子代理真的跑在 `IMPLEMENT_MODEL` 上。
+- 用 `--impl agent` 跑一遍完整流程，确认实现子代理真的跑在 agent 模型（默认 `IMPLEMENT_MODEL`）上；含非默认 `--agent-model`（例如 GLM 代理环境下的 `opus`）和 `--parallel` 限流的实机验证。
 - `stalled` 在真实 L3 运行里的表现（目前只有 L2 用假 pi 做的确定性用例）。
 - 第二次 `timeout` 时主代理会停下来问用户（2026-10-14 的 L3 里 Resume 一次就完成了，没走到这条路径）。
 - exploration 角色。在小仓库里，主代理会按"可选"直接跳过它。

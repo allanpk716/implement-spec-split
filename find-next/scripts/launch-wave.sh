@@ -7,6 +7,7 @@ usage() {
   cat <<'EOF'
 Usage: launch-wave.sh --repo <owner/name> [--workers N] [--specs K] [--apart A:B]...
                       [--only 222,237] [--apply] [--next-wave]
+                      [--impl codex|agent] [--agent-model sonnet|opus|haiku|fable]
 
 Print the development order, then optionally reserve and launch its first wave.
 Without --apply, this script only shows what would run and makes no claims.
@@ -15,6 +16,12 @@ file. In --next-wave, --specs and --apart also fall back to the launch state.
 --next-wave is for the end of an implement-spec-split Run: it launches only free
 first-wave Specs, never resumes interrupted ones, and refuses cycles.
 When the main worktree is Orca-managed, resumed worktrees outside Orca use a terminal tab in it.
+--impl picks the backend named in the generated commands: codex (default) or
+agent. With agent, --agent-model names the model (default sonnet) and every
+command gets "--impl agent --agent-model <model>" instead of "--impl codex".
+--apply records the backend in the launch state and --next-wave reuses it;
+state files without the field keep the codex backend. --agent-model is only
+valid together with --impl agent.
 EOF
 }
 
@@ -42,6 +49,10 @@ NEXT_WAVE=0
 WORKERS_GIVEN=0
 SPECS_GIVEN=0
 APART_GIVEN=0
+IMPL=codex
+AGENT_MODEL=sonnet
+IMPL_GIVEN=0
+AGENT_MODEL_GIVEN=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --repo)
@@ -91,6 +102,24 @@ while [ $# -gt 0 ]; do
       NEXT_WAVE=1
       shift
       ;;
+    --impl)
+      [ $# -ge 2 ] || die "--impl requires <codex|agent>"
+      case "$2" in
+        codex|agent) IMPL=$2 ;;
+        *) die "--impl requires codex or agent (use --impl agent --agent-model <model>)" ;;
+      esac
+      IMPL_GIVEN=1
+      shift 2
+      ;;
+    --agent-model)
+      [ $# -ge 2 ] || die "--agent-model requires <sonnet|opus|haiku|fable>"
+      case "$2" in
+        sonnet|opus|haiku|fable) AGENT_MODEL=$2 ;;
+        *) die "--agent-model must be sonnet, opus, haiku or fable" ;;
+      esac
+      AGENT_MODEL_GIVEN=1
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -105,6 +134,8 @@ done
 [ -n "$REPO" ] || die "--repo is required"
 [[ "$REPO" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]] ||
   die "--repo must be <owner/name>"
+[ "$AGENT_MODEL_GIVEN" -eq 0 ] || [ "$IMPL" = agent ] ||
+  die "--agent-model requires --impl agent; drop it or switch to the agent backend"
 
 PIPELINE_STATUS=${ISS_PIPELINE_STATUS:-$SKILL_ROOT/scripts/pipeline-status.sh}
 CLAIM=${ISS_CLAIM:-$SKILL_ROOT/scripts/claim.sh}
@@ -223,6 +254,34 @@ read_next_wave_state() {
       APART+=("$pair")
     done < <(state_apart)
   fi
+  if [ "$IMPL_GIVEN" -eq 0 ]; then
+    value=$(state_string impl)
+    case "$value" in
+      agent)
+        IMPL=agent
+        ;;
+      codex|'')
+        IMPL=codex
+        ;;
+      *)
+        die "launch state contains an invalid backend: $value"
+        ;;
+    esac
+  fi
+  if [ "$IMPL" = agent ] && [ "$AGENT_MODEL_GIVEN" -eq 0 ]; then
+    value=$(state_string agent_model)
+    case "$value" in
+      sonnet|opus|haiku|fable)
+        AGENT_MODEL=$value
+        ;;
+      '')
+        AGENT_MODEL=sonnet
+        ;;
+      *)
+        die "launch state contains an invalid agent model: $value"
+        ;;
+    esac
+  fi
 }
 
 write_launch_state() {
@@ -233,13 +292,18 @@ write_launch_state() {
   fi
   STATE_DIR_ACT="$LAUNCH_STATE_DIR" STATE_FILE_ACT="$LAUNCH_STATE_FILE" \
   STATE_WORKERS="$WORKERS" STATE_SPECS="$SPECS" STATE_APART="$state_apart_value" \
+  STATE_IMPL="$IMPL" STATE_AGENT_MODEL="$AGENT_MODEL" \
   STATE_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ) node -e '
     const fs = require("fs"), path = require("path");
     const apart = process.env.STATE_APART.split(/\r?\n/).filter(Boolean);
+    const backend = process.env.STATE_IMPL === "agent"
+      ? {impl: "agent", agent_model: process.env.STATE_AGENT_MODEL}
+      : {};
     const value = JSON.stringify({
       workers: +process.env.STATE_WORKERS,
       specs: +process.env.STATE_SPECS,
       apart,
+      ...backend,
       updated: process.env.STATE_AT,
     }, null, 2) + "\n";
     const temporary = path.join(process.env.STATE_DIR_ACT, `.${path.basename(process.env.STATE_FILE_ACT)}.write.${process.pid}`);
@@ -270,6 +334,9 @@ first_error_line() {
 
 pipeline_args() {
   PIPELINE_ARGS=(--order --repo "$REPO" --parallel "$SPECS" --workers "$WORKERS")
+  if [ "$IMPL" = agent ]; then
+    PIPELINE_ARGS+=(--cmd-suffix "--impl agent --agent-model $AGENT_MODEL")
+  fi
   if [ "${#APART[@]}" -gt 0 ]; then
     for pair in "${APART[@]}"; do
       PIPELINE_ARGS+=(--apart "$pair")

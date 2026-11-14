@@ -237,6 +237,65 @@ if [ "$json" -eq 1 ]; then cat "$LAUNCH_PLAN_FILE"; else cat "$LAUNCH_PLAN_TEXT_
 EOF
 chmod +x "$BIN/fake-pipeline"
 
+cat > "$BIN/fake-pipeline-dynamic" <<'EOF'
+#!/usr/bin/env bash
+# Builds the plan from the received flags, the way pipeline-status --order does,
+# so tests can verify which command suffix launch-wave.sh hands over.
+set -u
+printf '%s\n' 'pipeline' >> "$LAUNCH_PIPELINE_LOG"
+for arg in "$@"; do printf '%s\n' "$arg" >> "$LAUNCH_PIPELINE_LOG"; done
+cmd_suffix='--impl codex'
+parallel=2
+workers=4
+json=0
+previous=
+for arg in "$@"; do
+  case "$previous" in
+    --cmd-suffix) cmd_suffix=$arg ;;
+    --parallel) parallel=$arg ;;
+    --workers) workers=$arg ;;
+  esac
+  [ "$arg" = --json ] && json=1
+  previous=$arg
+done
+CMD_SUFFIX=$cmd_suffix PARALLEL=$parallel WORKERS=$workers \
+RESUME_PATH="${LAUNCH_RESUME_DEFAULT:-}" JSON_MODE=$json node <<'NODE'
+const suffix = process.env.CMD_SUFFIX;
+const parallel = Number(process.env.PARALLEL);
+const workers = Number(process.env.WORKERS);
+const per = Math.max(1, Math.floor(workers / parallel));
+const command = (n) => `/implement-spec-split ${n} ${suffix} --parallel ${per}`;
+const plan = {
+  parallel_specs: parallel,
+  workers,
+  per_spec_parallel: per,
+  resume: [{
+    spec: 222,
+    title: 'Visible resume',
+    branch: 'spec-222',
+    worktree: process.env.RESUME_PATH,
+    command: command(222),
+  }],
+  active: [],
+  wave1: [{spec: 237, title: 'New spec', command: command(237), note: ''}],
+  later: [],
+  cycles: [],
+  standalone: [],
+};
+if (process.env.JSON_MODE === '1') {
+  process.stdout.write(JSON.stringify(plan, null, 2) + '\n');
+} else {
+  process.stdout.write([
+    `开发顺序（同时 ${parallel} 份，共 ${workers} 个 worker）`,
+    '先恢复：#222',
+    '第 1 波：',
+    ` 1. #237 New spec → ${command(237)}`,
+  ].join('\n') + '\n');
+}
+NODE
+EOF
+chmod +x "$BIN/fake-pipeline-dynamic"
+
 cat > "$BIN/fake-max-workers" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' 'max-workers' >> "$LAUNCH_MAX_LOG"
@@ -355,7 +414,8 @@ run_launch() {
       LAUNCH_PIPELINE_LOG="$PIPELINE_LOG" LAUNCH_CLAIM_LOG="$CLAIM_LOG" \
       LAUNCH_MAX_LOG="$MAX_LOG" LAUNCH_ORCA_LOG="$ORCA_LOG" \
       LAUNCH_SEQUENCE_LOG="$SEQUENCE_LOG" \
-      ISS_PIPELINE_STATUS="$BIN/fake-pipeline" ISS_CLAIM="$BIN/fake-claim" \
+      ISS_PIPELINE_STATUS="${ISS_PIPELINE_STATUS_OVERRIDE:-$BIN/fake-pipeline}" \
+      ISS_CLAIM="$BIN/fake-claim" \
       ISS_MAX_WORKERS_CMD="$BIN/fake-max-workers" ISS_ORCA="$BIN/fake-orca" \
       ISS_LAUNCH_STATE_DIR="${LAUNCH_STATE_DIR_OVERRIDE:-$LAUNCH_STATE_DIR}" \
       ISS_STATE_DIR="${LAUNCH_WORKER_STATE_DIR_OVERRIDE:-$WORKER_STATE_DIR}" \
@@ -460,6 +520,90 @@ if node -e '
 else
   record FAIL 'apply writes launch state'
 fi
+
+# Backend selection: without the new flags nothing changes (a).
+expect_without --cmd-suffix 'default apply passes no command suffix' "$PIPELINE_LOG"
+expect_without '"impl"' 'default apply state keeps the old shape' "$LAUNCH_STATE_FILE"
+expect_without '"agent_model"' 'default apply state has no model field' "$LAUNCH_STATE_FILE"
+expect_has '/implement-spec-split 222 --impl codex --parallel 2' \
+  'default apply command stays codex' "$ORCA_LOG"
+
+# Agent backend flags (b).
+rm -f "$LAUNCH_STATE_FILE"
+: > "$PIPELINE_LOG"; : > "$ORCA_LOG"
+ISS_PIPELINE_STATUS_OVERRIDE=$BIN/fake-pipeline-dynamic
+export ISS_PIPELINE_STATUS_OVERRIDE
+run_launch "$WORK/agent-dry.out" --impl agent --agent-model opus
+expect_exit 0 "agent dry run succeeds"
+expect_has '--cmd-suffix' 'agent dry run passes a command suffix' "$PIPELINE_LOG"
+expect_has '--impl agent --agent-model opus' 'agent suffix names the model' "$PIPELINE_LOG"
+expect_has " #222（恢复，原 worktree）→ /implement-spec-split 222 --impl agent --agent-model opus --parallel 2" \
+  'agent dry run shows the model in resume commands' "$WORK/agent-dry.out"
+expect_has ' #237（新 worktree）→ /implement-spec-split 237 --impl agent --agent-model opus --parallel 2' \
+  'agent dry run shows the model in wave commands' "$WORK/agent-dry.out"
+
+: > "$PIPELINE_LOG"; : > "$CLAIM_LOG"; : > "$ORCA_LOG"
+run_launch "$WORK/agent-apply.out" --apply --impl agent --agent-model opus --only 237
+expect_exit 0 "agent apply succeeds"
+expect_has '#237 已启动' 'agent apply starts the spec' "$WORK/agent-apply.out"
+expect_has '/implement-spec-split 237 --impl agent --agent-model opus --parallel 2' \
+  'agent apply launches the model-suffixed command' "$ORCA_LOG"
+if node -e '
+  const fs = require("fs");
+  const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  if (value.impl !== "agent" || value.agent_model !== "opus") process.exit(1);
+' "$LAUNCH_STATE_FILE"; then
+  record PASS 'agent apply writes backend to launch state'
+else
+  record FAIL 'agent apply writes backend to launch state'
+fi
+
+# --next-wave without backend flags reuses the recorded agent backend (c).
+: > "$PIPELINE_LOG"; : > "$CLAIM_LOG"; : > "$ORCA_LOG"
+LAUNCH_OMIT_WORKERS=1
+export LAUNCH_OMIT_WORKERS
+run_launch "$WORK/agent-next-wave.out" --next-wave --apply
+expect_exit 0 "agent next wave succeeds"
+expect_has '#237 已启动' 'agent next wave starts a free spec' "$WORK/agent-next-wave.out"
+expect_has '--impl agent --agent-model opus' 'next wave reuses the agent suffix' "$PIPELINE_LOG"
+expect_has '/implement-spec-split 237 --impl agent --agent-model opus --parallel 2' \
+  'next wave command keeps the agent backend' "$ORCA_LOG"
+unset LAUNCH_OMIT_WORKERS
+
+# Old state files without the backend field keep --impl codex (d).
+rm -f "$LAUNCH_STATE_FILE"
+cat > "$LAUNCH_STATE_FILE" <<'EOF'
+{"workers":4,"specs":2,"apart":[],"updated":"2000-01-01T00:00:00Z"}
+EOF
+: > "$PIPELINE_LOG"; : > "$ORCA_LOG"
+LAUNCH_OMIT_WORKERS=1
+export LAUNCH_OMIT_WORKERS
+run_launch "$WORK/legacy-next-wave.out" --next-wave --apply
+expect_exit 0 "legacy next wave succeeds"
+expect_without --cmd-suffix 'legacy state falls back to the codex suffix' "$PIPELINE_LOG"
+expect_has '/implement-spec-split 237 --impl codex --parallel 2' \
+  'legacy state keeps the codex command' "$ORCA_LOG"
+unset LAUNCH_OMIT_WORKERS
+unset ISS_PIPELINE_STATUS_OVERRIDE
+
+# Invalid model names and conflicting flags are rejected (e).
+run_launch "$WORK/agent-bad-model.out" --impl agent --agent-model gpt5
+expect_exit 1 "invalid agent model is rejected"
+expect_has 'sonnet, opus, haiku or fable' 'invalid model names the allowed values' \
+  "$WORK/agent-bad-model.out.err"
+
+run_launch "$WORK/agent-model-conflict.out" --impl codex --agent-model opus
+expect_exit 1 "agent model with codex backend is rejected"
+expect_has '--agent-model requires --impl agent' \
+  'model conflict explains the fix' "$WORK/agent-model-conflict.out.err"
+
+run_launch "$WORK/agent-model-alone.out" --agent-model opus
+expect_exit 1 "agent model without backend is rejected"
+
+run_launch "$WORK/impl-unknown.out" --impl sonnet
+expect_exit 1 "unknown backend is rejected"
+expect_has 'codex or agent' 'unknown backend names the allowed values' \
+  "$WORK/impl-unknown.out.err"
 
 rm -f "$LAUNCH_STATE_FILE"
 cat > "$LAUNCH_STATE_FILE" <<'EOF'

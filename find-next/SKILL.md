@@ -1,6 +1,6 @@
 ---
 name: find-next
-description: 默认进入推进模式：循环扫描当前 GitHub 仓库的 wayfinder 地图与票，自动调查并关闭可关的 research 票、为决策票准备选项、批量起草规格和执行票，把所有需要人拍板的问题合成一轮，答完后自动发布并启动第 1 波 implement-spec-split 会话；规格合入 main 后可由 implement-spec-split 调 --next-wave 自动开下一波。--suggest 保留原先只推荐一个下一步的只读行为；--list 列出待办清单；--batch 是推进模式别名。用户问"下一步做什么""推进仓库""该推哪张票""哪个该 to-spec / to-tickets / grill 了""还有什么没做完""给我待办清单""批量写规格 / 批量拆票""接下来开发哪几份规格""开发顺序"，或输入 /find-next 时使用。参数 --suggest、--list、--batch、--workers N（可选）、--specs K、--worker codex|pi|self。
+description: 默认进入推进模式：循环扫描当前 GitHub 仓库的 wayfinder 地图与票，自动调查并关闭可关的 research 票、为决策票准备选项、批量起草规格和执行票，把所有需要人拍板的问题合成一轮，答完后自动发布并启动第 1 波 implement-spec-split 会话；规格合入 main 后可由 implement-spec-split 调 --next-wave 自动开下一波。--suggest 保留原先只推荐一个下一步的只读行为；--list 列出待办清单；--batch 是推进模式别名。用户问"下一步做什么""推进仓库""该推哪张票""哪个该 to-spec / to-tickets / grill 了""还有什么没做完""给我待办清单""批量写规格 / 批量拆票""接下来开发哪几份规格""开发顺序"，或输入 /find-next 时使用。参数 --suggest、--list、--batch、--workers N（可选）、--specs K、--worker codex|pi|self|agent、--agent-model sonnet|opus|haiku|fable（仅 agent）。
 ---
 
 # find-next
@@ -11,11 +11,12 @@ description: 默认进入推进模式：循环扫描当前 GitHub 仓库的 wayf
 
 ## 用法
 
-- `/find-next [--workers N] [--specs K] [地图号、实现票号或规格号…]`：默认推进模式（见「推进模式」）。它循环执行：扫描 → 自动调查/关闭 research 票 → 准备决策题 → 起草规格和执行票 → 有问题就一轮问用户 → 应用答案并再扫描 → 发布 → 启动第 1 波。起草、调研和决策准备总是交给 codex worker，`--worker` 被忽略。只支持 GitHub 跟踪器；本地 markdown 跟踪器请用 `--suggest` 或 `--list`
-- `/find-next --suggest [--worker codex|pi|self]`：原先的默认行为，只读挑一个 Next step（见「建议模式流程」）；未给 `--worker` 时等同于 `codex`。支持 GitHub 和本地 markdown 跟踪器
+- `/find-next [--workers N] [--specs K] [--worker codex|pi|agent] [--agent-model <model>] [地图号、实现票号或规格号…]`：默认推进模式（见「推进模式」）。它循环执行：扫描 → 自动调查/关闭 research 票 → 准备决策题 → 起草规格和执行票 → 有问题就一轮问用户 → 应用答案并再扫描 → 发布 → 启动第 1 波。起草、调研和决策准备交给 worker：不给 `--worker` 或给 `codex` 时照旧派 codex worker；`pi` 维持现状（被忽略，等同 codex）；`agent` 时改由主会话开 Agent 子代理执行这些步骤（`model` 显式传 `--agent-model`，默认 `sonnet`），并让生成的开发命令也用 `--impl agent`。只支持 GitHub 跟踪器；本地 markdown 跟踪器请用 `--suggest` 或 `--list`
+- `/find-next --suggest [--worker codex|pi|self|agent] [--agent-model <model>]`：原先的默认行为，只读挑一个 Next step（见「建议模式流程」）；未给 `--worker` 时等同于 `codex`。支持 GitHub 和本地 markdown 跟踪器
 - `/find-next --list`：不挑一个，列出当前仓库的全部待办清单（见「清单模式」）。总是我自己做，不派 worker，`--worker` 被忽略
 - `/find-next --batch …`：推进模式别名，兼容旧用法
 - `--workers N` 可选，是全机 GLM worker 总数；每份规格的 `--parallel` = N ÷ K（至少 1）。没给时读 `~/.cache/implement-spec-split/max-workers`（`scripts/max-workers.sh` 用的同一文件）；文件也没有就把 worker 上限并入本轮最后一个问题问用户。`--specs K` 是同时开几份规格，默认 2。**同一仓库同一时间只在一个会话里运行推进模式**：起草、发布和地图更新没有全流程锁，两个会话同时跑会重复起草或重复关票
+- `--agent-model <sonnet|opus|haiku|fable>` 只在 `--worker agent` 时有效，默认 `sonnet`；给了 `--worker codex`/`pi`/`self`（或不给 `--worker`）却给 `--agent-model` 是参数冲突，报错让用户改。一个开关管全程：`--worker agent` 同时决定本技能自己的调研/决策/起草方式和生成的开发命令后端，不提供混搭。
 
 只扫当前仓库，不跨仓库汇总。
 
@@ -63,7 +64,8 @@ description: 默认进入推进模式：循环扫描当前 GitHub 仓库的 wayf
      ```
 
      `pi` 用同目录的 `pi-worker.sh`。结束后只读 `status.json`、`result.md`（worker 的最终回复，≤15 行结论），结论是 to-spec 或 to-tickets 时再读 `digest.md`。
-   - worker 出错时按全局 CLAUDE.md 的处理表：`auth` / `quota` / `transient` → 告诉用户，问他们是等一会儿、换 `pi`，还是 `--worker self`，**不自动降级**；`stalled` / `error` → 把失败原因补进 Brief，换新运行目录重跑一次；`violation` → 报告作废，把 `changed_paths` 交给用户。
+   - `--worker agent`：照旧建同一个运行目录、存 `scan.json`/`scan.txt`、用 [templates/brief-judge.md](templates/brief-judge.md) 填好 `brief.md`；但不运行 codex-worker.sh，而是开一个 Agent 子代理，`model` 显式传 `--agent-model` 的值（默认 `sonnet`），prompt 固定为：「读 <运行目录>/brief.md 并照做，把最终报告写到 <运行目录>/result.md，同时作为你的最终回复」。Brief 里「wrapper 会把最终回复存成 result.md，不要自己写」这类话是对 codex worker 说的，agent 模式下以 prompt 为准：子代理自己写 `result.md`。结束后照旧读 `result.md`（结论是 to-spec 或 to-tickets 时再读 `digest.md`）；没有 `status.json`，以子代理的返回为准。
+   - worker 出错时按全局 CLAUDE.md 的处理表：`auth` / `quota` / `transient` → 告诉用户，问他们是等一会儿、换 `pi`，还是 `--worker self`，**不自动降级**；`stalled` / `error` → 把失败原因补进 Brief，换新运行目录重跑一次；`violation` → 报告作废，把 `changed_paths` 交给用户。`agent` 子代理没有 `status.json`：返回为空或明确报错时，把失败原因补进 Brief、换新运行目录重派一次，再失败就停下报告；不自动改用 codex 或 self。
 4. **交接**：结论是 to-spec 或 to-tickets 时，那两个技能只能综合当前对话，所以要先把材料放进上下文。`self` 模式读地图和已关闭票的 Resolution；worker 模式读 `digest.md`。然后用几句话讲清要点，提示用户敲命令。结论是决策票时，只报票名和命令。
 
 ## 清单模式（`--list`）
@@ -98,7 +100,9 @@ F. 散票（bug / needs-triage 等，含疑似重复标注）
 
 ## 推进模式（默认；`--batch` 是别名）
 
-用途：把用户从「逐张判断、逐个技能、逐轮确认」里解放出来。主会话只保留必须跨全批做的判断：分组、审稿、把关 Resolution、判断 `--apart`；读长材料和写长文都交给新的 codex worker。每一轮尽可能自动推进，只有真正的取舍题才问用户，而且所有问题合成一轮。
+用途：把用户从「逐张判断、逐个技能、逐轮确认」里解放出来。主会话只保留必须跨全批做的判断：分组、审稿、把关 Resolution、判断 `--apart`；读长材料和写长文都交给 worker——默认（不给 `--worker` 或给 `codex`/`pi`）是新的 codex worker；`--worker agent` 时是主会话开的 Agent 子代理（`model` 显式传 `--agent-model`，默认 `sonnet`）。每一轮尽可能自动推进，只有真正的取舍题才问用户，而且所有问题合成一轮。
+
+`--worker agent` 时的同构做法（适用于本节所有原本派 codex-worker.sh 的步骤）：照旧建运行目录和子目录、照旧写 `brief.md`，然后开一个 Agent 子代理，`model` 显式传 `--agent-model` 的值，prompt 固定为：「读 <该子目录>/brief.md 并照做，把最终报告写到 <该子目录>/result.md，同时作为你的最终回复」。Brief 里「wrapper 会把最终回复存成 result.md，不要自己写」这类话是对 codex worker 说的，agent 模式下以 prompt 为准：子代理自己写 `result.md`。没有 `status.json`，主会话以子代理的返回和 `result.md` 为准；失败时把原因补进 Brief、换新运行目录重派一次，再失败就停下报告，不自动改用 codex 或 self。
 
 推进模式只支持 GitHub 跟踪器。先读 `docs/agents/issue-tracker.md`；发现本地 markdown 跟踪器时，说明推进模式不支持，改按 `--suggest` 或 `--list` 执行。**同一仓库同一时间只在一个会话里运行推进模式**；开工前确认没有另一个本仓库推进器会话。
 
@@ -117,9 +121,11 @@ F. 散票（bug / needs-triage 等，含疑似重复标注）
      --run-dir <运行目录>/research-<票号> --read-only --time-limit 2400 --idle-timeout 600
    ```
 
+   `--worker agent` 时不运行上面的命令：照旧建 `research-<票号>/`、写同样的 `brief.md`，改按本节开头的同构做法开只读的 Agent 子代理（`model` = `--agent-model`），prompt 指向 `<运行目录>/research-<票号>/brief.md` 与 `result.md`。
+
    我审读 `result.md` 和 `resolution.md`：事实有出处、没有把推断写成决定、Resolution 和地图索引行符合 wayfinder 格式。通过后按 tracker 文档写票：在票下发 Resolution 评论、关票、把一行 gist 追加到地图 `## Decisions so far`（保留其他段落和已有顺序）。小语病我直接改；材料不足就换新运行目录重派一次。**结论里出现需要取舍的问题时不关票**，把它改写成一条决策题，并入本轮第 5 步；已有的调研事实仍留在草稿里供用户参考。
 
-3. **决策票（worker 准备，一轮问用户）**：research 票全部处置完后重新运行 `pipeline-status.sh --all`，看最新前沿。open、阻塞全关、无 Assignee、标签为 `wayfinder:grilling` 的票每张派一个只读 worker，子目录 `decision-<票号>/`，用 [templates/brief-decision.md](templates/brief-decision.md)。worker 读票、地图、相关 ADR、规格和代码，产出问题陈述、2–4 个选项及代价、推荐答案和理由，写在 `decision.md`；不写票、不关票、不改地图。命令同上。worker 判断「无需用户决策」（已有 ADR/地图决定）时，我复核依据，仍把它作为一条「建议直接关：<依据>」放进第 5 步那一轮，用户同意后再写 Resolution、关票：grilling 是 HITL，wayfinder 规定代理不能替人回答。`wayfinder:prototype`、`wayfinder:task` 票不自动处理（要做原型或手工操作，不是选项题），在第 10 步收尾里列出，提示用户用 `/wayfinder <地图> <票>` 处理。
+3. **决策票（worker 准备，一轮问用户）**：research 票全部处置完后重新运行 `pipeline-status.sh --all`，看最新前沿。open、阻塞全关、无 Assignee、标签为 `wayfinder:grilling` 的票每张派一个只读 worker，子目录 `decision-<票号>/`，用 [templates/brief-decision.md](templates/brief-decision.md)。worker 读票、地图、相关 ADR、规格和代码，产出问题陈述、2–4 个选项及代价、推荐答案和理由，写在 `decision.md`；不写票、不关票、不改地图。命令同上；`--worker agent` 时同样按本节开头的同构做法开子代理，prompt 指向 `<运行目录>/decision-<票号>/brief.md` 与 `result.md`。worker 判断「无需用户决策」（已有 ADR/地图决定）时，我复核依据，仍把它作为一条「建议直接关：<依据>」放进第 5 步那一轮，用户同意后再写 Resolution、关票：grilling 是 HITL，wayfinder 规定代理不能替人回答。`wayfinder:prototype`、`wayfinder:task` 票不自动处理（要做原型或手工操作，不是选项题），在第 10 步收尾里列出，提示用户用 `/wayfinder <地图> <票>` 处理。
 
 4. **起草规格/执行票**：沿用下面 4.1–4.4（对应原批量模式第 2–4 步）。此轮没有可起草组就跳过。
    1. **分组（我做）**：取「缺规格」「地图缺规格」和「有规格、未拆票」三段；所在地图仍在探索、且决策票会影响这张实现票的，不进起草，在输出里说明还差哪张决策票。看标题，必要时 `gh issue view` 实现票正文，把同一地图里紧密相关的实现票合成一份规格，其余一张一份；每份已有规格单独成组（`S<k>=spec:<规格号>`，只拆票）；每张已收口地图单独成组（`S<k>=map:<地图号>`）。一份规格是一个可独立交付、可独立验收的竖切；明显串行依赖的单独成组，靠阻塞关系衔接。
@@ -136,6 +142,8 @@ F. 散票（bug / needs-triage 等，含疑似重复标注）
       ~/.claude/skills/implement-spec-split/scripts/codex-worker.sh --cwd <仓库> --brief <运行目录>/S<k>/brief.md \
         --run-dir <运行目录>/S<k> --read-only --time-limit 2400 --idle-timeout 600
       ```
+
+      `--worker agent` 时不运行上面的命令：照旧用脚本生成各组的 `S<k>/brief.md`，改按本节开头的同构做法开 Agent 子代理（`model` = `--agent-model`），prompt 指向 `<运行目录>/S<k>/brief.md` 与 `result.md`；同样最多 3 个同时，组更多分批。
 
       草稿只在运行目录，不在仓库内。不能调用 `/to-spec`、`/to-tickets` 本身；worker 直接读最新上游技能规则。
    4. **审稿（我做）**：读 `result.md`、`manifest.json`、`spec.md` 和执行票正文，检查实现决定都有出处且出处确实这么定了；`实现票：`、`地图：`两行正确；执行票是竖切、阻塞合理、跨组阻塞对得上；`blocked_by` 不挂还没有规格的实现票，该交接的写进 `handoffs`；`unresolved` 只留真正要用户拍板的事，每条带推荐答案；标题格式与仓库一致。用 `publish-batch.sh <全部 manifest.json>` 试运行核对计划。小问题直接改；大问题换新 Brief 重派那一组。
@@ -174,12 +182,14 @@ F. 散票（bug / needs-triage 等，含疑似重复标注）
 9. **开发顺序与启动（每次都做）**：发布完或不需要发布时，先运行：
 
    ```bash
-   <本技能目录>/scripts/launch-wave.sh --repo <owner/name> [--workers N] [--specs K] [--apart 224:239 …]
+   <本技能目录>/scripts/launch-wave.sh --repo <owner/name> [--workers N] [--specs K] [--apart 224:239 …] [--impl agent --agent-model <model>]
    ```
 
-   排序由 `pipeline-status.sh --order` 确定性计算：被依赖的先做 → 解锁下游多的先做 → 编号小的先做；完全被挡住的不进第 1 波；进行中的不排；中断的标「先恢复」。我只补「改同一块代码」的 `--apart A:B` 判断，依据规格正文里的模块；拿不准不传。有 `--apart` 时按重跑后的结果为准。`--apply` 会把本次 workers/specs/apart 写入 `~/.cache/implement-spec-split/launch/<owner>__<name>.json`，供合入后的 `--next-wave` 复用；开发顺序本身每次重算。没给 `--workers` 时脚本按第 5 步得到的答案传入；第 5 步也没问（已有 max-workers 文件）就不传，让脚本读状态文件或 max-workers 文件。
+   排序由 `pipeline-status.sh --order` 确定性计算：被依赖的先做 → 解锁下游多的先做 → 编号小的先做；完全被挡住的不进第 1 波；进行中的不排；中断的标「先恢复」。我只补「改同一块代码」的 `--apart A:B` 判断，依据规格正文里的模块；拿不准不传。有 `--apart` 时按重跑后的结果为准。`--apply` 会把本次 workers/specs/apart（`agent` 后端时还包括后端与模型）写入 `~/.cache/implement-spec-split/launch/<owner>__<name>.json`，供合入后的 `--next-wave` 复用；开发顺序本身每次重算。没给 `--workers` 时脚本按第 5 步得到的答案传入；第 5 步也没问（已有 max-workers 文件）就不传，让脚本读状态文件或 max-workers 文件。
 
-   **原样转述试运行输出，不加解释**，不问用户，紧接着用同样参数加 `--apply` 再运行一次。唯一例外：出现「循环依赖」时不加 `--apply`，问用户怎么定。另需单独提醒一行：表里写「另需 #N」的规格要另开会话处理那张票。脚本会写全机 worker 上限、预留规格、在 Orca 里建 worktree 并启动 `/implement-spec-split <n> --impl codex --parallel <P>`；「需手动」条目按脚本输出提醒。合入后的自动下一波见 implement-spec-split 根技能第 9 步。
+   `--worker agent` 时，试运行和 `--apply` 两次都要在 launch-wave.sh 后面追加 `--impl agent --agent-model <model>`（即第 1 波每条命令变成 `/implement-spec-split <n> --impl agent --agent-model <model> --parallel <P>`）。`--apply` 会把它写进启动状态，合入后的 `--next-wave --apply` 不带参数也会沿用；不给 `--worker agent` 时不追加任何后端参数，生成命令与现状逐字一致。
+
+   **原样转述试运行输出，不加解释**，不问用户，紧接着用同样参数加 `--apply` 再运行一次。唯一例外：出现「循环依赖」时不加 `--apply`，问用户怎么定。另需单独提醒一行：表里写「另需 #N」的规格要另开会话处理那张票。脚本会写全机 worker 上限、预留规格、在 Orca 里建 worktree 并启动 `/implement-spec-split <n> --impl codex --parallel <P>`（`--worker agent` 时为 `--impl agent --agent-model <model> --parallel <P>`）；「需手动」条目按脚本输出提醒。合入后的自动下一波见 implement-spec-split 根技能第 9 步。
 
 10. **收尾**：原样转述启动结果，列出已启动、跳过、失败和需手动的规格。提醒用户：之后每份规格合入 main 时，implement-spec-split 会在第 9 步末尾只运行一条 `launch-wave.sh --next-wave --apply` 开新会话；本推进器会话可以 `/clear`。各规格会话仍会在 push 前确认、GLM 额度/auth/transient 出错、worker 连续失败时停下等人。
 
@@ -188,6 +198,7 @@ F. 散票（bug / needs-triage 等，含疑似重复标注）
 - worker `auth` / `quota` / `transient`：停止后续自动动作，把错误和已完成的安全结果告诉用户，问是等、换 `pi` 还是停止；不自动降级为 `self` 或其他模型。
 - worker `stalled` / `error`：把失败原因补进 Brief，换新运行目录重跑一次；再失败就停下报告。
 - worker `violation`：报告作废，把 `changed_paths` 交给用户；不发布、不关票。
+- `--worker agent` 的子代理没有 `status.json` 和上述错误码：以子代理返回与 `result.md` 为准，失败时换新运行目录重派一次；再失败就停下报告，不自动改用 codex 或 self。
 - GitHub 或发布脚本失败：停止在当前操作，不手工补已由脚本负责的创建/核对；可修复后重跑幂等脚本。
 - 一轮扫描没有任何 research、决策、起草、发布或启动可做：输出当前最接近的阻塞点并结束。
 - 用户要求停止：不再发任何写请求；已在后台的 worker 等它结束后只读结果，不应用自动写操作。

@@ -1,6 +1,6 @@
 ---
 name: implement-spec-split
-description: Implement a spec and its tickets like implement-spec, but with split models - the implementing roles (exploration/implementer/merger/fix) run on Sonnet or, with --impl codex / --impl pi, on GLM through external codex or pi workers; the code-review subagents always run on a stronger model (Opus). Use when the user wants "Sonnet/GLM 开发 + 高阶模型 review", or invokes /implement-spec-split.
+description: Implement a spec and its tickets like implement-spec, but with split models - the implementing roles (exploration/implementer/merger/fix) run as in-session subagents on a chosen model (--impl agent, default sonnet, override with --agent-model sonnet|opus|haiku|fable), or on GLM through external codex/pi workers (--impl codex / --impl pi); the code-review subagents always run on a stronger model (Opus). Use when the user wants "Sonnet/GLM 开发 + 高阶模型 review", or invokes /implement-spec-split.
 disable-model-invocation: true
 ---
 
@@ -12,18 +12,20 @@ Terms (Orchestrator, In-session subagent, External worker, Implement backend, Br
 
 ## Usage
 
-- `/implement-spec-split <spec ref> [backend options]`: implement or recover one Spec as described below. The spec ref is required.
+- `/implement-spec-split <spec ref> [backend options]`: implement or recover one Spec as described below. The spec ref is required. Backend options: `--impl agent [--agent-model sonnet|opus|haiku|fable]`, `--impl codex`, `--impl pi`, or the legacy alias `--impl sonnet` (= `--impl agent --agent-model sonnet`); `--parallel N` as before.
 - `/implement-spec-split [backend options]` without a spec ref: do not scan or list candidates. Say "先运行 `/find-next --batch`，它给出开发顺序和每个 worktree 要敲的命令" and stop. Choosing what to build happens in one place (find-next), so several worktrees started at once never scan and pick in parallel.
 - `/implement-spec-split --status`: only run `<skill dir>/scripts/pipeline-status.sh`, relay its result, and stop. Do not take a Spec, run preflight, or dispatch a worker.
 
 ## Config (edit here to change the policy)
 
 - `IMPLEMENT_BACKEND` = `sonnet` — who runs the implementing roles (exploration, implementer, merger, fix):
-  - `sonnet`: In-session subagents with `model: IMPLEMENT_MODEL`.
+  - `agent`: In-session subagents on the agent model (`--agent-model`, default `IMPLEMENT_MODEL`). Use this where the Agent tool's model names reach a non-Anthropic endpoint — e.g. in a GLM proxy environment, explicitly passing `model: opus` actually runs GLM-5.3.
+  - `sonnet`: compatibility alias for `agent` with the model pinned to `sonnet`. Kept so old commands and the default `IMPLEMENT_BACKEND = sonnet` keep working; `--impl sonnet --agent-model X` is an argument conflict (see below).
   - `codex`: External workers, headless `codex exec` processes on `CODEX_MODEL` (see "External workers" below). The preferred External backend: its progress is visible live through `progress.sh`.
   - `pi`: External workers, headless `pi` processes on `GLM_MODEL`.
-  - Override per run with an argument: `/implement-spec-split <spec> --impl codex` (or `--impl pi`, `--impl sonnet`).
-- `IMPLEMENT_MODEL` = `sonnet` — model for implementing roles when the backend is `sonnet`.
+  - Override per run with an argument: `/implement-spec-split <spec> --impl agent --agent-model opus` (or `--impl codex`, `--impl pi`; legacy `--impl sonnet` = `--impl agent --agent-model sonnet`).
+- `IMPLEMENT_MODEL` = `sonnet` — default model for implementing roles when the backend is `agent`.
+- `--agent-model <sonnet|opus|haiku|fable>` — per-run model override for the `agent` backend only. It is an argument, not a Config value. Combined with `--impl codex` or `--impl pi` (including `--impl sonnet`, which already pins the model) it is an argument conflict: report the error and ask the user to either drop `--agent-model` or switch to `--impl agent`; do not silently ignore the flag.
 - `CODEX_MODEL` = `glm-5.3` — model id for codex's `custom` provider in `~/.codex/config.toml`; the endpoint and key belong to the user's provider setup, never in this repo (author environment: Ferryman, `127.0.0.1:15722`).
 - `GLM_MODEL` = `glm/glm-5.3` — pi `provider/id`; the provider, key and model list live in `~/.pi/agent/models.json`, never in this repo.
 - `GLM_MAX_PARALLEL` = `2` — at most this many External workers at once. Override per run with an argument: `/implement-spec-split <spec> --impl codex --parallel 4`. The override replaces the default for that run only. It is per Run: parallel Runs on different Specs add up. Keep it small (2–3, at most 4 off-peak): Zhipu rate-limits during peak hours, and one quota/429 among the workers stops the whole run to ask the user.
@@ -32,7 +34,7 @@ Terms (Orchestrator, In-session subagent, External worker, Implement backend, Br
 - `GLM_IDLE_TIMEOUT` = `600` — Idle timeout (seconds, GLOSSARY.md) for every External worker: no progress events from the worker for this long means it is stuck and is killed as `stalled`.
 - `REVIEW_MODEL` = `opus` — every code-review subagent (use `fable` for the strongest option). Review always runs In-session, whatever the backend.
 
-With the `sonnet` backend, pass the `model` parameter explicitly on every Agent call. Never rely on inheritance: the session itself may be on any model.
+With the `agent` backend (including the `sonnet` alias), pass the `model` parameter explicitly on every Agent call, using the agent model (`--agent-model`, default `IMPLEMENT_MODEL`). Never rely on inheritance: the session itself may be on any model.
 
 ## Principles (from implement-spec)
 
@@ -72,7 +74,7 @@ Resolve a Spec to its Tickets in this order:
    When find-next started this session (`launch-wave.sh`), it reserved the Spec first (a **handoff reservation**, GLOSSARY.md) and this session already runs inside the Spec's worktree on branch `spec-<n>`. `take` then adopts the reservation instead of creating anything: exit 0 prints the current directory, which is the integration worktree (a fresh Spec); exit 4 prints it too and means Recovery that find-next already decided on, so continue under "Recovery" without asking again.
 3. **Blocked Spec.** If every open ticket is blocked by tickets outside this Spec that are not merged into the main branch yet (its frontier is empty), say what blocks it, `claim.sh release <n>`, remove the just-created worktree and branch if they have no commits, and stop.
 4. In Orca (`ORCA_WORKTREE_ID` set and `orca` on PATH), also mark the session for the user: `orca worktree set --worktree current --issue <n> --workspace-status in-progress` and `orca terminal rename --title "spec-<n> <short title>"`. This is display only; the claim record is what other Runs and find-next read.
-5. Exactly one Spec per Run. `--parallel` / `GLM_MAX_PARALLEL` counts this Run's External workers only; on top of that, every External worker on the machine queues for one of the shared worker slots (see "External workers").
+5. Exactly one Spec per Run. With the `codex`/`pi` backends, `--parallel` / `GLM_MAX_PARALLEL` counts this Run's External workers only; on top of that, every External worker on the machine queues for one of the shared worker slots (see "External workers"). With the `agent` backend, `--parallel` instead caps this Run's concurrently running implementing subagents (implementer, fix, merger, exploration); without it the agent backend stays unlimited, the historical `sonnet` behaviour. Agent subagents do not take machine-wide worker slots — with the agent backend the total is governed by find-next's workers ÷ specs split, not by the slot file.
 6. If the backend is `codex` or `pi`, run the preflight from "External workers" now, before any other work.
 
 ### Tickets blocked by another Spec
@@ -88,11 +90,11 @@ Continue the Spec on its existing integration branch and integration worktree (`
 - its wrapper still running (`pgrep -f <run dir>`, or `progress.sh` says `running` / `queued`): wait for it, never kill it;
 - `status.json` present: handle it by the exit-code rules under "External workers", as if this Run had launched it;
 - no `status.json` (the wrapper died with the old session): treat as `error`. If the ticket branch has commits, keep the worktree and re-brief in it with a fresh run dir; otherwise remove the worktree and dispatch the ticket afresh.
-- With the `sonnet` backend there are no run dirs: a ticket worktree with commits goes through the verification gate, one without is removed and redispatched.
+- With the `agent` backend there are no run dirs: a ticket worktree with commits goes through the verification gate, one without is removed and redispatched.
 
 ## Steps
 
-"Dispatch <role>" below means: with the `sonnet` backend, an In-session subagent with `model: IMPLEMENT_MODEL`; with the `codex` or `pi` backend, an External worker (see below).
+"Dispatch <role>" below means: with the `agent` backend, an In-session subagent with `model:` the agent model (`--agent-model`, default `IMPLEMENT_MODEL`); with the `codex` or `pi` backend, an External worker (see below).
 
 1. Read the spec and tickets; build the task graph / frontier. The issue tracker comes from the repo's `docs/agents/issue-tracker.md`; if missing, tell the user to run `/setup-matt-pocock-skills`. Use exactly the Spec-to-Ticket resolution rules in step 0 (including a single-ticket Spec whose only Ticket is the referenced map implementation ticket).
 2. (optional) Dispatch an exploration role. It saves its markdown notes in a directory outside the repo, accessible by all later roles, so implementers can focus on implementation. It must not modify the repo.
@@ -126,7 +128,7 @@ Continue the Spec on its existing integration branch and integration worktree (`
       ```
 
       `find-next/` is deliberately relative to this skill's root: the symlink installation points at the same repository checkout, so this works without another configuration variable.
-      Relay its result lines verbatim, then finish this Run: do the step-10 cleanup and final report, and **do not pick up another Spec in this session**. The report must name the Specs it started, or say “无可启动”. The script recalculates the order, reuses only the cached workers/specs/apart choices, holds a repository-wide `launch-wave` lock while reserving and starting Specs, and starts each newly free first-wave Spec in a fresh Orca session. Starting fresh is deliberate: by landing time this session is full, while the next Spec's facts are all in its issue and main, so a new session saves tokens and avoids dragging in this Spec's context. Do not run this substep for the PR path, a rejected push, a user-declined landing, or an unfinished merge; if the script exits nonzero (for example a dependency cycle), relay its message and stop—do not launch anything else here.
+      Relay its result lines verbatim, then finish this Run: do the step-10 cleanup and final report, and **do not pick up another Spec in this session**. The report must name the Specs it started, or say “无可启动”. The script recalculates the order, reuses only the cached workers/specs/apart choices (plus the backend find-next recorded — agent runs keep generating `--impl agent --agent-model <model>` commands, and state files without the field keep `--impl codex`), holds a repository-wide `launch-wave` lock while reserving and starting Specs, and starts each newly free first-wave Spec in a fresh Orca session. Starting fresh is deliberate: by landing time this session is full, while the next Spec's facts are all in its issue and main, so a new session saves tokens and avoids dragging in this Spec's context. Do not run this substep for the PR path, a rejected push, a user-declined landing, or an unfinished merge; if the script exits nonzero (for example a dependency cycle), relay its message and stop—do not launch anything else here.
 
 10. Clean up all implementer worktrees, then `claim.sh release <n>`. A Spec left open because tickets wait for another Spec keeps its `spec-<n>` branch, so later it shows as interrupted ("先恢复" in find-next's order) and the next Run resumes it. In Orca, set the session's worktree to `--workspace-status in-review` (PR open) or `completed`, and retitle the tab `spec-<n> ✓`.
 
@@ -172,7 +174,7 @@ An External worker is a wrapper script (in this skill's directory) running one h
 
 - `0` / `ok`: the worker finished without an API error. This is not success yet: apply the verification gate.
 - `8` / `violation` (codex only): a `--read-only` investigation changed the workspace. Do not trust its report; hand the run directory and `changed_paths` to the orchestrator so the changes can be inspected and reverted or handled deliberately.
-- `2` / `auth`, `3` / `quota`, `4` / `transient` (already retried by the agent and by the wrapper): the GLM side is unusable right now. Stop dispatching new External workers, let running ones finish, and ask the user: wait and retry, switch the remaining work to `sonnet`, or pause. Never switch to `sonnet` on your own: saving Claude quota is the point of this backend.
+- `2` / `auth`, `3` / `quota`, `4` / `transient` (already retried by the agent and by the wrapper): the GLM side is unusable right now. Stop dispatching new External workers, let running ones finish, and ask the user: wait and retry, switch the remaining work to the `agent` backend, or pause. Never switch backends on your own: saving Claude quota is the point of the External backends, and the `agent` backend is a deliberate user choice, not a fallback.
 - `5` / `timeout`: the worker reached its Time limit; the agent's session (pi session / codex thread) is kept and can be **Resumed** (GLOSSARY.md). Read the tail of `stderr.log` and `result.md` if any, then check `status.json` for progress. With progress (`new_commits` ≥ 1 or `dirty` is `true`), Resume it once — same worktree, same run dir, same session, no new Brief:
 
   ```bash
