@@ -42,6 +42,8 @@ Invocation (all scripts are in `~/.claude/skills/implement-spec-split/scripts/`)
    ```
 
    Add `--skill <tdd-skill-directory>` when TDD is needed. Add `--read-only` for investigation tasks: once the workspace changes, `status.json` marks `read_only_violation` with exit code 8 (`violation`); discard that report, and I inspect and handle the changes.
+
+   MCP is off by default: add `--mcp all` for research that needs web search, `--mcp ssh-manager` for remote-server work (several names may be comma-separated); omit it for coding tasks.
 3. When it finishes, read `<run-directory>/status.json` and `result.md`.
 
 **Briefs must be self-contained**: state the goal, relevant file paths and line numbers, root-cause analysis, the desired approach to changes, acceptance criteria (which tests/commands to run), and out-of-scope areas. The worker cannot read our conversation. The Brief must also include two rules:

@@ -110,6 +110,26 @@ write_config() {
 if [ -z "$ONLY" ] || [ "$ONLY" = V1 ]; then
   echo "V1 fake codex"
   CODEX_HOME="$ROOT/v1-home"; mkdir -p "$CODEX_HOME/sessions" "$ROOT/v1"
+  cat > "$CODEX_HOME/config.toml" <<'EOF'
+[model_providers.custom]
+name = "custom"
+base_url = "https://api.example.invalid/v1"
+
+[mcp_servers.alpha]
+command = "alpha"
+
+[mcp_servers."beta-two"]
+command = "beta-two"
+
+[mcp_servers."beta-two".env]
+BETA = "two"
+
+[mcp_servers.gamma]
+command = "gamma"
+
+[mcp_servers."unsafe service"]
+command = "unsafe"
+EOF
   export CODEX_HOME CODEX_WORKER_CODEX="$FAKE" CODEX_WORKER_SKIP_PREFLIGHT=1 CODEX_WORKER_POLL=1
   export FAKE_CODEX_PID_LOG="$ROOT/fake-pids.log"
   BRIEF="$ROOT/brief.md"
@@ -125,6 +145,40 @@ if [ -z "$ONLY" ] || [ "$ONLY" = V1 ]; then
   check "ok session id" test "$(json "$ROOT/ok-run/status.json" session_id)" != ""
   check "ok progress finished" bash -c "'$PROGRESS' '$ROOT/ok-run' | grep -q '^state: finished: ok' && '$PROGRESS' '$ROOT/ok-run' | grep -q 'npm test'"
   check "ok progress unwraps command and prints it once" bash -c "test \"\$('$PROGRESS' '$ROOT/ok-run' 20 | grep -Fc '\$ npm test  -> exit 0')\" -eq 1"
+
+  assert_mcp_args() {
+    local file="$1" want="$2"
+    MCP_ARGS_FILE="$(cygpath -m "$file" 2>/dev/null || echo "$file")" MCP_WANT="$want" node -e '
+      const fs = require("fs");
+      const rows = fs.readFileSync(process.env.MCP_ARGS_FILE, "utf8").trim().split(/\r?\n/).map(JSON.parse);
+      const actual = [...new Set(rows.flatMap(args => {
+        const found = [];
+        for (let i = 0; i < args.length - 1; i++) if (args[i] === "-c" && args[i + 1].startsWith("mcp_servers.")) found.push(args[i + 1].slice("mcp_servers.".length, -".enabled=false".length));
+        return found;
+      }))].sort();
+      const want = (process.env.MCP_WANT || "").split(",").filter(Boolean).sort();
+      process.exit(JSON.stringify(actual) === JSON.stringify(want) ? 0 : 1);
+    '
+  }
+
+  run_case mcp-default ok mcp-default-run
+  check "MCP disabled by default" assert_mcp_args "$ROOT/mcp-default-run/fake-codex-args.jsonl" "alpha,beta-two,gamma"
+  check "MCP subtable is not disabled twice" bash -c "test \"\$(grep -o 'mcp_servers\.beta-two\.enabled=false' '$ROOT/mcp-default-run/fake-codex-args.jsonl' | wc -l)\" -eq 1"
+  check "unsafe MCP name stays enabled with warning" bash -c "test \"\$(grep -c 'mcp_servers\.unsafe' '$ROOT/mcp-default-run/fake-codex-args.jsonl')\" -eq 0 && grep -q \"unsafe service.*leaving it enabled\" '$ROOT/mcp-default-run/stderr.log'"
+  run_case mcp-all ok mcp-all-run --mcp all
+  check "MCP all has no overrides" assert_mcp_args "$ROOT/mcp-all-run/fake-codex-args.jsonl" ""
+  run_case mcp-selected ok mcp-selected-run --mcp alpha,gamma
+  check "MCP selection disables the rest" assert_mcp_args "$ROOT/mcp-selected-run/fake-codex-args.jsonl" "beta-two"
+  run_case mcp-unknown ok mcp-unknown-run --mcp nope 2>"$ROOT/mcp-unknown.err"
+  MU=$CASE_EXIT
+  check "MCP unknown name exits 64 (got $MU)" test "$MU" -eq 64
+  check "MCP unknown error lists services" bash -c "grep -q 'available MCP services: alpha, beta-two, gamma, unsafe service' '$ROOT/mcp-unknown.err'"
+  check "MCP prompt has efficiency preamble before Brief" node -e '
+    const fs = require("fs"), p = fs.readFileSync(process.argv[1], "utf8");
+    const efficiency = "效率要求：互相独立的查看、搜索、测试命令放在同一轮里并行调用，不要一次只读一个文件。需要摸清几个互不依赖的模块、或跑几组互不相干的检查时，用 spawn_agent 开 explorer 子代理并行勘察：每个子代理给清楚范围和要回报的内容，等它们都完成再继续。修改文件、git 操作只由你自己做，不交给子代理。任务很小时不要开子代理。";
+    const at = p.indexOf(efficiency), brief = p.indexOf("Say hello.");
+    process.exit(at >= 0 && brief >= 0 && at < brief ? 0 : 1);
+  ' "$ROOT/mcp-default-run/prompt-1.md"
 
   free_port() {
     node -e 'const n=require("net"),s=n.createServer();s.listen(0,"127.0.0.1",()=>{const p=s.address().port;s.close(()=>console.log(p))})'
@@ -197,6 +251,7 @@ if [ -z "$ONLY" ] || [ "$ONLY" = V1 ]; then
   FAKE_CODEX_SCENARIO=429-then-ok "$WORKER" --cwd "$ROOT/v1" --brief "$BRIEF" --run-dir "$ROOT/retry-run" --model "$MODEL" --retries 2 --retry-wait 1 --time-limit 120 --idle-timeout 20 >/dev/null
   R=$?; check "429 retry exit code (got $R)" test "$R" -eq 0
   check "429 retry succeeds with 3 attempts" test "$(json "$ROOT/retry-run/status.json" attempts)" -eq 3
+  check "retry prompt omits efficiency preamble" bash -c "! grep -q '^效率要求：' '$ROOT/retry-run/prompt-2.md'"
   run_case 429-forever 429-forever quota-run
   check "429 forever exit code (got $CASE_EXIT)" test "$CASE_EXIT" -eq 4
   check "429 final error names quota ambiguity" bash -c "grep -q 'quota exhausted' '$ROOT/quota-run/status.json'"
@@ -219,6 +274,17 @@ if [ -z "$ONLY" ] || [ "$ONLY" = V1 ]; then
   check "resume segments = 2" test "$(json "$ROOT/time-run/status.json" segments)" -eq 2
   RESUME_ID="$OLD_SESSION" node -e 'const a=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));const id=process.env.RESUME_ID,r=a.indexOf("resume");if(r<0||a[r+1]!==id||a.slice(r+2).join(" ")!=="-")process.exit(1);for(const f of ["--json","-m","-o","-C","--dangerously-bypass-approvals-and-sandbox","--disable"])if(a.indexOf(f)>r)process.exit(1)' "$ROOT/resume-args.jsonl"
   check "resume argv order and thread are valid" test $? -eq 0
+  check "default resume prompt omits efficiency preamble" bash -c "! grep -q '^效率要求：' '$ROOT/time-run/prompt-2.md'"
+
+  FAKE_CODEX_SCENARIO=busy-forever "$WORKER" --cwd "$ROOT/v1" --brief "$BRIEF" --run-dir "$ROOT/mcp-resume-run" \
+    --model "$MODEL" --retries 0 --time-limit 6 --idle-timeout 20 --mcp beta-two >/dev/null
+  MR=$?; check "MCP resume setup times out (got $MR)" test "$MR" -eq 5
+  check "MCP selection saved" test "$(json "$ROOT/mcp-resume-run/resume.json" mcp)" = beta-two
+  FAKE_CODEX_SCENARIO=ok "$WORKER" --resume --run-dir "$ROOT/mcp-resume-run" --retries 0 --time-limit 30 --idle-timeout 20 >/dev/null
+  MRR=$?; check "MCP resume succeeds (got $MRR)" test "$MRR" -eq 0
+  check "MCP resume reuses selection" assert_mcp_args "$ROOT/mcp-resume-run/fake-codex-args.jsonl" "alpha,gamma"
+  "$WORKER" --resume --run-dir "$ROOT/mcp-resume-run" --mcp alpha >/dev/null 2>&1
+  MRU=$?; check "resume rejects explicit MCP (got $MRU)" test "$MRU" -eq 64
 
   new_readonly_repo() {
     local repo="$ROOT/$1"
@@ -242,6 +308,11 @@ if [ -z "$ONLY" ] || [ "$ONLY" = V1 ]; then
   check "read-only clean exit code (got $RO_EXIT)" test "$RO_EXIT" -eq 0
   check "read-only clean has no violation" test "$(json "$ROOT/ro-clean-run/status.json" read_only_violation)" = false
   check "read-only clean prompt starts with instruction" bash -c "head -1 '$ROOT/ro-clean-run/prompt-1.md' | grep -q '^本任务只读'"
+  check "read-only efficiency prompt precedes Brief" node -e '
+    const fs = require("fs"), p = fs.readFileSync(process.argv[1], "utf8");
+    const at = [p.indexOf("本任务只读"), p.indexOf("效率要求："), p.indexOf("Say hello.")];
+    process.exit(at.slice(1).every((value, i) => value >= 0 && value > at[i]) ? 0 : 1);
+  ' "$ROOT/ro-clean-run/prompt-1.md"
 
   new_readonly_repo ro-large-repo
   for i in $(seq 1 2000); do

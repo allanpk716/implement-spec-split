@@ -164,6 +164,7 @@ An External worker is a wrapper script (in this skill's directory) running one h
      --model <model> --time-limit <role Time limit> --idle-timeout <GLM_IDLE_TIMEOUT> --skill <tdd skill dir>
    ```
 
+   (`codex`) MCP is disabled by default: research/exploration that needs internet search adds `--mcp all`, remote-server work adds `--mcp ssh-manager`, and implementation commands omit `--mcp`.
    The role's Time limit: `GLM_TIME_LIMIT_IMPL` for implementers and fix, `GLM_TIME_LIMIT_SHORT` for merger and exploration.
 
    The tdd skill dir is the newest `~/.claude/plugins/cache/mattpocock/mattpocock-skills/*/skills/*/tdd`; pass it to implementers and fix only. Mergers run in the checkout that has the integration branch.
@@ -182,7 +183,7 @@ An External worker is a wrapper script (in this skill's directory) running one h
     --time-limit <role Time limit> --idle-timeout <GLM_IDLE_TIMEOUT>
   ```
 
-  The wrapper reads the worktree, model, skills, thinking level and session from the run dir; never pass `--cwd`, `--brief`, `--model`, `--skill`, `--thinking` or `--add-dir` to a Resume. Afterwards apply the verification gate as usual: `segments` is now 2 and `new_commits` still counts from the first segment's base head, so the gate sees every commit across segments. On a second `timeout`, or a first `timeout` with no progress (`new_commits` = 0 and a clean tree), do not Resume again — ask the user.
+  The wrapper reads the worktree, model, skills, thinking level, MCP selection and session from the run dir; never pass `--cwd`, `--brief`, `--model`, `--skill`, `--thinking`, `--add-dir` or `--mcp` to a Resume. Afterwards apply the verification gate as usual: `segments` is now 2 and `new_commits` still counts from the first segment's base head, so the gate sees every commit across segments. On a second `timeout`, or a first `timeout` with no progress (`new_commits` = 0 and a clean tree), do not Resume again — ask the user.
 - `6` / `error`, `7` / `stalled`: the worker failed (`stalled` = the Idle timeout fired: no progress events for `GLM_IDLE_TIMEOUT`, so the session is stuck — do not continue that session). Read the tail of `stderr.log` and `result.md` if any. Re-brief once in a fresh run dir with the failure appended; if it fails again, ask the user.
   - (`codex`) Exception: a `stalled` whose `status.json` has a non-null `result_file` means codex already gave its final reply but never closed the turn (the wrapper saved that reply to `result.md`). Apply the verification gate, accepting `stalled` in place of `ok`; if every other check holds, treat the worker as done.
 

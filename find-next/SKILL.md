@@ -123,7 +123,7 @@ I. 散票（bug / needs-triage 等，含疑似重复标注）
 
    ```bash
    ~/.claude/skills/implement-spec-split/scripts/codex-worker.sh --cwd <仓库> --brief <运行目录>/research-<票号>/brief.md \
-     --run-dir <运行目录>/research-<票号> --read-only --time-limit 2400 --idle-timeout 600
+     --run-dir <运行目录>/research-<票号> --read-only --mcp all --time-limit 2400 --idle-timeout 600
    ```
 
    `--worker agent` 时不运行上面的命令：照旧建 `research-<票号>/`、写同样的 `brief.md`，改按本节开头的同构做法开只读的 Agent 子代理（`model` = `--agent-model`），prompt 指向 `<运行目录>/research-<票号>/brief.md` 与 `result.md`。
@@ -131,8 +131,9 @@ I. 散票（bug / needs-triage 等，含疑似重复标注）
    我审读 `result.md` 和 `resolution.md`：事实有出处、没有把推断写成决定、Resolution 和地图索引行符合 wayfinder 格式。通过后按 tracker 文档写票：在票下发 Resolution 评论、关票、把一行 gist 追加到地图 `## Decisions so far`（保留其他段落和已有顺序）。小语病我直接改；材料不足就换新运行目录重派一次。**结论里出现需要取舍的问题时不关票**，把它改写成一条决策题，并入本轮第 5 步；已有的调研事实仍留在草稿里供用户参考。
 
 3. **决策、迷雾、task 与 prototype 票（worker 准备，一轮问用户）**：research 票全部处置完后重新运行 `pipeline-status.sh --all`，看最新前沿、`fogMaps`、`emptyMaps` 和 `staleClaims`。
-   - **决策票**：open、阻塞全关、无 Assignee、标签为 `wayfinder:grilling` 的票每张派一个只读 worker，子目录 `decision-<票号>/`，用 [templates/brief-decision.md](templates/brief-decision.md)。worker 读票、地图、相关 ADR、规格和代码，产出问题陈述、2–4 个选项及代价、推荐答案和理由，写在 `decision.md`；不写票、不关票、不改地图。命令同上；`--worker agent` 时同样按本节开头的同构做法开子代理，prompt 指向 `<运行目录>/decision-<票号>/brief.md` 与 `result.md`。worker 判断「无需用户决策」（已有 ADR/地图决定）时，我复核依据，仍把它作为一条「建议直接关：<依据>」放进第 5 步那一轮，用户同意后再写 Resolution、关票：grilling 是 HITL，wayfinder 规定代理不能替人回答。
+   - **决策票**：open、阻塞全关、无 Assignee、标签为 `wayfinder:grilling` 的票每张派一个只读 worker，子目录 `decision-<票号>/`，用 [templates/brief-decision.md](templates/brief-decision.md)。worker 读票、地图、相关 ADR、规格和代码，产出问题陈述、2–4 个选项及代价、推荐答案和理由，写在 `decision.md`；不写票、不关票、不改地图。命令同上（含 `--mcp all`）；`--worker agent` 时同样按本节开头的同构做法开子代理，prompt 指向 `<运行目录>/decision-<票号>/brief.md` 与 `result.md`。worker 判断「无需用户决策」（已有 ADR/地图决定）时，我复核依据，仍把它作为一条「建议直接关：<依据>」放进第 5 步那一轮，用户同意后再写 Resolution、关票：grilling 是 HITL，wayfinder 规定代理不能替人回答。
    - **地图迷雾**：扫描到 `fogMaps` 时，每张地图派一个只读 worker，子目录 `fog-<地图号>/`，用 [templates/brief-fog.md](templates/brief-fog.md)。worker 读地图、`Decisions so far` 和相关 Resolution，写 `fog.md`：建议新建的票（问题、`wayfinder:` 类型、阻塞对象）、应从 `Not yet specified` 移除的段落、建议判出范围或作废的票（附理由）、毕业后仍剩下的迷雾。这些变成第 5 步的「建议新建 / 建议判出范围」条目；未获用户同意前，主会话不改地图边界。
+     地图迷雾的 codex 命令同决策票（含 `--mcp all`）。
    - **task 票**：前沿里 open、阻塞全关、无 Assignee、标签为 `wayfinder:task` 的票每张派一个 worker，子目录 `task-<票号>/`，用 [templates/brief-task.md](templates/brief-task.md)。这个 worker **不是只读**，但只能改 Brief 明确写出的范围。能独自完成（AFK）的做掉并写 Resolution 草稿；需要人做的写精确清单。我复核结果同 research：事实有出处、没有越界，清晰 AFK 结果直接写 Resolution、关票、更新地图；人工清单放进第 5 步那一轮。
    - **prototype 票**：前沿里 open、阻塞全关、无 Assignee、标签为 `wayfinder:prototype` 的票，单次运行最多处理 2 张；每张一个 worker，子目录 `prototype-<票号>/`，用 [templates/brief-prototype.md](templates/brief-prototype.md)。UI 原型按 mockit 技能做独立页面，由我复核后提交 mockit；非 UI 原型放在 `prototype/<票号>` 临时分支上，worker 本地提交但不得 push，我复核后 push 该分支，不开 PR、永不合并，推进模式下不单独确认。随后把可访问链接 / 分支链接和一句要反应的问题放进第 5 步那一轮，用户表态后再写 Resolution。第 3 张及以后的 prototype 票留到第 10 步收尾列出。
 
@@ -143,6 +144,7 @@ I. 散票（bug / needs-triage 等，含疑似重复标注）
      --run-dir <运行目录>/task-<票号> --time-limit 2400 --idle-timeout 600
    ```
 
+   task / prototype 需要操作远程服务器时，给上面的 codex 命令传 `--mcp ssh-manager`。
    `--worker agent` 时所有新 worker 都按本节开头的同构做法开子代理；task / prototype 子代理同样只能执行 Brief 写明的范围。
 
 4. **起草规格/执行票**：沿用下面 4.1–4.4（对应原批量模式第 2–4 步）。此轮没有可起草组就跳过。

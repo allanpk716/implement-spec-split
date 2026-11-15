@@ -16,6 +16,7 @@ let stdin = "";
 try { stdin = fs.readFileSync(0, "utf8"); } catch {}
 
 const runDir = output ? path.dirname(output) : ".";
+fs.appendFileSync(path.join(runDir, "fake-codex-args.jsonl"), JSON.stringify(args) + "\n");
 const counterFile = path.join(runDir, "fake-codex-counter");
 let count = 0;
 try { count = +fs.readFileSync(counterFile, "utf8") || 0; } catch {}
@@ -65,7 +66,11 @@ const rollout = () => {
 const fail = message => { rollout(); emit([thread, warning, failed(message)]); };
 
 const scenario = process.env.FAKE_CODEX_SCENARIO || "ok";
-if (scenario === "ok") {
+if (scenario === "argv-only") {
+  emit([thread, {type: "turn.completed", usage: {input_tokens: 0, cached_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0}}]);
+  fs.writeFileSync(output, "argv only\n");
+  process.exit(0);
+} else if (scenario === "ok") {
   rollout(); emit([thread, warning, ...command(4), ...finish()]); fs.writeFileSync(output, "done\n");
 } else if (scenario === "401") {
   fail("unexpected status 401 Unauthorized: 身份验证失败");

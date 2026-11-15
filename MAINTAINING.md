@@ -79,6 +79,8 @@
     - `--parallel` 对 `agent` 后端数的是本 Run 同时在跑的实现类子代理（implementer/fix/merger/exploration），不给时不限（沿用原 sonnet 行为）；agent 子代理不取全机 worker 槽位（那是给 External worker 限 GLM 额度用的），总量由 find-next 的 workers ÷ specs 保证。这是给「多个子代理共用同一 GLM 账号」的机器限流用的，别把它改回只数 External worker。
     - find-next 只有一个开关 `--worker agent [--agent-model <model>]`，同时管自己的调研/决策/起草方式和生成的开发命令后端，不提供混搭。agent 路径与 codex 路径同构：照旧建运行目录、写 `brief.md`，子代理 prompt 固定为「读 brief.md 并照做，把最终报告写到 result.md，同时作为你的最终回复」，主会话照旧审 `result.md`；没有 `status.json`，以子代理返回为准。`launch-wave.sh` 新增 `--impl codex|agent [--agent-model X]`，agent 时透传 `--cmd-suffix "--impl agent --agent-model X"` 给 `pipeline-status.sh` 并写进启动状态，`--next-wave` 读回；旧状态文件没有该字段按 codex 处理。
 
+20. **并行子代理与按需 MCP（2026-11-15 实测后改）。** 530 个 codex 会话里 `spawn_agent` 调用为 0；一轮里同时发出多个工具调用的只占 2.3%；等模型的时间占 70–95%；1 到 6 个 worker 并发时，每轮延迟基本不变（中位 6–8 秒）；关掉 MCP 后启动从 9.4 秒降到 3.8 秒，且没有了 rmcp 报错。因此：新会话 prompt 固定要求并行调用并按需开 explorer 子代理；codex-worker 默认关 MCP，用 `--mcp` 按需开启；`~/.codex/config.toml` 设 `[agents] max_concurrent_threads_per_session = 3`（子代理不占 Worker slot）。主会话最清楚每个任务需要什么，所以「默认不带、按需分配」由派活的一方决定。
+
 ## find-next 设计要点（2026-11-01 grilling 定稿）
 
 `find-next/` 是放在本仓库里的另一个技能：扫描当前仓库的 wayfinder 地图与票。它最初只给出一个 Next step（GLOSSARY.md），2026-11-14 起默认进入推进模式，`--suggest` 保留这个旧行为。起因：在手机上用 wayfinder 讨论出一大堆票后，不知道下一步该对哪张做 to-spec / to-tickets / grilling。原版技能都要人自己去找。
