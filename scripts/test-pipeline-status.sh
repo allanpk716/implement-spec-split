@@ -107,11 +107,12 @@ function issue(number, title, state, labels, body, children = sub(0), extras = {
     sub_issues_summary: children,
     issue_dependencies_summary: {blocked_by: 0, total_blocked_by: 0, blocking: 0, total_blocking: 0},
     assignees: [],
+    updated_at: '2026-11-15T12:00:00Z',
   }, extras);
 }
 
 const issues = [
-  issue(21, 'Exploration map', 'open', ['wayfinder:map'], '', sub(1, 0)),
+  issue(21, 'Exploration map', 'open', ['wayfinder:map'], '', sub(4, 0)),
   issue(22, 'Client map', 'closed', ['wayfinder:map'], '', sub(8, 6)),
   issue(31, 'Server map', 'closed', ['wayfinder:map'], '', sub(1, 0)),
   issue(41, 'Map needing a spec', 'open', ['wayfinder:map'], '状态：进行中', sub(2, 2)),
@@ -120,6 +121,15 @@ const issues = [
   issue(44, 'Map with open decision', 'open', ['wayfinder:map'], '', sub(2, 1)),
   issue(45, 'Map with open implementation', 'open', ['wayfinder:map'], '', sub(2, 1)),
   issue(46, 'Shelved map（搁置）', 'open', ['wayfinder:map'], '状态：搁置', sub(1, 1)),
+  issue(47, 'Fog map with comments only', 'open', ['wayfinder:map'], '## Not yet specified\n\n<!-- multi\nline comment -->\n\n## Out of scope\n\n<!-- comment -->', sub(2, 2)),
+  issue(48, 'Fog map saying none', 'open', ['wayfinder:map'], '## Not yet specified\n\n无\n', sub(2, 2)),
+  issue(49, 'Fog map saying listed none', 'open', ['wayfinder:map'], '## Not yet specified\n\n- 无\n', sub(2, 2)),
+  issue(50, 'Fog map without section', 'open', ['wayfinder:map'], '## Destination\n\nDone.', sub(2, 2)),
+  issue(51, 'Map with real fog', 'open', ['wayfinder:map'], '## Not yet specified\n\n数据导出后的归档策略还会受 #110 影响。\n', sub(2, 2)),
+  issue(52, 'Map with fog beside comments', 'open', ['wayfinder:map'], '## Not yet specified\n\n<!-- old note -->\n迁移期间的双写回滚策略还没法提问。\n\n## Out of scope\n\n<!-- excluded -->', sub(2, 2)),
+  issue(53, 'Empty map', 'open', ['wayfinder:map'], ''),
+  issue(54, 'Closed empty map', 'closed', ['wayfinder:map'], ''),
+  issue(55, 'Shelved empty map', 'open', ['wayfinder:map'], '状态：搁置'),
   issue(23, 'Open research decision', 'open', ['wayfinder:research'], ''),
   issue(24, 'Open grilling decision', 'open', ['wayfinder:grilling'], ''),
   issue(56, 'Implement client version', 'open', ['ready-for-agent'], '', sub(3, 0)),
@@ -157,6 +167,9 @@ const issues = [
   issue(112, 'Open map decision', 'open', ['wayfinder:research'], ''),
   issue(113, 'Map implementation', 'open', ['ready-for-agent'], ''),
   issue(114, 'Shelved map decision', 'closed', ['wayfinder:research'], ''),
+  issue(115, 'Claim exactly at cutoff', 'open', ['wayfinder:grilling'], ''),
+  issue(116, 'Stale claimed decision', 'open', ['wayfinder:research'], ''),
+  issue(117, 'Fresh unclaimed decision', 'open', ['wayfinder:grilling'], ''),
   issue(140, 'Spec citing source map', 'closed', [], '## Problem Statement\n来源地图：#42（全部决策见其 Decisions so far 与 #2–#10）'),
   issue(141, 'Spec citing map line', 'closed', [], '## Problem Statement\n**地图: #43**'),
   issue(121, 'Loose bug issue', 'open', ['bug'], ''),
@@ -168,6 +181,18 @@ const responses = {
     issue(24, 'Open grilling decision', 'open', ['wayfinder:grilling'], '', sub(0), {
       issue_dependencies_summary: {blocked_by: 1, total_blocked_by: 1, blocking: 0, total_blocking: 0},
       assignees: [{login: 'allan'}],
+      updated_at: '2026-11-12T11:59:59Z',
+    }),
+    issue(115, 'Claim exactly at cutoff', 'open', ['wayfinder:grilling'], '', sub(0), {
+      assignees: [{login: 'allan'}],
+      updated_at: '2026-11-12T12:00:00Z',
+    }),
+    issue(116, 'Stale claimed decision', 'open', ['wayfinder:research'], '', sub(0), {
+      assignees: [{login: 'codex'}],
+      updated_at: '2026-11-10T12:00:00Z',
+    }),
+    issue(117, 'Fresh unclaimed decision', 'open', ['wayfinder:grilling'], '', sub(0), {
+      updated_at: '2026-11-15T12:00:00Z',
     }),
   ],
   'sub-22': [
@@ -208,6 +233,33 @@ const responses = {
   'sub-46': [
     issue(114, 'Shelved map decision', 'closed', ['wayfinder:research'], ''),
   ],
+  'sub-47': [
+    issue(110, 'Closed map decision A', 'closed', ['wayfinder:research'], ''),
+    issue(111, 'Closed map decision B', 'closed', ['wayfinder:grilling'], ''),
+  ],
+  'sub-48': [
+    issue(110, 'Closed map decision A', 'closed', ['wayfinder:research'], ''),
+    issue(111, 'Closed map decision B', 'closed', ['wayfinder:grilling'], ''),
+  ],
+  'sub-49': [
+    issue(110, 'Closed map decision A', 'closed', ['wayfinder:research'], ''),
+    issue(111, 'Closed map decision B', 'closed', ['wayfinder:grilling'], ''),
+  ],
+  'sub-50': [
+    issue(110, 'Closed map decision A', 'closed', ['wayfinder:research'], ''),
+    issue(111, 'Closed map decision B', 'closed', ['wayfinder:grilling'], ''),
+  ],
+  'sub-51': [
+    issue(110, 'Closed map decision A', 'closed', ['wayfinder:research'], ''),
+    issue(111, 'Closed map decision B', 'closed', ['wayfinder:grilling'], ''),
+  ],
+  'sub-52': [
+    issue(110, 'Closed map decision A', 'closed', ['wayfinder:research'], ''),
+    issue(111, 'Closed map decision B', 'closed', ['wayfinder:grilling'], ''),
+  ],
+  'sub-53': [],
+  'sub-54': [],
+  'sub-55': [],
   'sub-56': [
     issue(90, 'Client ticket one', 'open', [], ''),
     issue(91, 'Client ticket two', 'closed', [], ''),
@@ -521,9 +573,14 @@ run_status() {
   cwd=$1
   output=$2
   shift 2
+  status_env=(
+    FIXTURE_DIR="$FIXTURE"
+    PATH="$BIN:$PATH"
+    PIPELINE_STATUS_NOW=2026-11-15T12:00:00Z
+  )
   (
     cd "$cwd" || exit 125
-    env FIXTURE_DIR="$FIXTURE" PATH="$BIN:$PATH" \
+    env "${status_env[@]}" \
       bash "$SCRIPT" --repo test/repo "$@"
   ) > "$output" 2> "${output}.err"
   RUN_EXIT=$?
@@ -549,6 +606,15 @@ expect_has '地图 #31 Server map' 'second map group is shown' "$WORK/main.out"
 expect_has '#21 Exploration map' 'map with open decisions needs wayfinder' "$WORK/main.out"
 expect_has '地图缺规格' 'map specs section is shown by default' "$WORK/main.out"
 expect_has '- #41 Map needing a spec → to-spec' 'map with only closed decisions needs a spec' "$WORK/main.out"
+expect_has '地图迷雾待毕业' 'map fog section is shown by default' "$WORK/main.out"
+expect_has '- #47 Fog map with comments only → to-spec' 'comment-only map fog is empty' "$WORK/main.out"
+expect_has '- #48 Fog map saying none → to-spec' 'none placeholder map fog is empty' "$WORK/main.out"
+expect_has '- #49 Fog map saying listed none → to-spec' 'listed none placeholder map fog is empty' "$WORK/main.out"
+expect_has '- #50 Fog map without section → to-spec' 'missing fog section is empty' "$WORK/main.out"
+expect_has '- #51 Map with real fog → /find-next --batch 51' 'map with real fog needs graduation' "$WORK/main.out"
+expect_has '- #52 Map with fog beside comments → /find-next --batch 52' 'mixed comments and fog count as fog' "$WORK/main.out"
+expect_section_without '地图缺规格' '#51 ' 'foggy map does not become a map-level spec' "$WORK/main.out"
+expect_section_without '地图迷雾待毕业' '#47 ' 'comment-only fog map is not a fog candidate' "$WORK/main.out"
 expect_section_without '地图缺规格' '#42 ' 'source-map reference covers whole map' "$WORK/main.out"
 expect_section_without '地图缺规格' '#43 ' 'map reference covers whole map' "$WORK/main.out"
 expect_has '#44 Map with open decision' 'map with an open decision stays in exploring' "$WORK/main.out"
@@ -569,6 +635,8 @@ expect_without '#94 Closed single-ticket spec → to-tickets' 'closed spec is no
 expect_without '状态没收尾' 'default output omits hygiene section' "$WORK/main.out"
 expect_without '散票' 'default output omits loose-issue section' "$WORK/main.out"
 expect_without '  - #24 [wayfinder:grilling]' 'default output omits decision tickets' "$WORK/main.out"
+expect_without '空地图（待 /wayfinder 画图）' 'default output omits empty maps' "$WORK/main.out"
+expect_without '认领后不动（>3 天）' 'default output omits stale claims' "$WORK/main.out"
 
 run_status "$REPO" "$WORK/all.out" --all
 expect_exit 0 "all fixture scan succeeds"
@@ -584,6 +652,15 @@ expect_section_without '散票' '#70 ' 'legacy parent is not loose' "$WORK/all.o
 expect_section_without '散票' '#71 ' 'legacy child is not loose' "$WORK/all.out"
 expect_has '  - #24 [wayfinder:grilling] Open grilling decision（有未关阻塞）（已认领：allan）' 'decision ticket state is rendered' "$WORK/all.out"
 expect_has '- #41 Map needing a spec → to-spec' 'all output includes map-level spec candidate' "$WORK/all.out"
+expect_has '空地图（待 /wayfinder 画图）' 'all output includes empty-map heading' "$WORK/all.out"
+expect_has '- #53 Empty map → /wayfinder 53' 'open childless map needs charting' "$WORK/all.out"
+expect_section_without '空地图（待 /wayfinder 画图）' '#54 ' 'closed empty map is not listed' "$WORK/all.out"
+expect_section_without '空地图（待 /wayfinder 画图）' '#55 ' 'shelved empty map is not listed' "$WORK/all.out"
+expect_has '认领后不动（>3 天）' 'all output includes stale-claim heading' "$WORK/all.out"
+expect_has '- #24 [wayfinder:grilling] Open grilling decision（地图 #21，已认领：allan，更新于 2026-11-12T11:59:59Z）' 'older claimed decision is stale' "$WORK/all.out"
+expect_has '- #116 [wayfinder:research] Stale claimed decision（地图 #21，已认领：codex，更新于 2026-11-10T12:00:00Z）' 'multi-day claimed decision is stale' "$WORK/all.out"
+expect_section_without '认领后不动（>3 天）' '#115 ' 'claim at exact three-day cutoff is not stale' "$WORK/all.out"
+expect_section_without '认领后不动（>3 天）' '#117 ' 'unclaimed decision is not stale' "$WORK/all.out"
 
 run_order() {
   output=$1

@@ -13,13 +13,15 @@ stage. Without --repo, the repository is detected with `gh repo view`.
 Only GitHub is supported. For other issue trackers, follow that repository's
 tracker documentation instead.
 
-  --all                  Also list exploring decisions, ticket-hygiene candidates, and loose issues.
+  --all                  Also list decision details, empty maps, stale claims, hygiene, and loose issues.
   --order                Print a deterministic development order for implementable Specs.
   --parallel K           With --order, plan for K concurrent Specs (default: 2).
   --workers N            With --order, split N total workers across K concurrent Specs.
   --apart A:B            With --order, keep A and B out of the same wave. Repeatable.
   --cmd-suffix STR       With --order, append STR to each command (default: --impl codex).
   --json                 With --order, print the same plan as JSON instead of a text table.
+
+PIPELINE_STATUS_NOW may set an ISO-8601 current time for deterministic stale-claim tests.
 EOF
 }
 
@@ -143,6 +145,7 @@ const cp = require('child_process');
 
 const mode = process.argv[2];
 const args = process.argv.slice(3);
+const STALE_CLAIM_MS = 3 * 24 * 60 * 60 * 1000;
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -222,6 +225,29 @@ function bodyMapReferences(issue) {
   return [...refs].sort((a, b) => a - b);
 }
 
+function mapHasFog(issue) {
+  const lines = String(issue.body || '').split(/\r?\n/);
+  let start = -1;
+  for (let index = 0; index < lines.length; index += 1) {
+    if (/^##\s+Not yet specified\s*$/.test(lines[index])) {
+      start = index + 1;
+      break;
+    }
+  }
+  if (start < 0) return false;
+
+  let section = [];
+  for (let index = start; index < lines.length; index += 1) {
+    if (/^##\s+/.test(lines[index])) break;
+    section.push(lines[index]);
+  }
+  const withoutComments = section.join('\n').replace(/<!--[\s\S]*?-->/g, '');
+  const compact = withoutComments.replace(/\s+/g, '');
+  const withoutListMarker = compact.replace(/^[-*+]/, '').toLowerCase();
+  return !['', '无', '（无）', '(无)', 'none', 'n/a', '-']
+    .includes(withoutListMarker);
+}
+
 function compactIssue(issue) {
   return {
     number: issue.number,
@@ -284,6 +310,7 @@ if (mode === 'plan') {
       shelved: isShelved(mapIssue),
       childCount: children.length,
       frontierIsEmpty,
+      hasFog: mapHasFog(mapIssue),
       openImplementationCount: implChildren.length,
     });
     for (const child of implChildren) {
@@ -461,15 +488,31 @@ if (mode === 'collect') {
   missing.sort((a, b) => a.number - b.number);
 
   const referencedMaps = new Set((stage.coveredMapRefs || []).map(Number));
-  const mapSpecs = stage.maps
-    .filter((map) => (
+  const readyMapFilter = (map) => (
       map.open &&
       !map.shelved &&
       map.childCount > 0 &&
       map.frontierIsEmpty &&
       Number(map.openImplementationCount || 0) === 0 &&
       !referencedMaps.has(Number(map.number))
+    );
+  const mapSpecs = stage.maps
+    .filter((map) => readyMapFilter(map) && !map.hasFog)
+    .map((map) => ({number: map.number, title: map.title}))
+    .sort((a, b) => a.number - b.number);
+
+  // Fog graduates whenever decisions are all closed, even if Specs already
+  // point back or implementation tickets are open: the map is still not done.
+  const fogMaps = stage.maps
+    .filter((map) => (
+      map.open && !map.shelved && map.childCount > 0 &&
+      Number(map.openDecisionCount || 0) === 0 && map.hasFog
     ))
+    .map((map) => ({number: map.number, title: map.title}))
+    .sort((a, b) => a.number - b.number);
+
+  const emptyMaps = stage.maps
+    .filter((map) => map.open && !map.shelved && Number(map.childCount) === 0)
     .map((map) => ({number: map.number, title: map.title}))
     .sort((a, b) => a.number - b.number);
 
@@ -591,6 +634,39 @@ if (mode === 'collect') {
     loose.sort((a, b) => a.number - b.number);
   }
 
+  const staleClaims = [];
+  if (all) {
+    const now = Date.parse(process.env.PIPELINE_STATUS_NOW || '');
+    const nowMs = Number.isFinite(now)
+      ? now
+      : Date.now();
+    const cutoff = nowMs - STALE_CLAIM_MS;
+    const seenStale = new Set();
+    for (const map of stage.maps) {
+      for (const decision of readEndpoint(endpointDir, 'map', map.number)) {
+        if (!isOpen(decision) || !hasWayfinderLabel(decision)) continue;
+        const assignees = Array.isArray(decision.assignees) ? decision.assignees : [];
+        if (assignees.length === 0) continue;
+        const updated = Date.parse(decision.updated_at || '');
+        if (!Number.isFinite(updated) || updated >= cutoff) continue;
+        const number = Number(decision.number);
+        if (seenStale.has(number)) continue;
+        seenStale.add(number);
+        staleClaims.push({
+          number,
+          title: decision.title || '',
+          label: issueLabels(decision).find((label) => label.startsWith('wayfinder:')) || '',
+          assignees: assignees.map((assignee) => (
+            typeof assignee === 'string' ? assignee : assignee.login
+          )).filter(Boolean),
+          updatedAt: decision.updated_at || '',
+          mapNumber: Number(map.number),
+        });
+      }
+    }
+    staleClaims.sort((a, b) => a.number - b.number);
+  }
+
   const blockerRequests = uniqueNumbers(implement.flatMap((spec) => (
     spec.tickets.filter((ticket) => ticket.state === 'open').map((ticket) => ticket.number)
   )));
@@ -599,7 +675,10 @@ if (mode === 'collect') {
     needsTickets,
     missing,
     mapSpecs,
+    fogMaps,
+    emptyMaps,
     exploring,
+    staleClaims,
     blockerRequests,
     hygiene: all ? hygiene : [],
     loose: all ? loose : [],
@@ -772,7 +851,40 @@ if (mode === 'render') {
     }
   }
 
+  lines.push('');
+  lines.push('地图迷雾待毕业');
+  if ((pipeline.fogMaps || []).length === 0) {
+    lines.push('（无）');
+  } else {
+    for (const map of pipeline.fogMaps) {
+      lines.push(`- #${map.number} ${clean(map.title)} → /find-next --batch ${map.number}`);
+    }
+  }
+
   if (all) {
+    lines.push('');
+    lines.push('空地图（待 /wayfinder 画图）');
+    if ((pipeline.emptyMaps || []).length === 0) {
+      lines.push('（无）');
+    } else {
+      for (const map of pipeline.emptyMaps) {
+        lines.push(`- #${map.number} ${clean(map.title)} → /wayfinder ${map.number}`);
+      }
+    }
+
+    lines.push('');
+    lines.push('认领后不动（>3 天）');
+    if ((pipeline.staleClaims || []).length === 0) {
+      lines.push('（无）');
+    } else {
+      for (const claim of pipeline.staleClaims) {
+        const assignees = (claim.assignees || []).join('、');
+        lines.push(
+          `- #${claim.number} [${claim.label}] ${clean(claim.title)}（地图 #${claim.mapNumber}，已认领：${assignees}，更新于 ${claim.updatedAt}） → 询问是否取消认领并纳入推进`
+        );
+      }
+    }
+
     lines.push('');
     lines.push('状态没收尾');
     if ((pipeline.hygiene || []).length === 0) {

@@ -127,6 +127,16 @@
 
 14. **2026-11-14：`find-next` 默认改为推进模式，规格合入后自动开下一波。** 用户目标是提高自动化程度：原先「只给一个 Next step」的行为改名 `--suggest`，`--batch` 只是推进模式别名。推进模式每轮扫描后自动派 worker 调查前沿 research 票，主会话复核结论、按 wayfinder 格式写 Resolution、关票、更新地图；`grilling` 票由 worker 准备问题/选项/推荐（`prototype`、`task` 要做原型或手工操作，仍交给 `/wayfinder`；worker 认为已有决定、无需再问的 grilling 票也要放进那一轮由用户点头才关，因为 wayfinder 规定 grilling 是 HITL、代理不能替人回答），主会话把决策题、调研转来的取舍题和规格草稿 `unresolved` 合成一轮问用户。人工关口保留三处：取舍/决策题的一轮确认、有未决的组发布前需答案、implement-spec-split push 前确认。research 结论清晰时不再问用户；草稿没有未决的组自动发布、不再单独确认。`/find-next --workers` 变为可选：推进器没读到全机 `max-workers` 文件才问用户；`launch-wave.sh --next-wave` 则先读启动状态，再读 `max-workers` 文件。规格直接合入 main 后，当前 Run 只在第 9 步末尾运行一条 `launch-wave.sh --next-wave --apply` 就收尾，不接力做下一份：合入时上下文已满，而下一份规格的事实都在 issue 和 main 上，新 Orca 会话从零开工更省 token、不串味。开发顺序每次由 `pipeline-status.sh --order` 重算，不缓存顺序本身；只缓存 workers/specs/apart 这些需要人或主会话判断的结果（`~/.cache/implement-spec-split/launch/<owner>__<name>.json`），避免下一波重复问或重复读规格。`launch-wave.sh --apply` 和 `--next-wave` 全程持仓库级 `launch-wave` 锁，防止两份规格几乎同时合入时重复计算、重复领取或重复启动；`--next-wave` 只启动空闲第 1 波，不自动恢复中断规格，遇到循环依赖非零退出交回 `/find-next`。
 
+15. **2026-11-15：`/find-next --batch` 推进「没讨论完的地图」，成为地图、规格、票、开发的通用入口（grilling 定稿）。** 用户目标：除主动新开地图用 `/wayfinder` 外，只敲 `/find-next --batch`。此前推进模式只推前沿 research/grilling 票，漏了五种状态：(G1) `mapSpecs` 只看决策票全关，不看 `## Not yet specified`，迷雾还在就起草地图级规格；(G2) 关票后只追加 Decisions so far，不做 wayfinder 第 5 步（迷雾毕业、判出范围、作废失效票），前沿一空地图就停；(G3) `prototype`/`task` 票只列不做；(G4) 已认领但无人推进的票永远被跳过；(G5) 没有子票的空地图看不见。决定：
+    - 地图就绪 = 决策票全关**且** Map fog 为空。判空规则：去掉 HTML 注释和空白后为空，或只剩「无 / （无）/ None / N/A」之类占位词；其余一律算有迷雾（宁可多出一条毕业建议）。前沿空但有迷雾的地图走迷雾毕业，不起草规格。
+    - 迷雾毕业：关票后（以及扫描时遇到前沿空、有迷雾的地图）派 worker 读地图和 Resolution，提出新建票（问题、类型、阻塞）、要移出 Not yet specified 的段落、要判出范围或作废的票；作为「建议新建 / 建议判出范围」条目并入那一轮，用户同意后主会话建票、接线、改地图。判出范围改变地图边界，所以不自动做。
+    - task 票：worker 判断能独自完成（AFK）就做，结果写成 Resolution 草稿；需要人的给清单放进那一轮。prototype 票：worker 做粗原型，UI 走 mockit，非 UI 放 `prototype/<票号>` 临时分支（主会话 push、不开 PR、永不合并，推进模式下不再单独确认），那一轮附链接问反应；每次运行最多处理 2 张 prototype，其余在收尾列出。
+    - 那一轮里用户回「展开 <条目>」时，当前会话就地对该票做 grilling + domain-modeling，写 Resolution 后继续推进，不必另开 `/wayfinder`。
+    - 已认领超过 3 天且无评论、无更新的决策票，在那一轮问「取消认领并纳入推进吗」，不自动取消（可能有别的会话在做）。
+    - 空地图（`wayfinder:map` 没有子票）属于画图阶段，只在收尾提示用 `/wayfinder` 画图，不代办，与「新开地图用 wayfinder」的边界一致。
+    - 单次运行最多问用户 3 轮，超出就收尾列出剩余待拍板事项，下次再跑接着推；用户可回「先到这」提前结束。
+    - 规则不分叉：`--suggest` 在 Decision ticket 之后新增「地图迷雾待毕业」阶段（推荐 `/find-next --batch <地图>`），`--list` 增加「空地图」「认领后不动」两块，本地跟踪器 `scan.py` 同样按迷雾判断地图是否就绪。
+
 ## 评估过、没有采纳的方案
 
 以后再有人提议引入同类东西，先看这里的理由是否还成立，别重复评估。

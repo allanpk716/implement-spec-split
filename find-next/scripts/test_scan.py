@@ -42,8 +42,14 @@ Assignee: {assignee}
 {body}"""
 
 
-def map_markdown(title, destination, notes="", status_line=None):
+def map_markdown(title, destination, notes="", status_line=None, not_yet_specified=None):
     status = f"- 状态：{status_line}\n" if status_line else ""
+    fog_section = ""
+    if not_yet_specified is not None:
+        fog_section = (
+            f"## Not yet specified\n\n{not_yet_specified}\n\n"
+            "## Out of scope\n\n（无）\n"
+        )
     return f"""# Wayfinder 地图 · {title}
 
 - Label: `wayfinder:map`
@@ -55,7 +61,8 @@ def map_markdown(title, destination, notes="", status_line=None):
 ## Notes
 
 {notes}
-"""
+
+{fog_section}"""
 
 
 class TrackerFixture:
@@ -274,6 +281,25 @@ class ShelvedTests(unittest.TestCase):
         )
 
 
+class MapFogTests(unittest.TestCase):
+    def test_map_fog_matches_pipeline_rule(self):
+        cases = [
+            (None, False),
+            ("<!-- multi\nline comment -->", False),
+            ("无", False),
+            ("- 无", False),
+            ("数据导出后的归档策略还依赖已关闭决策。", True),
+            ("<!-- old note -->\n迁移期间的双写回滚策略还没法提问。", True),
+        ]
+        for fog, expected in cases:
+            with self.subTest(fog=fog):
+                text = map_markdown("迷雾地图", "SPEC 章", not_yet_specified=fog)
+                self.assertEqual(scan.parse_map(text, "map-x.md")["has_fog"], expected)
+
+        text = map_markdown("无迷雾地图", "SPEC 章")
+        self.assertEqual(scan.parse_map(text, "map-y.md")["has_fog"], False)
+
+
 class CandidateTests(unittest.TestCase):
     def test_to_tickets_positive_and_negative(self):
         with TrackerFixture() as fixture:
@@ -357,6 +383,44 @@ class CandidateTests(unittest.TestCase):
             reasons = {c["map"]: c["reason"] for c in result["candidates"]["to_spec"]}
             self.assertIn("no open members", reasons["map-a.md"])
             self.assertIn("one open SPEC member", reasons["map-e.md"])
+
+    def test_fog_maps_exclude_foggy_maps_from_to_spec(self):
+        with TrackerFixture() as fixture:
+            fixture.map(
+                "map-clear.md",
+                title="清晰",
+                destination="SPEC 增补「清晰」章",
+            )
+            fixture.ticket(
+                1,
+                title="决策一",
+                status="closed",
+                body="地图：[清晰](../map-clear.md)\n\n## Question\n\nx\n",
+            )
+            fixture.map(
+                "map-fog.md",
+                title="有雾",
+                destination="SPEC 增补「有雾」章",
+                not_yet_specified="归档策略仍受决策一影响。",
+            )
+            fixture.ticket(
+                2,
+                title="决策二",
+                status="closed",
+                body="地图：[有雾](../map-fog.md)\n\n## Question\n\nx\n",
+            )
+            result = fixture.build()
+            self.assertEqual(
+                [candidate["map"] for candidate in result["candidates"]["to_spec"]],
+                ["map-clear.md"],
+            )
+            self.assertEqual(
+                [candidate["map"] for candidate in result["candidates"]["fog_maps"]],
+                ["map-fog.md"],
+            )
+            by_file = {record["file"]: record for record in result["maps"]}
+            self.assertEqual(by_file["map-clear.md"]["has_fog"], False)
+            self.assertEqual(by_file["map-fog.md"]["has_fog"], True)
 
     def test_frontier_positive_negative_and_ordering(self):
         with TrackerFixture() as fixture:

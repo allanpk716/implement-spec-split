@@ -56,11 +56,19 @@ _Avoid_: spec ticket
 The open Decision tickets of a map whose blockers are all closed and that nobody has claimed.
 _Avoid_: Frontier (that is implementation Tickets)
 
+**Map fog**:
+The in-scope questions a map can see coming but cannot yet phrase sharply enough to ticket, written in its `## Not yet specified` section; a map is fully discussed only when its decisions are all closed and its fog is empty.
+_Avoid_: open questions, backlog
+
+**Fog graduation**:
+Turning part of a map's fog into new Decision tickets (or ruling it out of scope) once a resolution has made it specifiable; in Advance mode a worker proposes it and the user approves it in the combined round.
+_Avoid_: re-charting (that is drawing a new map)
+
 **Next step**:
 The single action find-next recommends: a stage (to-tickets, to-spec, or a Decision ticket), its target, and the command to type.
 
 **Advance mode**:
-find-next's default GitHub-tracker behaviour: repeatedly scan, auto-resolve clear research tickets, prepare decision questions, draft Specs/Tickets, ask one combined round for real trade-offs, publish, and launch the first wave. `--suggest` requests the old read-only Next-step behaviour.
+find-next's default GitHub-tracker behaviour: repeatedly scan, auto-resolve clear research tickets, prepare decision questions, propose Fog graduation, work task and prototype tickets, draft Specs/Tickets, ask one combined round for real trade-offs, publish, and launch the first wave. `--suggest` requests the old read-only Next-step behaviour.
 _Avoid_: batch mode as a different mode (`--batch` is only an alias)
 
 **Run**:

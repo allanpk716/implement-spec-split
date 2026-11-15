@@ -26,6 +26,11 @@ HEADER_FIELD_RE = re.compile(r"^(Status|Type|Blocked-by|Assignee|Triage)\s*:\s*(
 MAP_LINE_RE = re.compile(r"^\s*-?\s*地图：\s*(.*)$")
 MD_LINK_RE = re.compile(r"\[[^\]]+\]\(([^()\s]+)\)")
 SPEC_SECTION_RE = re.compile(r"^##\s*(Problem Statement|User Stories)\s*$", re.IGNORECASE)
+NOT_YET_SPECIFIED_RE = re.compile(r"^##\s+Not yet specified\s*$")
+HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+WHITESPACE_RE = re.compile(r"\s+")
+LIST_MARKER_RE = re.compile(r"^[-*+]")
+EMPTY_FOG_VALUES = {"", "无", "（无）", "(无)", "none", "n/a", "-"}
 
 # 「票 NN」 / 「票 NN–MM」（also accepts hyphen / em dash）
 TICKET_RANGE_RE = re.compile(r"票\s*(\d{1,4})\s*[–—-]\s*(\d{1,4})(?!\d)")
@@ -112,6 +117,25 @@ def _section_body(lines: list[str], wanted: str) -> list[str]:
         if inside:
             body.append(line)
     return body
+
+
+def _has_map_fog(lines: list[str]) -> bool:
+    """Return whether ``## Not yet specified`` contains substantive fog."""
+    body: list[str] = []
+    inside = False
+    for line in lines:
+        heading = HEADING2_RE.match(line)
+        if heading:
+            if inside:
+                break
+            inside = NOT_YET_SPECIFIED_RE.match(line) is not None
+            continue
+        if inside:
+            body.append(line)
+    without_comments = HTML_COMMENT_RE.sub("", "\n".join(body))
+    compact = WHITESPACE_RE.sub("", without_comments)
+    compact = LIST_MARKER_RE.sub("", compact, count=1).casefold()
+    return compact not in EMPTY_FOG_VALUES
 
 
 def parse_ticket(text: str, filename: str) -> dict:
@@ -205,6 +229,7 @@ def parse_map(text: str, filename: str) -> dict:
     while destination_lines and not destination_lines[-1].strip():
         destination_lines.pop()
     destination = "\n".join(destination_lines)[:DESTINATION_LIMIT]
+    has_fog = _has_map_fog(lines)
 
     shelved = "搁置" in title or any(
         "搁置" in line and "状态：" in line for line in lines
@@ -235,6 +260,7 @@ def parse_map(text: str, filename: str) -> dict:
         "shelved": shelved,
         "destination": destination,
         "destination_mentions_to_tickets": "to-tickets" in destination.lower(),
+        "has_fog": has_fog,
         "sections": sections,
         "mentioned_ids": sorted(mentioned),
     }
@@ -376,6 +402,7 @@ def build(tracker_dir: str | Path) -> dict:
     ]
 
     to_spec: list[dict] = []
+    fog_maps: list[dict] = []
     for map_record in map_output:
         if map_record["shelved"]:
             continue
@@ -399,13 +426,16 @@ def build(tracker_dir: str | Path) -> dict:
         ]
         if any(_satisfies_to_tickets(tickets[m]) or tickets[m]["children"] for m in closing):
             continue
-        to_spec.append(
-            {
-                "map": map_record["file"],
-                "reason": f"destination mentions SPEC or chapter, {member_state}",
-                "open_members": open_members,
-            }
-        )
+        candidate = {
+            "map": map_record["file"],
+            "reason": f"destination mentions SPEC or chapter, {member_state}",
+            "open_members": open_members,
+        }
+        if map_record["has_fog"]:
+            candidate["reason"] += ", map fog is not empty"
+            fog_maps.append(candidate)
+        else:
+            to_spec.append(candidate)
 
     frontier_candidates = [
         {
@@ -430,6 +460,7 @@ def build(tracker_dir: str | Path) -> dict:
         "candidates": {
             "to_tickets": to_tickets,
             "to_spec": to_spec,
+            "fog_maps": fog_maps,
             "frontier": frontier_candidates,
         },
         "warnings": sorted(set(warnings)),
