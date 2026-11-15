@@ -127,6 +127,21 @@
 
 14. **2026-11-14：`find-next` 默认改为推进模式，规格合入后自动开下一波。** 用户目标是提高自动化程度：原先「只给一个 Next step」的行为改名 `--suggest`，`--batch` 只是推进模式别名。推进模式每轮扫描后自动派 worker 调查前沿 research 票，主会话复核结论、按 wayfinder 格式写 Resolution、关票、更新地图；`grilling` 票由 worker 准备问题/选项/推荐（`prototype`、`task` 要做原型或手工操作，仍交给 `/wayfinder`；worker 认为已有决定、无需再问的 grilling 票也要放进那一轮由用户点头才关，因为 wayfinder 规定 grilling 是 HITL、代理不能替人回答），主会话把决策题、调研转来的取舍题和规格草稿 `unresolved` 合成一轮问用户。人工关口保留三处：取舍/决策题的一轮确认、有未决的组发布前需答案、implement-spec-split push 前确认。research 结论清晰时不再问用户；草稿没有未决的组自动发布、不再单独确认。`/find-next --workers` 变为可选：推进器没读到全机 `max-workers` 文件才问用户；`launch-wave.sh --next-wave` 则先读启动状态，再读 `max-workers` 文件。规格直接合入 main 后，当前 Run 只在第 9 步末尾运行一条 `launch-wave.sh --next-wave --apply` 就收尾，不接力做下一份：合入时上下文已满，而下一份规格的事实都在 issue 和 main 上，新 Orca 会话从零开工更省 token、不串味。开发顺序每次由 `pipeline-status.sh --order` 重算，不缓存顺序本身；只缓存 workers/specs/apart 这些需要人或主会话判断的结果（`~/.cache/implement-spec-split/launch/<owner>__<name>.json`），避免下一波重复问或重复读规格。`launch-wave.sh --apply` 和 `--next-wave` 全程持仓库级 `launch-wave` 锁，防止两份规格几乎同时合入时重复计算、重复领取或重复启动；`--next-wave` 只启动空闲第 1 波，不自动恢复中断规格，遇到循环依赖非零退出交回 `/find-next`。
 
+## 评估过、没有采纳的方案
+
+以后再有人提议引入同类东西，先看这里的理由是否还成立，别重复评估。
+
+1. **2026-11-15：不集成 pstack（Lauren Tan / @poteto 的 `/poteto-mode` 技能包）。** 调研文档：`research_things/20261115_1215_pstack对比Matt技能调研.md`（用户的 research_things 目录，不在本仓库）。pstack 主打"开工后把活干扎实"，逐项对照本技能后，没有明显收益：
+   - 多模型互审（`/interrogate`）：本技能已经是实现与 review 分模型（GLM/Sonnet 实现、Opus review、Spec 轴对照规格），这正是它的核心思路，而且做得更硬。pstack 在 Claude Code 里反而做不到按子代理指定模型。
+   - "测试绿 ≠ 真能用"：每票 TDD、worker 验证门、merger 每次合并都重跑测试、Go 交叉编译 vet、落地前合 main 再跑一遍，已经覆盖。
+   - 复现优先修 bug：已有 `mattpocock-skills:diagnosing-bugs`，而且不属于"规格→实现"这条流水线。
+   - arena / swarm（同题多解、分片并行）：和机器级 `ISS_MAX_WORKERS` 共享一份 GLM 额度冲突；同一个模型写 N 份方案，差异也小。属于负收益。
+   - playbook 逐字写进任务清单防跳步：关键步骤已经写死（"Do not skip this step"、落地锁、验证门）。
+   - 会话接管 / 挂起：已有 `claim.sh` 的 interrupted/Recovery、worker `--resume`，以及 Ferryman 交接。
+   - 成本：调研引用的实测是挂上 pstack 后时间和 token 都约翻倍；本机单供应商（GLM），多模型那部分价值还要再打折。
+
+   唯一的真实增量是"项目级验证技能"：一组能在真实界面或真实运行里证明核心功能可用的脚本。但它是每个目标项目各自的资产，应写进该项目的 CLAUDE.md 和规格验收标准，本通用编排技能替不了。截至评估时，L3 记录里只在真实运行中才暴露的问题都出在编排脚本自身，还没有出现过"目标项目测试绿了但功能坏了"。**重新评估的触发条件**：实际跑波次时反复出现"review 和测试都过了，合入后功能却坏了"，再考虑在第 7 步 review 前加一步"仓库写了验证命令就先跑"。
+
 ## 同步上游
 
 `upstream/` 里存着原版 `SKILL.md` 和对应的上游 commit（`upstream/COMMIT`）。
