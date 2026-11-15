@@ -16,6 +16,8 @@ PLAN=$WORK/plan.json
 PLAN_TEXT=$WORK/plan.txt
 EMPTY_PLAN=$WORK/empty-plan.json
 EMPTY_PLAN_TEXT=$WORK/empty-plan.txt
+SHELVED_ONLY_PLAN=$WORK/shelved-only-plan.json
+SHELVED_ONLY_PLAN_TEXT=$WORK/shelved-only-plan.txt
 ONLY_INVISIBLE_PLAN=$WORK/only-invisible-plan.json
 ONLY_INVISIBLE_PLAN_TEXT=$WORK/only-invisible-plan.txt
 CYCLE_PLAN=$WORK/cycle-plan.json
@@ -171,6 +173,16 @@ EOF
 printf '%s\n' '{"parallel_specs":2,"workers":4,"per_spec_parallel":2,"resume":[],"active":[],"wave1":[],"later":[],"cycles":[],"standalone":[]}' \
   > "$EMPTY_PLAN"
 printf '%s\n' '开发顺序：没有可以实现的规格' > "$EMPTY_PLAN_TEXT"
+
+# #240 is a fixture for a Spec whose only open execution ticket is shelved;
+# pipeline-status must omit it from every ordered entry before launch-wave sees it.
+printf '%s\n' '{"parallel_specs":1,"workers":4,"per_spec_parallel":4,"resume":[],"active":[],"wave1":[{"spec":237,"title":"New spec","command":"/implement-spec-split 237 --impl codex --parallel 4","note":""}],"later":[],"cycles":[],"standalone":[]}' \
+  > "$SHELVED_ONLY_PLAN"
+cat > "$SHELVED_ONLY_PLAN_TEXT" <<'EOF'
+开发顺序（同时 1 份，共 4 个 worker）
+第 1 波：
+ 1. #237 New spec → /implement-spec-split 237 --impl codex --parallel 4
+EOF
 
 node - "$WT224" > "$ONLY_INVISIBLE_PLAN" <<'NODE'
 const worktree = process.argv[2];
@@ -452,6 +464,28 @@ run_launch "$WORK/empty-dry.out"
 expect_exit 0 "empty dry run succeeds"
 expect_has '没有可以启动的规格。' 'empty dry run says no specs' "$WORK/empty-dry.out"
 expect_without '现在启动吗' 'empty dry run has no launch heading' "$WORK/empty-dry.out"
+unset LAUNCH_PLAN_FILE_OVERRIDE LAUNCH_PLAN_TEXT_FILE_OVERRIDE
+
+LAUNCH_PLAN_FILE_OVERRIDE=$SHELVED_ONLY_PLAN
+LAUNCH_PLAN_TEXT_FILE_OVERRIDE=$SHELVED_ONLY_PLAN_TEXT
+export LAUNCH_PLAN_FILE_OVERRIDE LAUNCH_PLAN_TEXT_FILE_OVERRIDE
+: > "$PIPELINE_LOG"; : > "$CLAIM_LOG"; : > "$MAX_LOG"
+: > "$ORCA_LOG"; : > "$SEQUENCE_LOG"
+run_launch "$WORK/shelved-only-dry.out"
+expect_exit 0 "shelved-only dry run succeeds"
+expect_has ' #237（新 worktree）→ /implement-spec-split 237 --impl codex --parallel 4' \
+  'normal spec remains in wave after shelved-only exclusion' "$WORK/shelved-only-dry.out"
+expect_without '#240' 'shelved-only spec is not in wave output' "$WORK/shelved-only-dry.out"
+expect_without '240' 'shelved-only spec is not claimed' "$CLAIM_LOG"
+expect_without '--issue 240' 'shelved-only spec gets no Orca worktree' "$ORCA_LOG"
+
+run_launch "$WORK/shelved-only-apply.out" --apply --only 237,240
+expect_exit 0 "shelved-only apply succeeds"
+expect_has '#237 已启动' 'normal spec in filtered apply still launches' "$WORK/shelved-only-apply.out"
+expect_has '#240 已不可启动，跳过' 'shelved-only spec is unavailable to launch-wave' "$WORK/shelved-only-apply.out"
+expect_without '#240 已启动' 'shelved-only spec is not launched' "$WORK/shelved-only-apply.out"
+expect_without '240' 'apply does not claim shelved-only spec' "$CLAIM_LOG"
+expect_without '--issue 240' 'apply creates no worktree for shelved-only spec' "$ORCA_LOG"
 unset LAUNCH_PLAN_FILE_OVERRIDE LAUNCH_PLAN_TEXT_FILE_OVERRIDE
 
 LAUNCH_ORCA_OFFLINE=1

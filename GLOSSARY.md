@@ -64,11 +64,19 @@ _Avoid_: open questions, backlog
 Turning part of a map's fog into new Decision tickets (or ruling it out of scope) once a resolution has made it specifiable; in Advance mode a worker proposes it and the user approves it in the combined round.
 _Avoid_: re-charting (that is drawing a new map)
 
+**Loose ticket triage**:
+Classifying an open, unshelved ticket that belongs to no map or Spec as waiting on timing, needing a new map, needing one decision, or duplicate/stale; in Advance mode a read-only worker proposes the classification and tracker writes happen only after user approval.
+_Avoid_: treating every loose ticket as grilling work
+
+**Waiting on timing**:
+A loose ticket whose named precondition has not been confirmed by the user; find-next reports the condition without asking or deciding that it is met, and starts work only when the user says to open that ticket.
+_Avoid_: blocked ticket, agent-judged timing satisfaction
+
 **Next step**:
 The single action find-next recommends: a stage (to-tickets, to-spec, or a Decision ticket), its target, and the command to type.
 
 **Advance mode**:
-find-next's default GitHub-tracker behaviour: repeatedly scan, auto-resolve clear research tickets, prepare decision questions, propose Fog graduation, work task and prototype tickets, draft Specs/Tickets, ask one combined round for real trade-offs, publish, and launch the first wave. `--suggest` requests the old read-only Next-step behaviour.
+find-next's default GitHub-tracker behaviour: repeatedly scan, auto-resolve clear research tickets, prepare decision questions, propose Fog graduation, triage loose tickets, work task and prototype tickets, draft Specs/Tickets, ask one combined round for real trade-offs, publish, and launch the first wave. `--suggest` requests the old read-only Next-step behaviour.
 _Avoid_: batch mode as a different mode (`--batch` is only an alias)
 
 **Run**:

@@ -147,7 +147,7 @@ const issues = [
   issue(80, 'Spec with own children', 'open', [], '## Problem Statement\nOwn children.', sub(3, 1)),
   issue(81, 'Own child one', 'open', [], ''),
   issue(82, 'Own child two', 'closed', [], ''),
-  issue(83, 'Own child three', 'open', [], ''),
+  issue(83, '【搁置】Own child three', 'open', [], ''),
   issue(88, 'Single-ticket spec', 'open', [], '## Problem Statement\n背景引用：#65。\n实现票：#58。'),
   issue(89, 'Independent spec', 'open', [], '## Problem Statement\n背景引用：#57。\n实现票：#56，拆为 #90、#91、#92。'),
   issue(90, 'Client ticket one', 'open', [], ''),
@@ -174,6 +174,11 @@ const issues = [
   issue(141, 'Spec citing map line', 'closed', [], '## Problem Statement\n**地图: #43**'),
   issue(121, 'Loose bug issue', 'open', ['bug'], ''),
   issue(122, 'Loose unlabeled issue', 'open', [], ''),
+  issue(123, 'Graduated fog ticket', 'open', ['needs-triage'], '来自已收尾的地图「Client map」(#22) 的迷雾区。\n\n时机：Claude Code 适配器跑通、真实使用一段时间后再开。'),
+  issue(160, 'Spec with only a shelved ticket', 'open', [], '## Problem Statement\nOnly one open ticket remains, and it is shelved.', sub(3, 2)),
+  issue(161, 'Closed shelved-spec ticket one', 'closed', [], ''),
+  issue(162, 'Closed shelved-spec ticket two', 'closed', [], ''),
+  issue(163, '【搁置】Only remaining ticket', 'open', [], ''),
 ];
 
 const responses = {
@@ -272,7 +277,12 @@ const responses = {
   'sub-80': [
     issue(81, 'Own child one', 'open', [], ''),
     issue(82, 'Own child two', 'closed', [], ''),
-    issue(83, 'Own child three', 'open', [], ''),
+    issue(83, '【搁置】Own child three', 'open', [], ''),
+  ],
+  'sub-160': [
+    issue(161, 'Closed shelved-spec ticket one', 'closed', [], ''),
+    issue(162, 'Closed shelved-spec ticket two', 'closed', [], ''),
+    issue(163, '【搁置】Only remaining ticket', 'open', [], ''),
   ],
   'sub-99': [
     issue(100, 'External blocker one', 'open', [], ''),
@@ -631,6 +641,8 @@ expect_without '#68 Implementation referenced with connector → to-spec' 'imple
 expect_has '#95 0/1' 'spec with connector reference is implementable' "$WORK/main.out"
 expect_without '- #94 0/1 ' 'closed spec is not listed as implementable' "$WORK/main.out"
 expect_without '#94 Closed single-ticket spec → to-tickets' 'closed spec is not listed as needing tickets' "$WORK/main.out"
+expect_has '[票：#81 #82 #83(搁置)]' 'mixed spec marks shelved execution ticket' "$WORK/main.out"
+expect_without '- #160 ' 'spec with only shelved open tickets is not implementable' "$WORK/main.out"
 
 expect_without '状态没收尾' 'default output omits hygiene section' "$WORK/main.out"
 expect_without '散票' 'default output omits loose-issue section' "$WORK/main.out"
@@ -645,6 +657,10 @@ expect_without '#102' 'closed execution ticket is not listed as unfinished' "$WO
 expect_has '- 实现票 #66 Implementation covered by closed spec 的规格 #94 已关闭，票还开着 → 核对后关票' 'open implementation covered only by closed spec needs cleanup' "$WORK/all.out"
 expect_has '- #121 [bug] Loose bug issue' 'labeled loose issue is formatted' "$WORK/all.out"
 expect_has '- #122 Loose unlabeled issue' 'unlabeled loose issue is formatted' "$WORK/all.out"
+expect_has '- #123 [needs-triage] Graduated fog ticket（来自地图 #22；时机：Claude Code 适配器跑通、真实使用一段时间后再开。）' \
+  'loose issue includes source map and timing' "$WORK/all.out"
+expect_has '- 规格 #160 Spec with only a shelved ticket：未关执行票只剩搁置票 #163，可关闭规格（核对后由用户确认）' \
+  'shelved-only spec is hygiene rather than implementable' "$WORK/all.out"
 expect_section_without '散票' '#57 ' 'map child is not loose' "$WORK/all.out"
 expect_section_without '散票' '#81 ' 'spec child is not loose' "$WORK/all.out"
 expect_section_without '散票' '#80 ' 'spec itself is not loose' "$WORK/all.out"
@@ -661,6 +677,26 @@ expect_has '- #24 [wayfinder:grilling] Open grilling decision（地图 #21，已
 expect_has '- #116 [wayfinder:research] Stale claimed decision（地图 #21，已认领：codex，更新于 2026-11-10T12:00:00Z）' 'multi-day claimed decision is stale' "$WORK/all.out"
 expect_section_without '认领后不动（>3 天）' '#115 ' 'claim at exact three-day cutoff is not stale' "$WORK/all.out"
 expect_section_without '认领后不动（>3 天）' '#117 ' 'unclaimed decision is not stale' "$WORK/all.out"
+
+run_status "$REPO" "$WORK/order-shelved.out" --order --parallel 20 --cmd-suffix ''
+expect_exit 0 "development order excludes shelved-only spec"
+expect_without '#160' 'shelved-only spec is absent from order' "$WORK/order-shelved.out"
+
+run_status "$REPO" "$WORK/order-shelved.json" --order --parallel 20 --json
+expect_exit 0 "development-order JSON excludes shelved-only spec"
+node - "$WORK/order-shelved.json" > "$WORK/order-shelved-check.txt" <<'NODE'
+const fs = require('fs');
+const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const numbers = [
+  ...plan.resume.map((item) => item.spec),
+  ...plan.active.map((item) => item.spec),
+  ...plan.wave1.map((item) => item.spec),
+  ...plan.later.map((item) => item.spec),
+];
+if (numbers.includes(160)) throw new Error('shelved-only spec entered the order');
+NODE
+RUN_EXIT=$?
+expect_exit 0 "order JSON has no shelved-only spec entries"
 
 run_order() {
   output=$1

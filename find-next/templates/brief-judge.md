@@ -10,7 +10,7 @@ find-next 判断 Brief 模板。复制到 <运行目录>/brief.md，填好 <...>
 
 ## 输入
 
-- 机械扫描结果：`<运行目录>/scan.json`。本地跟踪器由 `scan.py` 生成，内容是票头、阻塞、所属地图、Parent 引用、下游解锁数，以及粗筛候选；GitHub 跟踪器是 `pipeline-status.sh` 的输出，存为 `<运行目录>/scan.txt`，这时用 `gh` 查票，并把下面的本地路径换成 issue。先读扫描结果，再针对性地去看原文。
+- 机械扫描结果：`<运行目录>/scan.json`。本地跟踪器由 `scan.py` 生成，内容是票头、阻塞、所属地图、Parent 引用、下游解锁数，以及粗筛候选；GitHub 跟踪器是 `pipeline-status.sh` 的输出，存为 `<运行目录>/scan.txt`，这时用 `gh` 查票，并把下面的本地路径换成 issue。先读扫描结果，再针对性地去看原文；GitHub 散票行里的「来自地图 #N」和「时机：…」也要带回结论。
 - 术语：`~/.claude/skills/implement-spec-split/GLOSSARY.md`（Spec、Closing ticket、Decision ticket、Map frontier）
 - 跟踪器约定：`<仓库路径>/docs/agents/issue-tracker.md`
 - 地图：`<仓库路径>/tracker/map*.md`；票：`<仓库路径>/tracker/tickets/NN-*.md`；定稿规格：`<仓库路径>/SPEC.md`（先用 `grep -n '^#' SPEC.md` 看章节目录）
@@ -19,7 +19,7 @@ find-next 判断 Brief 模板。复制到 <运行目录>/brief.md，填好 <...>
 
 1. **该 to-tickets**：存在 spec 产物，但没有任何票的 `## Parent` 指向它。spec 产物包括：正文含 `Problem Statement` / `User Stories` 的 spec 票，以及已关闭的地图收口票（它把一章写进了 SPEC.md）。要核实 SPEC.md 里确实有这一章。
 2. **该 to-spec**：地图的 Destination 是 spec 或某个章节，前沿已空（或只剩收口票、而且它的阻塞都已关闭），并且还没有产出。部分就绪的竖切排在完全就绪之后，并注明还剩哪几张票没关。
-3. **Map frontier 里的 Decision ticket**：open、阻塞全部已关闭、无 Assignee。先按 `scan.json` 里的下游解锁数排，数量相同时编号小的优先。在地图里的票，命令是 `/wayfinder <地图> <票名>`；散票的命令是 `/grill-with-docs <票>`。
+3. **Map frontier 里的 Decision ticket**：open、阻塞全部已关闭、无 Assignee。先按 `scan.json` 里的下游解锁数排，数量相同时编号小的优先。在地图里的票，命令是 `/wayfinder <地图> <票名>`；带「时机：」的散票不是候选，标「等待时机：<条件>」；其他散票推荐 `/find-next <票号>` 推进模式分流，`/grill-with-docs <票>` 只作为手动备选。
 
 跳过：Notes、标题或状态行里标了「搁置」的地图和票，以及正文写明「实际被……挡住」的票。如果你认为 `scan.json` 的粗筛有误（例如漏判、误判搁置），以原文为准，并在 result.md 里用一行说明。
 

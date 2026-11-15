@@ -225,6 +225,27 @@ function bodyMapReferences(issue) {
   return [...refs].sort((a, b) => a - b);
 }
 
+function looseFromMap(issue) {
+  for (const line of String(issue.body || '').split(/\r?\n/)) {
+    const explicit = line.match(/^\s*(?:[-*]\s+)?(?:\*\*\s*)?来源地图\s*(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*#([0-9]+)(?![0-9])/i);
+    if (explicit) return Number(explicit[1]);
+    const narrative = line.match(/来自[^\r\n]*地图[^\r\n]*\(#([0-9]+)\)/);
+    if (narrative) return Number(narrative[1]);
+  }
+  return null;
+}
+
+function looseTiming(issue) {
+  for (const line of String(issue.body || '').split(/\r?\n/)) {
+    const match = line.match(/^\s*(?:[-*]\s+)?(?:\*\*)?时机\s*[:：]\s*(.*)$/);
+    if (!match) continue;
+    const value = match[1].replace(/\*\*$/, '').trim();
+    if (value === '') return null;
+    return value.length > 120 ? value.slice(0, 120) : value;
+  }
+  return null;
+}
+
 function mapHasFog(issue) {
   const lines = String(issue.body || '').split(/\r?\n/);
   let start = -1;
@@ -405,9 +426,16 @@ if (mode === 'collect') {
       number: Number(number),
       state: issue ? issue.state : 'open',
       title: issue ? issue.title : '',
+      shelved: issue ? isShelved(issue) : false,
     };
   }
 
+  function onlyShelvedOpenTickets(spec) {
+    const openTickets = spec.tickets.filter((ticket) => ticket.state === 'open');
+    return openTickets.length > 0 && openTickets.every((ticket) => ticket.shelved);
+  }
+
+  const shelvedOnlySpecs = [];
   const implement = [];
   for (const spec of stage.specs) {
     const referencesImplementation = spec.refs.some((ref) => implementations.has(Number(ref)));
@@ -437,26 +465,30 @@ if (mode === 'collect') {
       }
     }
     tickets.sort((a, b) => a.number - b.number);
-    implement.push({
+    const record = {
       number: spec.number,
       title: spec.title,
       kind: 'spec',
       tickets,
       closed: tickets.filter((ticket) => ticket.state === 'closed').length,
-    });
+    };
+    if (onlyShelvedOpenTickets(record)) shelvedOnlySpecs.push(record);
+    else implement.push(record);
   }
 
   for (const oldSpec of stage.oldCandidates) {
     const tickets = readEndpoint(endpointDir, 'sub', oldSpec.number)
       .map((issue) => ticketRecord(issue.number))
       .sort((a, b) => a.number - b.number);
-    implement.push({
+    const record = {
       number: oldSpec.number,
       title: oldSpec.title,
       kind: 'legacy',
       tickets,
       closed: tickets.filter((ticket) => ticket.state === 'closed').length,
-    });
+    };
+    if (onlyShelvedOpenTickets(record)) shelvedOnlySpecs.push(record);
+    else implement.push(record);
   }
   implement.sort((a, b) => a.number - b.number);
 
@@ -546,7 +578,14 @@ if (mode === 'collect') {
     })
     .sort((a, b) => a.number - b.number);
 
-  const hygiene = [];
+  const hygiene = all ? shelvedOnlySpecs.map((spec) => ({
+    kind: 'shelved-only-spec',
+    number: spec.number,
+    title: spec.title,
+    tickets: spec.tickets.filter((ticket) => (
+      ticket.state === 'open' && ticket.shelved
+    )).sort((a, b) => a.number - b.number),
+  })) : [];
   if (all) {
     for (const spec of stage.closedSpecs || []) {
       const tickets = readEndpoint(endpointDir, 'sub', spec.number)
@@ -628,6 +667,8 @@ if (mode === 'collect') {
           number: Number(issue.number),
           title: issue.title || '',
           labels: issueLabels(issue),
+          fromMap: looseFromMap(issue),
+          timing: looseTiming(issue),
         });
       }
     }
@@ -668,7 +709,8 @@ if (mode === 'collect') {
   }
 
   const blockerRequests = uniqueNumbers(implement.flatMap((spec) => (
-    spec.tickets.filter((ticket) => ticket.state === 'open').map((ticket) => ticket.number)
+    spec.tickets.filter((ticket) => ticket.state === 'open' && !ticket.shelved)
+      .map((ticket) => ticket.number)
   )));
   const output = {
     implement,
@@ -744,7 +786,9 @@ if (mode === 'render') {
 
   function blockersFor(spec) {
     const ticketNumbers = new Set(spec.tickets.map((ticket) => ticket.number));
-    const openTickets = spec.tickets.filter((ticket) => ticket.state === 'open');
+    const openTickets = spec.tickets.filter((ticket) => (
+      ticket.state === 'open' && !ticket.shelved
+    ));
     if (openTickets.length === 0) return [];
     const eachTicketHasExternal = openTickets.every((ticket) => {
       let file;
@@ -793,7 +837,9 @@ if (mode === 'render') {
       }
       const blockers = blockersFor(spec);
       if (blockers.length > 0) state += `；被卡住：${blockers.map((n) => `#${n}`).join(' ')}`;
-      const tickets = spec.tickets.map((ticket) => `#${ticket.number}`).join(' ');
+      const tickets = spec.tickets.map((ticket) => (
+        ticket.shelved ? `#${ticket.number}(搁置)` : `#${ticket.number}`
+      )).join(' ');
       lines.push(`- #${spec.number} ${spec.closed}/${spec.tickets.length} ${state} ${clean(spec.title)} [票：${tickets}] → /implement-spec-split ${spec.number}`);
     }
   }
@@ -894,6 +940,9 @@ if (mode === 'render') {
         if (item.kind === 'closed-spec') {
           const tickets = item.tickets.map((ticket) => `#${ticket.number}`).join(' ');
           lines.push(`- 规格 #${item.number} ${clean(item.title)} 已关闭，执行票还开着：${tickets} → 核对后关票`);
+        } else if (item.kind === 'shelved-only-spec') {
+          const tickets = item.tickets.map((ticket) => `#${ticket.number}`).join(' ');
+          lines.push(`- 规格 #${item.number} ${clean(item.title)}：未关执行票只剩搁置票 ${tickets}，可关闭规格（核对后由用户确认）`);
         } else if (item.kind === 'implementation') {
           const specs = item.specNumbers.map((number) => `#${number}`).join('、');
           lines.push(`- 实现票 #${item.number} ${clean(item.title)} 的规格 ${specs} 已关闭，票还开着 → 核对后关票`);
@@ -908,7 +957,13 @@ if (mode === 'render') {
     } else {
       for (const issue of pipeline.loose) {
         const labels = issue.labels.length > 0 ? ` [${issue.labels.join(',')}]` : '';
-        lines.push(`- #${issue.number}${labels} ${clean(issue.title)}`);
+        const notes = [];
+        if (issue.fromMap !== null && issue.fromMap !== undefined) {
+          notes.push(`来自地图 #${issue.fromMap}`);
+        }
+        if (issue.timing) notes.push(`时机：${clean(issue.timing)}`);
+        const note = notes.length > 0 ? `（${notes.join('；')}）` : '';
+        lines.push(`- #${issue.number}${labels} ${clean(issue.title)}${note}`);
       }
     }
   }
