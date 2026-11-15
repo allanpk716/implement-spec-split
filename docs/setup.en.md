@@ -182,6 +182,14 @@ This makes `codex exec` do work with GLM. Both Stage 1's `--impl codex` and Stag
 
    If the local proxy is not running, the worker immediately exits as `transient` with the error `local proxy at <host>:<port> is not listening`.
 
+5. **MCP is off by default, opt in per task**: a worker starts with every MCP server in `config.toml` disabled (faster startup, no tool schemas in context). Add `--mcp all` to `codex-worker.sh` for research that needs web search, `--mcp ssh-manager` for remote-server work (several names may be comma-separated); omit it for coding tasks. A Resume reuses the first segment's selection.
+6. **Subagent concurrency cap**: the worker's fixed preamble asks codex to batch independent commands and to spawn explorer subagents for exploration. Subagents take no worker slot, so cap them in `config.toml`:
+
+   ```toml
+   [agents]
+   max_concurrent_threads_per_session = 3
+   ```
+
 **Verify**
 
 ```bash

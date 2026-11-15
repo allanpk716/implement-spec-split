@@ -181,6 +181,14 @@ ln -s ~/.claude/skills/implement-spec-split/find-next ~/.claude/skills/find-next
 
    本地代理没开时，worker 会立即以 `transient` 退出，错误信息是 `local proxy at <host>:<port> is not listening`。
 
+5. **MCP 默认关闭，按需开启**：worker 启动时会关掉 `config.toml` 里的全部 MCP 服务（启动更快，工具描述也不占上下文）。要联网搜索的调研任务给 `codex-worker.sh` 加 `--mcp all`，要操作远程服务器的加 `--mcp ssh-manager`（可写多个服务名，逗号分隔）；写代码的任务不加。续跑沿用第一次的设置。
+6. **子代理并发上限**：worker 的固定前言会要求 codex 并行调用独立命令、勘察时开 explorer 子代理。子代理不占 worker 槽位，建议在 `config.toml` 里限制并发：
+
+   ```toml
+   [agents]
+   max_concurrent_threads_per_session = 3
+   ```
+
 **验证**
 
 ```bash
