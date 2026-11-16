@@ -141,6 +141,11 @@ PIPELINE_STATUS=${ISS_PIPELINE_STATUS:-$SKILL_ROOT/scripts/pipeline-status.sh}
 CLAIM=${ISS_CLAIM:-$SKILL_ROOT/scripts/claim.sh}
 MAX_WORKERS_CMD=${ISS_MAX_WORKERS_CMD:-$SKILL_ROOT/scripts/max-workers.sh}
 ORCA=${ISS_ORCA:-orca}
+# Git Bash rewrites a leading-slash argument passed to a native program as a POSIX path,
+# so `--prompt "/implement-spec-split 28 ..."` reached orca as
+# "C:/Program Files/Git/implement-spec-split 28 ...". Exempt only that prefix; worktree
+# paths still need the conversion.
+export MSYS2_ARG_CONV_EXCL="${MSYS2_ARG_CONV_EXCL:+$MSYS2_ARG_CONV_EXCL;}/implement-spec-split"
 LOCK=${ISS_LOCK:-$SKILL_ROOT/scripts/lock.sh}
 LAUNCH_STATE_DIR=${ISS_LAUNCH_STATE_DIR:-$HOME/.cache/implement-spec-split/launch}
 WORKER_STATE_DIR=${ISS_STATE_DIR:-$HOME/.cache/implement-spec-split}

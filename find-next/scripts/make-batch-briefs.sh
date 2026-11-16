@@ -263,7 +263,7 @@ existing_spec_facts() {
     }
     const body = String(value && value.body || "");
     const hasProblemStatement = /^[ \t]*## Problem Statement[ \t\r]*$/m.test(body);
-    process.stdout.write(`${String(value && value.state || "")}\n${hasProblemStatement ? 1 : 0}\n`);
+    process.stdout.write(`${String(value && value.state || "").toLowerCase()}\n${hasProblemStatement ? 1 : 0}\n`);
   '
 }
 
@@ -295,7 +295,7 @@ map_facts() {
     } catch (_) {
       process.exit(1);
     }
-    process.stdout.write(String(value && value.state || ""));
+    process.stdout.write(String(value && value.state || "").toLowerCase());
   '
 }
 

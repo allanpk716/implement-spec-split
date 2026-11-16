@@ -1203,7 +1203,7 @@ if [ "$APPLY" -eq 1 ] && [ "$NO_ORDER" -eq 0 ]; then
     die "could not resolve the publish script directory"
   SKILL_ROOT=$(cd -- "$PUBLISH_SCRIPT_DIR/../.." && pwd) ||
     die "could not resolve the skill root"
-  PIPELINE_STATUS=${ISS_PIPELINE_STATUS:-$SKILL_ROOT/scripts/pipeline-status.sh}
+  PIPELINE_STATUS=${ISS_PIPELINE_STATUS:-$SKILL_ROOT/implement-spec-split/scripts/pipeline-status.sh}
   if ! "$PIPELINE_STATUS" --order --repo "$REPO"; then
     printf 'publish-batch: pipeline-status.sh --order failed; published issues were not changed by this failure\n' >&2
   fi
