@@ -402,17 +402,22 @@ NODE
 
 orca_worktrees() {
   ORCA_LIST=$("$ORCA" worktree list --json 2>/dev/null)
-  node -e 'JSON.parse(process.argv[1])' "$ORCA_LIST" >/dev/null 2>&1
+  # Pass the JSON via a temp file: on Windows/MSYS the worktree list can exceed
+  # the ~32KB per-argument limit and `node -e ... "$ORCA_LIST"` dies with
+  # "Argument list too long" (exit 126), making Orca detection fail.
+  [ -n "${ORCA_LIST_FILE:-}" ] || ORCA_LIST_FILE=$(mktemp "${TMPDIR:-/tmp}/launch-wave-orca.XXXXXX") || return 1
+  printf '%s' "$ORCA_LIST" > "$ORCA_LIST_FILE"
+  node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$ORCA_LIST_FILE" >/dev/null 2>&1
 }
 
 in_orca() {
-  node - "$1" "$ORCA_LIST" <<'NODE'
+  node - "$1" "$ORCA_LIST_FILE" <<'NODE'
 const fs = require('fs');
 function real(value) {
   try { return fs.realpathSync(value); } catch (_) { return value; }
 }
 const wanted = real(process.argv[2]);
-const value = JSON.parse(process.argv[3]);
+const value = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
 const worktrees = (value && value.result && Array.isArray(value.result.worktrees))
   ? value.result.worktrees : [];
 process.exit(worktrees.some((item) => real(item.path) === wanted) ? 0 : 1);
@@ -439,6 +444,7 @@ cleanup() {
     "$LOCK" release launch-wave --scope repo >/dev/null 2>&1 || true
   fi
   rm -f "$run_out" "$run_err"
+  [ -n "${ORCA_LIST_FILE:-}" ] && rm -f "$ORCA_LIST_FILE"
   exit "$status"
 }
 trap cleanup EXIT HUP INT TERM

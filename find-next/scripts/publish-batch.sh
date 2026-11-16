@@ -627,7 +627,12 @@ function ghApi(endpoint, method, fields = []) {
   const args = method ? ['-X', method, endpoint] : [endpoint];
   for (const [name, value] of fields) args.push(name, String(value));
   try {
-    return execFileSync(process.env.PUBLISH_SCRIPT, ['--internal-api', ...args], {
+    // win32: a .sh is not a Win32 executable; re-enter through bash like
+    // pipeline-status.sh does for its sh snippets.
+    const command = process.platform === 'win32'
+      ? ['bash', [process.env.PUBLISH_SCRIPT, '--internal-api', ...args]]
+      : [process.env.PUBLISH_SCRIPT, ['--internal-api', ...args]];
+    return execFileSync(command[0], command[1], {
       encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {

@@ -26,6 +26,7 @@ RESUME_ONLY_PLAN=$WORK/resume-only-plan.json
 RESUME_ONLY_PLAN_TEXT=$WORK/resume-only-plan.txt
 ORCA_LIST=$WORK/orca-list.json
 ORCA_LIST_NO_MAIN=$WORK/orca-list-no-main.json
+ORCA_LIST_LARGE=$WORK/orca-list-large.json
 ORCA_LOG=$WORK/orca.log
 CLAIM_LOG=$WORK/claim.log
 MAX_LOG=$WORK/max-workers.log
@@ -238,6 +239,20 @@ process.stdout.write(JSON.stringify({
 }) + '\n');
 NODE
 
+LARGE_TMPDIR=$WORK/launch-wave-tmp
+mkdir -p "$LARGE_TMPDIR"
+node - "$WT222" "$MAIN_WORKTREE_PATH" > "$ORCA_LIST_LARGE" <<'NODE'
+const [visible, main] = process.argv.slice(2);
+const filler = 'x'.repeat(900);
+const worktrees = [{path: visible}, {path: main}];
+for (let index = 0; index < 2000; index += 1) {
+  worktrees.push({
+    path: `/definitely/not/an/orca/worktree/${String(index).padStart(4, '0')}/${filler}`,
+  });
+}
+process.stdout.write(JSON.stringify({result: {worktrees}}, null, 2) + '\n');
+NODE
+
 cat > "$BIN/fake-pipeline" <<'EOF'
 #!/usr/bin/env bash
 set -u
@@ -421,6 +436,7 @@ run_launch() {
     env LAUNCH_PLAN_FILE="${LAUNCH_PLAN_FILE_OVERRIDE:-$PLAN}" \
       LAUNCH_PLAN_TEXT_FILE="${LAUNCH_PLAN_TEXT_FILE_OVERRIDE:-$PLAN_TEXT}" \
       LAUNCH_ORCA_LIST_FILE="${LAUNCH_ORCA_LIST_FILE_OVERRIDE:-$ORCA_LIST}" \
+      TMPDIR="${LAUNCH_TMPDIR_OVERRIDE:-${TMPDIR:-/tmp}}" \
       LAUNCH_GIT_REPO="$REPO" \
       LAUNCH_RESUME_DEFAULT="$WT222" \
       LAUNCH_PIPELINE_LOG="$PIPELINE_LOG" LAUNCH_CLAIM_LOG="$CLAIM_LOG" \
@@ -455,6 +471,30 @@ expect_has --workers 'pipeline receives worker total' "$PIPELINE_LOG"
 expect_has --json 'dry run asks pipeline for JSON' "$PIPELINE_LOG"
 expect_without 'reserve' 'dry run makes no claim' "$CLAIM_LOG"
 expect_without 'create' 'dry run creates no Orca worktree' "$ORCA_LOG"
+
+LARGE_ORCA_LIST_BYTES=$(wc -c < "$ORCA_LIST_LARGE" | tr -d '[:space:]')
+if [ "$LARGE_ORCA_LIST_BYTES" -ge 1500000 ]; then
+  record PASS 'large Orca list fixture exceeds argument limits'
+else
+  record FAIL 'large Orca list fixture exceeds argument limits' "bytes=$LARGE_ORCA_LIST_BYTES, expected>=1500000"
+fi
+LAUNCH_ORCA_LIST_FILE_OVERRIDE=$ORCA_LIST_LARGE
+LAUNCH_TMPDIR_OVERRIDE=$LARGE_TMPDIR
+export LAUNCH_ORCA_LIST_FILE_OVERRIDE LAUNCH_TMPDIR_OVERRIDE
+: > "$ORCA_LOG"
+run_launch "$WORK/large-orca-list-dry.out"
+expect_exit 0 'dry run with a large Orca list succeeds'
+expect_has '现在启动吗？会在 Orca 里自动运行：' \
+  'large Orca list keeps Orca detection' "$WORK/large-orca-list-dry.out"
+expect_has " #222（恢复，原 worktree）→ /implement-spec-split 222 --impl codex --parallel 2" \
+  'large Orca list still matches the resume worktree' "$WORK/large-orca-list-dry.out"
+ORCA_TEMP_RESIDUE=$(find "$LARGE_TMPDIR" -maxdepth 1 -type f -name 'launch-wave-orca.*' -print)
+if [ -z "$ORCA_TEMP_RESIDUE" ]; then
+  record PASS 'large Orca list temp file is cleaned up'
+else
+  record FAIL 'large Orca list temp file is cleaned up' "$ORCA_TEMP_RESIDUE"
+fi
+unset LAUNCH_ORCA_LIST_FILE_OVERRIDE LAUNCH_TMPDIR_OVERRIDE
 
 LAUNCH_PLAN_FILE_OVERRIDE=$EMPTY_PLAN
 LAUNCH_PLAN_TEXT_FILE_OVERRIDE=$EMPTY_PLAN_TEXT
