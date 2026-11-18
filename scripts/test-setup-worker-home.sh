@@ -6,6 +6,14 @@ set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 SETUP="$HERE/setup-worker-home.sh"
 
+winpath() { if command -v cygpath >/dev/null; then cygpath -m "$1"; else echo "$1"; fi; }
+is_windows() {
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) return 0 ;;
+  esac
+  node -e 'process.exit(process.platform === "win32" ? 0 : 1)'
+}
+
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/setup-worker-home-test.XXXXXX")
 export HOME="$WORK/home"
 SOURCE="$HOME/.codex"
@@ -101,7 +109,7 @@ check "agents table is preserved" grep -Fq "[agents]" "$TARGET/config.toml"
 check "interactive root keys are dropped" bash -c "! grep -Eq '^(approvals_reviewer|screen_reader_detection_done|status_line|status_line_secondary|unknown_root)[[:space:]]*=' '$TARGET/config.toml'"
 check "interactive tables are dropped" bash -c "! grep -Eq '^\[+\\s*(hooks|projects|experimental_table)(\\.|\\]|\\s)' '$TARGET/config.toml'"
 check "dropped values are absent" bash -c "! grep -q 'DROP-' '$TARGET/config.toml'"
-EXPECTED_CATALOG=$(TARGET="$(cd "$TARGET" && pwd -P)/models.json" node -e 'console.log(`model_catalog_json = ${JSON.stringify(process.env.TARGET)}`)')
+EXPECTED_CATALOG=$(TARGET="$(winpath "$(cd "$TARGET" && pwd -P)")/models.json" node -e 'console.log(`model_catalog_json = ${JSON.stringify(process.env.TARGET)}`)')
 check "model catalog points into worker home" grep -Fq "$EXPECTED_CATALOG" "$TARGET/config.toml"
 check "models.json is copied" cmp -s "$SOURCE/models.json" "$TARGET/models.json"
 check "AGENTS.md is copied" cmp -s "$SOURCE/AGENTS.md" "$TARGET/AGENTS.md"
@@ -111,7 +119,11 @@ check "source sessions are not copied" test ! -e "$TARGET/sessions/2026"
 check "hooks.json is not copied" test ! -e "$TARGET/hooks.json"
 check "history is not copied" test ! -e "$TARGET/history.jsonl"
 check "sqlite state is not copied" test ! -e "$TARGET/state.sqlite"
-CONFIG="$TARGET/config.toml" check "config permission is 600" node -e 'const fs=require("fs");process.exit((fs.statSync(process.env.CONFIG).mode & 0o777) === 0o600 ? 0 : 1)'
+if is_windows; then
+  echo "SKIP config permission is 600 (Windows chmod semantics)"
+else
+  CONFIG="$TARGET/config.toml" check "config permission is 600" node -e 'const fs=require("fs");process.exit((fs.statSync(process.env.CONFIG).mode & 0o777) === 0o600 ? 0 : 1)'
+fi
 check "stdout lists dropped key names" bash -c "grep -Fq 'approvals_reviewer' '$WORK/run1.out' && grep -Fq 'status_line_secondary' '$WORK/run1.out'"
 check "stdout lists dropped table names" bash -c "grep -Fq 'hooks' '$WORK/run1.out' && grep -Fq 'projects' '$WORK/run1.out'"
 check "stdout does not expose config values" bash -c "! grep -Eq 'FAKE-SECRET|DROP-' '$WORK/run1.out'"
@@ -131,7 +143,11 @@ expect_rc "setup after mutation succeeds" 0 "$RUN_RC"
 check "changed config is restored" cmp -s "$WORK/config-first.toml" "$TARGET/config.toml"
 check "changed config is backed up" bash -c "grep -Fq '# local mutation for backup test' '$TARGET'/config.toml.bak-*"
 check "third run output does not expose config values" bash -c "! grep -Eq 'FAKE-SECRET|DROP-' '$WORK/run3.out' '$WORK/run3.err'"
-CONFIG="$TARGET/config.toml" check "restored config permission is 600" node -e 'const fs=require("fs");process.exit((fs.statSync(process.env.CONFIG).mode & 0o777) === 0o600 ? 0 : 1)'
+if is_windows; then
+  echo "SKIP restored config permission is 600 (Windows chmod semantics)"
+else
+  CONFIG="$TARGET/config.toml" check "restored config permission is 600" node -e 'const fs=require("fs");process.exit((fs.statSync(process.env.CONFIG).mode & 0o777) === 0o600 ? 0 : 1)'
+fi
 
 echo
 echo "PASS=$PASS FAIL=$FAIL"

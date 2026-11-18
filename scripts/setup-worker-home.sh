@@ -10,6 +10,8 @@ set -u
 
 die() { echo "setup-worker-home: $*" >&2; exit 64; }
 
+winpath() { if command -v cygpath >/dev/null; then cygpath -m "$1"; else echo "$1"; fi; }
+
 FROM="${HOME:-}/.codex"
 TO="${CODEX_WORKER_HOME:-${HOME:-}/.codex-worker}"
 while [ $# -gt 0 ]; do
@@ -39,7 +41,7 @@ TMP_CONFIG="$TO/.config.toml.$$"
 SOURCE_CONFIG="$FROM/config.toml"
 TARGET_CONFIG="$TO/config.toml"
 DROPPED=""
-if ! DROPPED=$(FROM_HOME="$FROM" TO_HOME="$TO" node -e '
+if ! DROPPED=$(FROM_HOME="$(winpath "$FROM")" TO_HOME="$(winpath "$TO")" USER_HOME="$(winpath "${HOME:-}")" node -e '
   const fs = require("fs");
   const path = require("path");
   const source = process.argv[1], output = process.argv[2];
@@ -96,7 +98,7 @@ if ! DROPPED=$(FROM_HOME="$FROM" TO_HOME="$TO" node -e '
       absolute = path.resolve(from);
     } else if (value.startsWith("~/")) {
       const suffix = value.slice(2);
-      const home = process.env.HOME || "";
+      const home = process.env.USER_HOME || "";
       const viaHome = home ? path.resolve(home, suffix) : path.resolve(value);
       const viaSource = path.resolve(from, suffix.replace(/^\.codex(?:\/|$)/, ""));
       const inside = candidate => {
@@ -109,7 +111,9 @@ if ! DROPPED=$(FROM_HOME="$FROM" TO_HOME="$TO" node -e '
     }
     const relative = path.relative(from, absolute);
     if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return line;
-    return `model_catalog_json = ${JSON.stringify(path.join(path.resolve(process.env.TO_HOME), relative))}`;
+    let catalog = path.join(path.resolve(process.env.TO_HOME), relative);
+    if (process.platform === "win32") catalog = catalog.replace(/\\/g, "/");
+    return `model_catalog_json = ${JSON.stringify(catalog)}`;
   };
 
   let text;
@@ -142,7 +146,7 @@ if ! DROPPED=$(FROM_HOME="$FROM" TO_HOME="$TO" node -e '
   try { fs.writeFileSync(output, out.join("")); }
   catch (err) { console.error("cannot write generated config.toml: " + err.message); process.exit(1); }
   if (dropped.length) console.log(dropped.join("\n"));
-' "$SOURCE_CONFIG" "$TMP_CONFIG"); then
+' "$(winpath "$SOURCE_CONFIG")" "$(winpath "$TMP_CONFIG")"); then
   rm -f "$TMP_CONFIG"
   die "could not generate worker config.toml"
 fi
