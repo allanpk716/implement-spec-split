@@ -13,8 +13,16 @@ A subagent spawned by the Orchestrator inside the Claude Code session, with its 
 _Avoid_: native subagent, Claude subagent
 
 **External worker**:
-A separate coding-agent CLI process (codex or pi, running GLM) that the Orchestrator launches outside the session to do one role's work; it shares no conversation with the Orchestrator.
+A separate coding-agent CLI process, a Worker harness running a Worker model, that the Orchestrator launches outside the session to do one role's work; it shares no conversation with the Orchestrator.
 _Avoid_: delegate, GLM subagent, headless subagent
+
+**Worker harness**:
+The coding-agent CLI program an External worker runs in (codex or pi); it decides how progress is observed, how a stopped worker is Resumed and how its processes are killed, independent of which model it talks to.
+_Avoid_: codex worker / pi worker when the model matters, agent CLI
+
+**Worker model**:
+The model an External worker's harness talks to (GLM-5.3 today); chosen separately from the harness, so one harness can serve different models and one model can run under different harnesses.
+_Avoid_: implement model, backend model
 
 **Implement backend**:
 Which kind of executor runs the implementing roles for a run: an In-session subagent on the agent model (`agent` backend; `sonnet` is the legacy alias for it with the model pinned to sonnet), or an External worker on GLM (`codex` / `pi`).

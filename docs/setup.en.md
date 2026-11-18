@@ -190,6 +190,8 @@ This makes `codex exec` do work with GLM. Both Stage 1's `--impl codex` and Stag
    max_concurrent_threads_per_session = 3
    ```
 
+7. **Generate a separate worker home (recommended)**: once `~/.codex/config.toml` is set up as above, run `scripts/setup-worker-home.sh`. It creates `~/.codex-worker/` with only the provider, MCP, and `[agents]` settings, without hooks, projects, or interactive settings. From then on the worker reads only that directory, so you can change your interactive codex freely (for example, switch it to an OpenAI subscription) without affecting the worker. Re-run it after changing worker-relevant parts of `~/.codex/config.toml` (idempotent; it backs up a changed config first). Set `CODEX_WORKER_HOME` to use a different location. Without a worker home the wrapper falls back to `~/.codex` with a warning.
+
 **Verify**
 
 ```bash

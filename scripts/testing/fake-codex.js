@@ -9,6 +9,9 @@ if (process.env.FAKE_CODEX_ARGS_LOG) {
 if (process.env.FAKE_CODEX_PID_LOG) {
   fs.appendFileSync(process.env.FAKE_CODEX_PID_LOG, process.pid + "\n");
 }
+if (process.env.FAKE_CODEX_HOME_LOG) {
+  fs.appendFileSync(process.env.FAKE_CODEX_HOME_LOG, (process.env.CODEX_HOME || "") + "\n");
+}
 
 let output = "";
 for (let i = 0; i < args.length; i++) if (args[i] === "-o" && args[i + 1]) output = args[++i];

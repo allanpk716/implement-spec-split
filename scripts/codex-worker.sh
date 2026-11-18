@@ -22,8 +22,10 @@
 # --resume continues the same codex thread in the same worktree and run dir. It rejects
 # --cwd, --brief, --model, --skill, --thinking, --add-dir and --mcp, loads resume.json, and
 # refuses unless the saved session_id is non-empty and a rollout filename containing it
-# exists under ${CODEX_HOME:-$HOME/.codex}/sessions. A Resume gets new Time limit, Idle
-# timeout and retry budgets; attempt numbering and new_commits continue from segment one.
+# exists under the recorded codex home's sessions directory. Resume uses resume.json's
+# codex_home even when CODEX_WORKER_HOME changes; old state without that field follows the
+# fresh-run home resolution order. A Resume gets new Time limit, Idle timeout and retry
+# budgets; attempt numbering and new_commits continue from segment one.
 #
 # --read-only is codex-worker-only. The wrapper records a workspace fingerprint before
 # segment one, prefixes every attempt prompt with a read-only instruction, and compares a
@@ -33,7 +35,7 @@
 # segment's baseline fingerprint, and rejects another --read-only like other fresh-run-only
 # arguments.
 #
-# --mcp controls the MCP services defined in ${CODEX_HOME:-$HOME/.codex}/config.toml.
+# --mcp controls the MCP services defined in the worker home's config.toml.
 # Without it every service is disabled with mcp_servers.<name>.enabled=false (services whose
 # names are not bare TOML keys stay enabled and are warned about in stderr.log). --mcp all
 # keeps the configured behavior; named selections keep only those services. Resume reuses the
@@ -47,7 +49,7 @@
 # pid and process start identity, so progress.sh cannot mistake a recycled pid for this
 # worker); watch.json (live
 # watchdog state); and sessions/ for pi-worker run-dir compatibility (codex's authoritative
-# rollout stays under CODEX_HOME).
+# rollout stays under its home directory).
 #
 # Exit codes: 0 ok | 2 auth | 3 quota (documented for contract compatibility; codex
 # event classification never distinguishes quota from 429) | 4 transient, retries used
@@ -78,10 +80,16 @@
 # CODEX_WORKER_PREFLIGHT configures the TCP preflight, in priority order:
 # "off" skips it; "<host>:<port>" probes that explicit address; otherwise the target is
 # derived from CODEX_WORKER_BASE_URL or the custom provider base_url in
-# ${CODEX_HOME:-$HOME/.codex}/config.toml. A derived target is probed only when its host
+# the worker home's config.toml. A derived target is probed only when its host
 # is a loopback address (127.0.0.1, localhost, ::1, or another 127.* address), with the
 # URL scheme supplying port 80 for http and 443 for https when no port is present.
 # CODEX_WORKER_SKIP_PREFLIGHT=1 is the legacy alias for CODEX_WORKER_PREFLIGHT=off.
+#
+# Worker home resolution happens once: explicitly set CODEX_WORKER_HOME must exist;
+# otherwise $HOME/.codex-worker is preferred, and only when it is absent does the wrapper
+# fall back to ${CODEX_HOME:-$HOME/.codex} with a setup warning. Fresh state records the
+# absolute home as resume.json's codex_home, and codex itself always receives that home in
+# CODEX_HOME.
 #
 # Test hooks: CODEX_WORKER_CODEX swaps the codex executable; CODEX_WORKER_BASE_URL swaps
 # the provider endpoint; CODEX_WORKER_POLL overrides the watchdog interval. TEST ONLY:
@@ -192,7 +200,7 @@ run_codex() {
   ATTEMPT_START=$(date +%s); LAST_PROGRESS_AT=$ATTEMPT_START; PROGRESS_LINES=0
   local cmd_args=("${ARGS[@]}") now progress waiting thread idle_for
   if [ "$USE_THREAD" = true ] && [ -n "$SESSION_ID" ]; then cmd_args+=(resume "$SESSION_ID" -); else cmd_args+=(-); fi
-  (cd "$CWD" && exec "$CODEX_BIN" exec "${cmd_args[@]}" < "$PROMPT_FILE" > "$ATTEMPT_EVENTS" 2>>"$STDERR") &
+  (cd "$CWD" && CODEX_HOME="$CODEX_HOME_FOR_CODEX" exec "$CODEX_BIN" exec "${cmd_args[@]}" < "$PROMPT_FILE" > "$ATTEMPT_EVENTS" 2>>"$STDERR") &
   CODEX_PID=$!
   while kill -0 "$CODEX_PID" 2>/dev/null; do
     sleep "$POLL"; now=$(date +%s)
@@ -380,7 +388,7 @@ command -v "$CODEX_BIN" >/dev/null || die "codex not found on PATH (CODEX_WORKER
 winpath() { if command -v cygpath >/dev/null; then cygpath -m "$1"; else echo "$1"; fi; }
 
 configured_mcp_servers() {
-  CODEX_CONFIG="$(winpath "${CODEX_HOME:-$HOME/.codex}/config.toml")" node -e '
+  CODEX_CONFIG="$(winpath "$WORKER_HOME/config.toml")" node -e '
     const fs = require("fs");
     let text;
     try { text = fs.readFileSync(process.env.CODEX_CONFIG, "utf8"); }
@@ -531,12 +539,40 @@ STATE_FILE="$RUN_DIR/resume.json"
 POLL="${CODEX_WORKER_POLL:-5}"
 [[ "$POLL" =~ ^[1-9][0-9]*$ ]] || die "CODEX_WORKER_POLL must be a positive integer"
 
+absolute_home() {
+  node -e 'console.log(require("path").resolve(process.argv[1]))' "$1"
+}
+
+resolve_worker_home() {
+  if [ "${CODEX_WORKER_HOME+set}" = set ]; then
+    [ -n "$CODEX_WORKER_HOME" ] || die "CODEX_WORKER_HOME must not be empty"
+    [ -d "$CODEX_WORKER_HOME" ] || die "CODEX_WORKER_HOME directory does not exist: $CODEX_WORKER_HOME"
+    WORKER_HOME=$(absolute_home "$CODEX_WORKER_HOME")
+    return
+  fi
+  if [ -d "$HOME/.codex-worker" ]; then
+    WORKER_HOME=$(absolute_home "$HOME/.codex-worker")
+    return
+  fi
+  WORKER_HOME=$(absolute_home "${CODEX_HOME:-$HOME/.codex}")
+  WORKER_HOME_WARNING="no worker home found; falling back to the legacy CODEX_HOME. Run scripts/setup-worker-home.sh to create a worker home."
+}
+
+emit_worker_home_warning() {
+  [ -n "$WORKER_HOME_WARNING" ] || return 0
+  echo "codex-worker: warning: $WORKER_HOME_WARNING" >&2
+  if [ -w "$STDERR" ]; then
+    echo "codex-worker: warning: $WORKER_HOME_WARNING" >> "$STDERR"
+  fi
+}
+
 write_state() {
   local skills_nl="" add_nl="" s
   for s in ${SKILLS[@]+"${SKILLS[@]}"}; do skills_nl+="$(winpath "$s")"$'\n'; done
   for s in ${ADD_DIRS[@]+"${ADD_DIRS[@]}"}; do add_nl+="$(winpath "$s")"$'\n'; done
   RUN_DIR_W="$(winpath "$RUN_DIR")" CWD_W="$(winpath "$CWD")" MODEL="$MODEL" THINKING="$THINKING" \
   SESSION_ID="$SESSION_ID" BASE_HEAD="$BASE_HEAD" SEGMENTS="$SEGMENTS" ATTEMPTS="$ATTEMPT" \
+  CODEX_HOME_W="$(winpath "$WORKER_HOME")" \
   READ_ONLY="$READ_ONLY" \
   MCP="$MCP" \
   SKILLS_NL="$skills_nl" ADD_NL="$add_nl" \
@@ -548,12 +584,18 @@ write_state() {
       thinking: e.THINKING || "", add_dirs: (e.ADD_NL || "").split("\n").filter(Boolean),
       session_id: e.SESSION_ID, base_head: e.BASE_HEAD || "", segments: +e.SEGMENTS,
       attempts: +e.ATTEMPTS,
+      codex_home: e.CODEX_HOME_W,
       read_only: e.READ_ONLY === "true",
       mcp: e.MCP || "",
     };
     require("fs").writeFileSync(e.RUN_DIR_W + "/resume.json", JSON.stringify(s, null, 2) + "\n");
   '
 }
+
+WORKER_HOME=""
+WORKER_HOME_WARNING=""
+CODEX_HOME_FOR_CODEX=""
+if ! $RESUME; then resolve_worker_home; fi
 
 if $RESUME; then
   STATE_OUT=$(node -e '
@@ -584,6 +626,14 @@ if $RESUME; then
       if (typeof s.mcp !== "string") { console.error("resume.json: mcp must be a string"); process.exit(1); }
       mcp = clean(s.mcp);
     }
+    let codexHome = "";
+    if ("codex_home" in s) {
+      if (typeof s.codex_home !== "string" || !s.codex_home.trim()) {
+        console.error("resume.json: codex_home must be a non-empty string");
+        process.exit(1);
+      }
+      codexHome = clean(s.codex_home);
+    }
     const out = [
       "cwd\t" + str(s.cwd, "cwd"), "model\t" + str(s.model, "model"),
       "thinking\t" + str(s.thinking, "thinking"), "session_id\t" + str(s.session_id, "session_id"),
@@ -591,6 +641,7 @@ if $RESUME; then
       "attempts\t" + int(s.attempts, "attempts", 0),
       "read_only\t" + (readOnly ? "true" : "false"),
       "mcp\t" + mcp,
+      "codex_home\t" + codexHome,
     ];
     for (const sk of s.skills) out.push("skill\t" + str(sk, "skills[]"));
     for (const ad of s.add_dirs) out.push("add\t" + str(ad, "add_dirs[]"));
@@ -604,6 +655,7 @@ if $RESUME; then
       segments) SEGMENTS="$v" ;; attempts) ATTEMPT="$v" ;;
       read_only) READ_ONLY="$v" ;;
       mcp) MCP="$v" ;;
+      codex_home) WORKER_HOME="$v" ;;
       skill) [ -n "$v" ] && SKILLS+=("$v") ;; add) [ -n "$v" ] && ADD_DIRS+=("$v") ;;
     esac
   done <<< "$STATE_OUT"
@@ -621,7 +673,14 @@ if $RESUME; then
       if (!object(value) || typeof value.head !== "string" || !object(value.tracked) || !object(value.untracked)) process.exit(1);
     ' || die "read-only baseline fingerprint missing or invalid"
   fi
-  SESSIONS_DIR="${CODEX_HOME:-$HOME/.codex}/sessions"
+  if [ -n "$WORKER_HOME" ]; then
+    [ -d "$WORKER_HOME" ] || die "--resume: saved codex_home directory does not exist: $WORKER_HOME"
+  else
+    resolve_worker_home
+  fi
+  CODEX_HOME_FOR_CODEX="$(winpath "$WORKER_HOME")"
+  emit_worker_home_warning
+  SESSIONS_DIR="$WORKER_HOME/sessions"
   ROLLOUT_FOUND=$(node -e '
     const fs = require("fs"), path = require("path");
     const root = process.argv[1], id = process.argv[2];
@@ -646,7 +705,9 @@ else
   BASE_HEAD=$(git -C "$CWD" rev-parse HEAD 2>/dev/null || echo "")
   if $READ_ONLY; then workspace_fingerprint "$CWD" "$RUN_DIR/fingerprint-start.json" || die "--read-only: could not fingerprint $CWD"; fi
   SEGMENTS=1; ATTEMPT=0
+  CODEX_HOME_FOR_CODEX="$(winpath "$WORKER_HOME")"
   write_state
+  emit_worker_home_warning
 fi
 
 # Publish liveness only after usage, Resume state and rollout validation have passed.
@@ -772,7 +833,7 @@ elif [ -n "$BASE_URL" ]; then
     console.log([loopback ? "target" : "skip", host, String(port)].join("\t"));
   ' "$BASE_URL") || die "CODEX_WORKER_BASE_URL is not a valid URL"
 else
-  PREFLIGHT_RESULT=$(CODEX_CONFIG="$(winpath "${CODEX_HOME:-$HOME/.codex}/config.toml")" node -e '
+  PREFLIGHT_RESULT=$(CODEX_CONFIG="$(winpath "$WORKER_HOME/config.toml")" node -e '
     const fs = require("fs");
     let text;
     try { text = fs.readFileSync(process.env.CODEX_CONFIG, "utf8"); }

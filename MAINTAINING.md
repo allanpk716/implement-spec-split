@@ -30,7 +30,9 @@
      - 沙箱拦 worktree commit：改用 `--dangerously-bypass-approvals-and-sandbox`，和 pi 一样无沙箱（E1、E8，约束 2）；
      - 依赖模型端点：配置在 `~/.codex/config.toml`。wrapper 会从 `base_url` 推导预检地址，只探测本地回环端点（作者环境：Ferryman，`127.0.0.1:15722`）。
    - 换成 codex 的原因是**能看到进度**：pi 的 `-p` 模式外面看不出它在干什么，用户碰到过 worker 卡很久却没法判断。codex 的 `--json` 每个命令、改动、说明都有事件，`progress.sh` 能直接展示。
-   - pi 后端保留，等 codex 后端用过一段时间再决定删不删。pi 不在智谱公布的 Coding Plan 支持工具名单里，有被风控的可能，用户已经知道并接受。
+   - pi 后端保留，等 codex 后端用过一段时间再决定删不删。早先记录"pi 不在智谱 Coding Plan 支持工具名单里"已过时：2026-11-18 核实，中国区官方名单（<https://docs.bigmodel.cn/cn/coding-plan/tool/others>）同时列有 Codex 和 Pi Coding Agent，且都有官方接入页；Codex 页给出的正是我们用的 `open.bigmodel.cn/api/v1` + `wire_api = "responses"` 配置。条款没有逐字许可也没有禁止 `codex exec` 无头批量调用，主要风险是并发引起的 1302 限流。
+   - **2026-11-18 决定：订阅 OpenAI 官方 Codex 套餐后，Worker harness 仍是 codex，Worker model 仍固定 GLM。** 订阅只用于用户自己交互。不换 harness 的原因：`codex-worker.sh` 每次显式传 `-m` 和 `-c model_provider=custom`，GLM key 在 custom provider 里，ChatGPT 登录写的是 `auth.json`，两者不冲突；换成别的 harness 要重新解决进度可见、Resume、杀进程树这些问题，还要重写 wrapper 和自测。评估 harness 的标准固定为五条：外部能看到进度、能 Resume 原会话、能连子进程一起杀干净（含 Windows）、在智谱支持名单内、会读 CLAUDE.md 和技能文件。
+   - 同一天起 worker 用独立的 home（`CODEX_WORKER_HOME`，默认 `~/.codex-worker/`，由 `scripts/setup-worker-home.sh` 从 `~/.codex` 生成，不带 hooks、projects 和交互设置）。原因：订阅后用户会经常改交互那边的顶层模型、MCP 和 hooks，共用 `~/.codex` 会把这些改动漏进 worker，几百个 worker 会话也会混进交互历史。没有 worker home 时回退 `~/.codex` 并警告，所以别的机器不用马上改。`resume.json` 记下所用的 home，Resume 只用存档里的那个；切换前存下的老存档续不上，这个代价可以接受。
 10. **pi 的 JSON 模式出错时退出码也是 0。**
     - `pi-worker.sh` 不看退出码，而是看事件流里最后一条 assistant 消息的 `stopReason`。
     - 再根据 `errorMessage` 判断错误类型：auth、quota、transient 或 error。
@@ -186,6 +188,7 @@
   - L1、V3：真 GLM，要求配置的模型端点可用（作者环境：Ferryman）。V3 会跑 tdd 小 ticket、Resume，以及 2 个 worker 并发。
 
   改了 `codex-worker.sh` 或 `progress.sh`，或者升级了 codex，都要把 V1、V2、V3 全部重跑一遍。用 `--impl codex` 跑技能时，第 0 步会跑 L1。
+- **codex worker home 生成**：`bash scripts/test-setup-worker-home.sh`。用临时目录里的假源 home 测配置键/表过滤、`model_catalog_json` 改写、文件复制、权限、幂等备份和输出不泄漏配置值，不访问网络、不碰真实 `~/.codex`。
 - **L1 连通性（pi）**：`scripts/selftest.sh --only L1`。用 `--impl pi` 跑技能时，第 0 步也会执行这个检查。
 - **L2 wrapper（pi）**：`scripts/selftest.sh`。它会在 `~/.cache/implement-spec-split-selftest/` 下建一个临时仓库和 worktree，让 pi 用 tdd 技能实现一个很小的 ticket，然后检查这几件事：
   - 有新 commit，工作区是干净的，测试我们自己重跑能通过；

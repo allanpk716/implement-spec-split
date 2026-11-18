@@ -189,6 +189,8 @@ ln -s ~/.claude/skills/implement-spec-split/find-next ~/.claude/skills/find-next
    max_concurrent_threads_per_session = 3
    ```
 
+7. **生成独立的 worker home（推荐）**：上面几步配好 `~/.codex/config.toml` 后，运行 `scripts/setup-worker-home.sh`，它会生成 `~/.codex-worker/`，只带 provider、MCP 和 `[agents]`，不带 hooks、projects 和交互设置。之后 worker 只读这个目录，你交互用的 codex 可以随意改配置（比如切到 OpenAI 订阅），不会影响 worker。改了 `~/.codex/config.toml` 里 worker 相关的部分要重跑一次（幂等，内容变了会先备份）。想放到别处就设 `CODEX_WORKER_HOME`。没有 worker home 时 wrapper 退回 `~/.codex` 并警告。
+
 **验证**
 
 ```bash

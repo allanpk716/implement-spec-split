@@ -17,7 +17,7 @@ export ISS_WORKER_SLOT_POLL=0.02
 export CODEX_WORKER_CODEX="$FAKE"
 export CODEX_WORKER_SKIP_PREFLIGHT=1
 export CODEX_WORKER_POLL=1
-export CODEX_HOME="$TEST_ROOT/codex-home"
+export CODEX_WORKER_HOME="$TEST_ROOT/codex-home"
 export FAKE_CODEX_SCENARIO=slot-hold
 
 PASS=0
@@ -672,7 +672,7 @@ printf 'hello\n' > "$WORK_REPO/a.txt"
 git -C "$WORK_REPO" add a.txt
 git -C "$WORK_REPO" commit -qm init
 printf 'Say hello.\n' > "$TEST_ROOT/worker-brief.md"
-mkdir -p "$CODEX_HOME/sessions"
+mkdir -p "$CODEX_WORKER_HOME/sessions"
 
 echo "worker limit configuration"
 unset ISS_MAX_WORKERS

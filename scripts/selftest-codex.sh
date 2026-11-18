@@ -109,8 +109,8 @@ write_config() {
 
 if [ -z "$ONLY" ] || [ "$ONLY" = V1 ]; then
   echo "V1 fake codex"
-  CODEX_HOME="$ROOT/v1-home"; mkdir -p "$CODEX_HOME/sessions" "$ROOT/v1"
-  cat > "$CODEX_HOME/config.toml" <<'EOF'
+  CODEX_WORKER_HOME="$ROOT/v1-home"; mkdir -p "$CODEX_WORKER_HOME/sessions" "$ROOT/v1"
+  cat > "$CODEX_WORKER_HOME/config.toml" <<'EOF'
 [model_providers.custom]
 name = "custom"
 base_url = "https://api.example.invalid/v1"
@@ -130,13 +130,17 @@ command = "gamma"
 [mcp_servers."unsafe service"]
 command = "unsafe"
 EOF
-  export CODEX_HOME CODEX_WORKER_CODEX="$FAKE" CODEX_WORKER_SKIP_PREFLIGHT=1 CODEX_WORKER_POLL=1
+  export CODEX_WORKER_HOME CODEX_WORKER_CODEX="$FAKE" CODEX_WORKER_SKIP_PREFLIGHT=1 CODEX_WORKER_POLL=1
   export FAKE_CODEX_PID_LOG="$ROOT/fake-pids.log"
+  export FAKE_CODEX_HOME_LOG="$ROOT/fake-codex-homes.log"
   BRIEF="$ROOT/brief.md"
   run_case() {
     local name="$1" scenario="$2" run="$ROOT/$3"; shift 3
     FAKE_CODEX_SCENARIO="$scenario" "$WORKER" --cwd "$ROOT/v1" --brief "$BRIEF" --run-dir "$run" --model "$MODEL" --retries 0 --time-limit 120 --idle-timeout 20 "$@" >/dev/null
     CASE_EXIT=$?
+  }
+  codex_home_for_platform() {
+    if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s\n' "$1"; fi
   }
 
   run_case ok ok ok-run --idle-timeout 20
@@ -145,6 +149,38 @@ EOF
   check "ok session id" test "$(json "$ROOT/ok-run/status.json" session_id)" != ""
   check "ok progress finished" bash -c "'$PROGRESS' '$ROOT/ok-run' | grep -q '^state: finished: ok' && '$PROGRESS' '$ROOT/ok-run' | grep -q 'npm test'"
   check "ok progress unwraps command and prints it once" bash -c "test \"\$('$PROGRESS' '$ROOT/ok-run' 20 | grep -Fc '\$ npm test  -> exit 0')\" -eq 1"
+
+  check "codex child uses CODEX_WORKER_HOME" test "$(tail -n 1 "$ROOT/fake-codex-homes.log")" = "$(codex_home_for_platform "$CODEX_WORKER_HOME")"
+  check "resume state records codex home" test "$(json "$ROOT/ok-run/resume.json" codex_home)" = "$(codex_home_for_platform "$CODEX_WORKER_HOME")"
+
+  env CODEX_WORKER_HOME="$ROOT/missing-worker-home" FAKE_CODEX_HOME_LOG="$ROOT/missing-worker-home.log" \
+    "$WORKER" --cwd "$ROOT/v1" --brief "$BRIEF" --run-dir "$ROOT/missing-worker-run" \
+    --model "$MODEL" --retries 0 --time-limit 120 --idle-timeout 20 >/dev/null 2>"$ROOT/missing-worker.err"
+  MISSING_HOME_EXIT=$?
+  check "missing CODEX_WORKER_HOME exits nonzero" test "$MISSING_HOME_EXIT" -ne 0
+  check "missing CODEX_WORKER_HOME does not start codex" bash -c "! test -s '$ROOT/missing-worker-home.log' && ! test -e '$ROOT/missing-worker-run/fake-codex-args.jsonl'"
+
+  FALLBACK_HOME="$ROOT/fallback-shell-home"; LEGACY_HOME="$FALLBACK_HOME/.codex"
+  mkdir -p "$FALLBACK_HOME" "$LEGACY_HOME"
+  env -u CODEX_WORKER_HOME HOME="$FALLBACK_HOME" CODEX_HOME="$LEGACY_HOME" \
+    FAKE_CODEX_HOME_LOG="$ROOT/fallback-codex-home.log" FAKE_CODEX_SCENARIO=ok \
+    "$WORKER" --cwd "$ROOT/v1" --brief "$BRIEF" --run-dir "$ROOT/fallback-home-run" \
+    --model "$MODEL" --retries 0 --time-limit 120 --idle-timeout 20 >/dev/null 2>"$ROOT/fallback-home.err"
+  FALLBACK_EXIT=$?
+  check "legacy CODEX_HOME fallback succeeds" test "$FALLBACK_EXIT" -eq 0
+  check "legacy fallback is passed to codex" test "$(cat "$ROOT/fallback-codex-home.log")" = "$(codex_home_for_platform "$LEGACY_HOME")"
+  check "legacy fallback warns on stderr" grep -Fq "scripts/setup-worker-home.sh" "$ROOT/fallback-home.err"
+  check "legacy fallback warns in stderr.log" grep -Fq "scripts/setup-worker-home.sh" "$ROOT/fallback-home-run/stderr.log"
+
+  DEFAULT_HOME="$ROOT/default-shell-home"; DECOY_LEGACY="$DEFAULT_HOME/.codex"; ACTUAL_WORKER_HOME="$DEFAULT_HOME/.codex-worker"
+  mkdir -p "$DEFAULT_HOME" "$DECOY_LEGACY" "$ACTUAL_WORKER_HOME/sessions"
+  env -u CODEX_WORKER_HOME HOME="$DEFAULT_HOME" CODEX_HOME="$DECOY_LEGACY" \
+    FAKE_CODEX_HOME_LOG="$ROOT/default-worker-codex-home.log" FAKE_CODEX_SCENARIO=ok \
+    "$WORKER" --cwd "$ROOT/v1" --brief "$BRIEF" --run-dir "$ROOT/default-worker-run" \
+    --model "$MODEL" --retries 0 --time-limit 120 --idle-timeout 20 >/dev/null 2>"$ROOT/default-worker.err"
+  DEFAULT_HOME_EXIT=$?
+  check "existing worker home wins CODEX_HOME" test "$DEFAULT_HOME_EXIT" -eq 0 -a "$(cat "$ROOT/default-worker-codex-home.log")" = "$(codex_home_for_platform "$ACTUAL_WORKER_HOME")"
+  check "existing worker home is recorded" test "$(json "$ROOT/default-worker-run/resume.json" codex_home)" = "$(codex_home_for_platform "$ACTUAL_WORKER_HOME")"
 
   assert_mcp_args() {
     local file="$1" want="$2"
@@ -195,7 +231,7 @@ EOF
   }
   preflight_case() {
     local name="$1" home="$2"; shift 2
-    env FAKE_CODEX_SCENARIO=ok CODEX_WORKER_SKIP_PREFLIGHT=0 CODEX_HOME="$home" "$@" \
+    env FAKE_CODEX_SCENARIO=ok CODEX_WORKER_SKIP_PREFLIGHT=0 CODEX_WORKER_HOME="$home" "$@" \
       "$WORKER" --cwd "$ROOT/v1" --brief "$BRIEF" --run-dir "$ROOT/$name" --model "$MODEL" \
       --retries 0 --time-limit 120 --idle-timeout 20 >/dev/null
     P_EXIT=$?
@@ -229,7 +265,7 @@ EOF
   preflight_case p7-invalid "$P7_HOME" CODEX_WORKER_PREFLIGHT=nonsense
   check "P7 invalid explicit address exits usage error (got $P_EXIT)" test "$P_EXIT" -eq 64
   P8_HOME="$ROOT/p8-home"; mkdir -p "$P8_HOME"
-  env -u CODEX_WORKER_PREFLIGHT -u CODEX_WORKER_SKIP_PREFLIGHT CODEX_HOME="$P8_HOME" \
+  env -u CODEX_WORKER_PREFLIGHT -u CODEX_WORKER_SKIP_PREFLIGHT CODEX_WORKER_HOME="$P8_HOME" \
     FAKE_CODEX_SCENARIO=ok "$WORKER" --cwd "$ROOT/v1" --brief "$BRIEF" --run-dir "$ROOT/p8-no-config" \
     --model "$MODEL" --retries 0 --time-limit 120 --idle-timeout 20 >/dev/null
   P_EXIT=$?
@@ -269,9 +305,15 @@ EOF
   FAKE_CODEX_SCENARIO=busy-forever "$WORKER" --cwd "$ROOT/v1" --brief "$BRIEF" --run-dir "$ROOT/time-run" --model "$MODEL" --retries 0 --time-limit 6 --idle-timeout 20 >/dev/null
   TR=$?; check "busy run hits Time limit (exit $TR)" test "$TR" -eq 5
   OLD_SESSION=$(json "$ROOT/time-run/status.json" session_id)
-  FAKE_CODEX_ARGS_LOG="$ROOT/resume-args.jsonl" FAKE_CODEX_SCENARIO=ok "$WORKER" --resume --run-dir "$ROOT/time-run" --retries 0 --time-limit 30 --idle-timeout 20 >/dev/null
+  RESUME_SAVED_HOME=$(codex_home_for_platform "$CODEX_WORKER_HOME")
+  ALTERNATE_WORKER_HOME="$ROOT/alternate-worker-home"; mkdir -p "$ALTERNATE_WORKER_HOME/sessions"
+  CODEX_WORKER_HOME="$ALTERNATE_WORKER_HOME" FAKE_CODEX_HOME_LOG="$ROOT/resume-codex-home.log" \
+    FAKE_CODEX_ARGS_LOG="$ROOT/resume-args.jsonl" FAKE_CODEX_SCENARIO=ok \
+    "$WORKER" --resume --run-dir "$ROOT/time-run" --retries 0 --time-limit 30 --idle-timeout 20 >/dev/null
   RR=$?; check "resume exit code (got $RR)" test "$RR" -eq 0
   check "resume segments = 2" test "$(json "$ROOT/time-run/status.json" segments)" -eq 2
+  check "resume uses saved codex home" test "$(cat "$ROOT/resume-codex-home.log")" = "$RESUME_SAVED_HOME"
+  check "resume keeps saved codex home in state" test "$(json "$ROOT/time-run/resume.json" codex_home)" = "$RESUME_SAVED_HOME"
   RESUME_ID="$OLD_SESSION" node -e 'const a=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));const id=process.env.RESUME_ID,r=a.indexOf("resume");if(r<0||a[r+1]!==id||a.slice(r+2).join(" ")!=="-")process.exit(1);for(const f of ["--json","-m","-o","-C","--dangerously-bypass-approvals-and-sandbox","--disable"])if(a.indexOf(f)>r)process.exit(1)' "$ROOT/resume-args.jsonl"
   check "resume argv order and thread are valid" test $? -eq 0
   check "default resume prompt omits efficiency preamble" bash -c "! grep -q '^效率要求：' '$ROOT/time-run/prompt-2.md'"
@@ -389,6 +431,14 @@ EOF
   node -e 'const p=process.argv[1],f=require("fs");const id="11111111-2222-3333-4444-555555555555";f.writeFileSync(p+"/resume.json",JSON.stringify({cwd:p,model:"glm-5.3",skills:[],thinking:"",add_dirs:[],session_id:id,base_head:"",segments:1,attempts:1}))' "$LOST"
   FAKE_CODEX_ARGS_LOG="$ROOT/lost-args.jsonl" "$WORKER" --resume --run-dir "$LOST" >/dev/null 2>&1
   BR=$?; check "missing rollout exits 64 without codex" bash -c "test $BR -eq 64 && ! test -s '$ROOT/lost-args.jsonl'"
+  MISSING_SAVED_HOME="$ROOT/missing-saved-home"; mkdir -p "$MISSING_SAVED_HOME"
+  node -e 'const p=process.argv[1],f=require("fs");const id="11111111-2222-3333-4444-555555555555";f.writeFileSync(p+"/resume.json",JSON.stringify({cwd:p,model:"glm-5.3",skills:[],thinking:"",add_dirs:[],session_id:id,base_head:"",segments:1,attempts:1,codex_home:process.argv[2]},null,2))' "$LOST" "$MISSING_SAVED_HOME"
+  FAKE_CODEX_ARGS_LOG="$ROOT/missing-saved-args.jsonl" "$WORKER" --resume --run-dir "$LOST" >/dev/null 2>&1
+  MH=$?; check "missing saved codex home exits 64 without codex" bash -c "test $MH -eq 64 && ! test -s '$ROOT/missing-saved-args.jsonl'"
+  node -e 'const p=process.argv[1],f=require("fs");const s=JSON.parse(f.readFileSync(p+"/resume.json"));delete s.codex_home;f.writeFileSync(p+"/resume.json",JSON.stringify(s,null,2))' "$ROOT/ok-run"
+  FAKE_CODEX_HOME_LOG="$ROOT/legacy-resume-home.log" FAKE_CODEX_SCENARIO=ok "$WORKER" --resume --run-dir "$ROOT/ok-run" --retries 0 --time-limit 30 --idle-timeout 20 >/dev/null
+  LR=$?; check "legacy resume state without codex home succeeds" test "$LR" -eq 0
+  check "legacy resume records resolved codex home" test "$(json "$ROOT/ok-run/resume.json" codex_home)" = "$(codex_home_for_platform "$CODEX_WORKER_HOME")"
   node -e 'const p=process.argv[1],f=require("fs");const s=JSON.parse(f.readFileSync(p+"/resume.json"));s.session_id="11111111-2222-3333-4444-555555555555";f.writeFileSync(p+"/resume.json",JSON.stringify(s,null,2))' "$ROOT/ok-run"
   "$WORKER" --resume --run-dir "$ROOT/ok-run" >/dev/null 2>&1
   sleep 1
@@ -451,9 +501,9 @@ fi
 if [ -z "$ONLY" ] || [ "$ONLY" = V2 ]; then
   echo "V2 real codex + mock provider"
   V2_HOME="$ROOT/v2-home"; write_config "$V2_HOME" "http://127.0.0.1:1/v1"
-  V2_CODEX_HOME="$V2_HOME"
-  if command -v cygpath >/dev/null 2>&1; then V2_CODEX_HOME=$(cygpath -m "$V2_HOME"); fi
-  export CODEX_HOME="$V2_CODEX_HOME"
+  V2_WORKER_HOME="$V2_HOME"
+  if command -v cygpath >/dev/null 2>&1; then V2_WORKER_HOME=$(cygpath -m "$V2_HOME"); fi
+  export CODEX_WORKER_HOME="$V2_WORKER_HOME"
   PORT=$(node -e 'const n=require("net");const s=n.createServer();s.listen(0,"127.0.0.1",()=>{console.log(s.address().port);s.close()})')
   MOCK="$ROOT/mock"; mkdir -p "$MOCK"
   start_mock() {
