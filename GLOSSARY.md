@@ -118,6 +118,18 @@ _Avoid_: pre-claim, lease
 The file `~/.cache/implement-spec-split/launch/<owner>__<name>.json` where `launch-wave.sh --apply` records the chosen worker count, wave size, apart pairs, and (when the `agent` backend was chosen) backend and agent model for a repository; `--next-wave` reuses those judgments while recalculating the order. State files from before the agent backend have no backend field and keep behaving like `--impl codex`.
 _Avoid_: order cache (the order itself is recalculated)
 
+**Repo registry**:
+The repositories registered in Orca that have a GitHub remote; the Progress board reads it from Orca instead of keeping its own list, and a repository that leaves it is eligible for Board pruning.
+_Avoid_: project list, Launch state (that only covers find-next launches)
+
+**Progress board**:
+The read-only, this-machine-only view, mainly read on a phone, of every repository in the Repo registry that uses this pipeline: its maps, Specs and Tickets with their parent-child links and counts, where the next implement-spec-split wave would start, and the progress of Runs and External workers; it shows progress and never acts.
+_Avoid_: dashboard with controls, Orca status
+
+**Board pruning**:
+Deleting this machine's leftovers (Run directories, Launch state, board snapshots) of a repository that has left the Repo registry, or of Specs closed long ago; always listed first and done only on explicit confirmation.
+_Avoid_: cleanup of GitHub issues (pruning never touches GitHub)
+
 **Worker slot**:
 One of the machine-wide places an External worker wrapper must hold while its agent runs; wrappers beyond that queue instead of failing, because all Runs share one GLM quota. The count is `ISS_MAX_WORKERS` if set, else the file `~/.cache/implement-spec-split/max-workers` (written by `scripts/max-workers.sh`, which find-next calls with its `--workers`), else 4.
 
