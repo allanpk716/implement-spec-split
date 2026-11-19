@@ -1,6 +1,6 @@
 ---
 name: implement-spec-split
-description: Implement a spec and its tickets like implement-spec, but with split models - the implementing roles (exploration/implementer/merger/fix) run as in-session subagents on a chosen model (--impl agent, default sonnet, override with --agent-model sonnet|opus|haiku|fable), or on GLM through external codex/pi workers (--impl codex / --impl pi); the code-review subagents always run on a stronger model (Opus). Use when the user wants "Sonnet/GLM 开发 + 高阶模型 review", or invokes /implement-spec-split.
+description: Implement a spec and its tickets like implement-spec, but with split models - the implementing roles (exploration/implementer/merger/fix) run on GLM through external codex/pi workers (--impl codex / --impl pi) or as in-session subagents on a chosen model (--impl agent, --agent-model sonnet|opus|haiku|fable); without --impl the backend is picked per session (codex in an official-subscription session, agent in a GLM-driven one); the code-review subagents always run on a stronger model (Opus). Use when the user wants "Sonnet/GLM 开发 + 高阶模型 review", or invokes /implement-spec-split.
 disable-model-invocation: true
 ---
 
@@ -18,14 +18,14 @@ Terms (Orchestrator, In-session subagent, External worker, Implement backend, Br
 
 ## Config (edit here to change the policy)
 
-- `IMPLEMENT_BACKEND` = `sonnet` — who runs the implementing roles (exploration, implementer, merger, fix):
+- `IMPLEMENT_BACKEND` = `auto` — who runs the implementing roles (exploration, implementer, merger, fix). `auto` picks by session, once in step 0, when no `--impl` is given: `agent` if the environment has `DELEGATE_GUARD_DISABLE=1` (a GLM-driven Claude Code session such as `claude-glm`, whose own subagents already run on GLM), otherwise `codex` (an official-subscription session, whose subagents would spend the Claude quota). Check with `echo "$DELEGATE_GUARD_DISABLE"` and name the chosen backend in the final report. Before 2026-11-19 the default was `sonnet`, which silently ran every manually started Run (`/implement-spec-split <n>` without `--impl`) on subscription subagents.
   - `agent`: In-session subagents on the agent model (`--agent-model`, default `IMPLEMENT_MODEL`). Use this where the Agent tool's model names reach a non-Anthropic endpoint — e.g. in a GLM proxy environment, explicitly passing `model: opus` actually runs GLM-5.3.
-  - `sonnet`: compatibility alias for `agent` with the model pinned to `sonnet`. Kept so old commands and the default `IMPLEMENT_BACKEND = sonnet` keep working; `--impl sonnet --agent-model X` is an argument conflict (see below).
+  - `sonnet`: compatibility alias for `agent` with the model pinned to `sonnet`. Kept so old commands with `--impl sonnet` keep working; `--impl sonnet --agent-model X` is an argument conflict (see below).
   - `codex`: External workers, headless `codex exec` processes on `CODEX_MODEL` (see "External workers" below). The preferred External backend: its progress is visible live through `progress.sh`.
   - `pi`: External workers, headless `pi` processes on `GLM_MODEL`.
   - Override per run with an argument: `/implement-spec-split <spec> --impl agent --agent-model opus` (or `--impl codex`, `--impl pi`; legacy `--impl sonnet` = `--impl agent --agent-model sonnet`).
 - `IMPLEMENT_MODEL` = `sonnet` — default model for implementing roles when the backend is `agent`.
-- `--agent-model <sonnet|opus|haiku|fable>` — per-run model override for the `agent` backend only. It is an argument, not a Config value. Combined with `--impl codex` or `--impl pi` (including `--impl sonnet`, which already pins the model) it is an argument conflict: report the error and ask the user to either drop `--agent-model` or switch to `--impl agent`; do not silently ignore the flag.
+- `--agent-model <sonnet|opus|haiku|fable>` — per-run model override for the `agent` backend only. It is an argument, not a Config value. Given without `--impl`, it selects the `agent` backend (overriding `auto`). Combined with `--impl codex` or `--impl pi` (including `--impl sonnet`, which already pins the model) it is an argument conflict: report the error and ask the user to either drop `--agent-model` or switch to `--impl agent`; do not silently ignore the flag.
 - `CODEX_MODEL` = `glm-5.3` — model id for codex's `custom` provider in `~/.codex/config.toml`; the endpoint and key belong to the user's provider setup, never in this repo (author environment: Ferryman, `127.0.0.1:15722`).
 - `GLM_MODEL` = `glm/glm-5.3` — pi `provider/id`; the provider, key and model list live in `~/.pi/agent/models.json`, never in this repo.
 - `GLM_MAX_PARALLEL` = `2` — at most this many External workers at once. Override per run with an argument: `/implement-spec-split <spec> --impl codex --parallel 4`. The override replaces the default for that run only. It is per Run: parallel Runs on different Specs add up. Keep it small (2–3, at most 4 off-peak): Zhipu rate-limits during peak hours, and one quota/429 among the workers stops the whole run to ask the user.
