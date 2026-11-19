@@ -172,6 +172,8 @@ function main() {
     const homeDir = process.env.DELEGATE_GUARD_HOME || os.homedir();
     const log = makeLogger(homeDir);
     if (hasValidOverride(homeDir)) return;
+    // Sessions without a delegation budget (e.g. claude-glm) opt out entirely.
+    if (process.env.DELEGATE_GUARD_DISABLE === '1') return;
 
     const projectConfig = readProjectConfig(payload.cwd, log);
     if (projectConfig.enabled === false) return;

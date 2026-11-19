@@ -99,7 +99,8 @@ A spec is a parent GitHub issue. Its child issues are tickets, and dependencies 
 ```text
 /implement-spec-split                      # No argument: automatically list unfinished specs for you to choose
 /implement-spec-split #12                  # Specify a spec
-/implement-spec-split #12 --impl sonnet    # Implementing roles use Sonnet subagents (default)
+/implement-spec-split #12                  # No --impl: codex in an official-subscription session, agent in a GLM session (DELEGATE_GUARD_DISABLE=1)
+/implement-spec-split #12 --impl sonnet    # Implementing roles use Sonnet subagents
 /implement-spec-split #12 --impl codex     # Implementing roles use codex workers (requires Stage 2)
 /implement-spec-split #12 --impl codex --parallel 3
 ```

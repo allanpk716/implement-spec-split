@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>管线进度 · 卡片</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f2f2f7;
+      --card: #ffffff;
+      --ink: #111111;
+      --muted: #6d6d78;
+      --faint: #8e8e96;
+      --line: rgba(60, 60, 67, .12);
+      --blue: #007aff;
+      --green: #34c759;
+      --orange: #ff9500;
+      --red: #ff3b30;
+      --fill: #eef0f4;
+    }
+    * { box-sizing: border-box; }
+    html { -webkit-text-size-adjust: 100%; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      font-size: 15px;
+      line-height: 1.45;
+      letter-spacing: -.01em;
+    }
+    .phone { max-width: 430px; margin: 0 auto; padding: 0 14px calc(28px + env(safe-area-inset-bottom)); }
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      margin: 0 -14px;
+      padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
+      background: rgba(242, 242, 247, .92);
+      border-bottom: 1px solid rgba(60, 60, 67, .10);
+      backdrop-filter: saturate(180%) blur(18px);
+      -webkit-backdrop-filter: saturate(180%) blur(18px);
+    }
+    .top-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    h1 { margin: 0; font-size: 27px; line-height: 1.15; letter-spacing: -.035em; }
+    .sub { margin-top: 3px; color: var(--muted); font-size: 13px; }
+    .refresh {
+      flex: 0 0 auto;
+      min-height: 40px;
+      padding: 9px 13px;
+      border: 0;
+      border-radius: 13px;
+      background: var(--blue);
+      color: #fff;
+      font: 600 14px/1 inherit;
+      font-family: inherit;
+      cursor: pointer;
+    }
+    .refresh:active { transform: scale(.97); }
+    .section-label {
+      margin: 22px 8px 8px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 650;
+      text-transform: uppercase;
+      letter-spacing: .02em;
+    }
+    .stack { display: grid; gap: 10px; }
+    .repo-card {
+      position: relative;
+      display: block;
+      overflow: hidden;
+      padding: 15px 15px 14px 17px;
+      border-radius: 18px;
+      background: var(--card);
+      color: inherit;
+      text-decoration: none;
+      box-shadow: 0 1px 2px rgba(28, 30, 44, .05);
+    }
+    .repo-card:active { background: #f8f8fb; }
+    .repo-card::before {
+      content: "";
+      position: absolute;
+      left: 0; top: 10px; bottom: 10px;
+      width: 4px;
+      border-radius: 0 4px 4px 0;
+      background: transparent;
+    }
+    .repo-card.attention::before { background: linear-gradient(180deg, var(--orange), var(--red)); }
+    .repo-head { display: flex; align-items: start; justify-content: space-between; gap: 10px; }
+    .repo-name { min-width: 0; font-size: 17px; font-weight: 700; letter-spacing: -.025em; overflow-wrap: anywhere; }
+    .repo-name small { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; font-weight: 500; letter-spacing: 0; }
+    .badge {
+      flex: 0 0 auto;
+      margin-top: 2px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: #fff1e8;
+      color: #b33a00;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .reason {
+      margin: 10px 0 0;
+      padding: 9px 10px;
+      border-radius: 11px;
+      background: #fff6f2;
+      color: #a33200;
+      font-size: 13px;
+    }
+    .reason strong { display: block; margin-bottom: 2px; }
+    .metrics {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px 6px;
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+    .metrics span { padding: 3px 7px; border-radius: 8px; background: var(--fill); white-space: nowrap; }
+    .metrics b { color: var(--ink); font-weight: 650; }
+    .progress-wrap, .track, .reason, .metrics { display: block; }
+    .metrics { display: flex; }
+    .progress-wrap { margin-top: 13px; }
+    .progress-label { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
+    .progress-label b { color: var(--ink); font-weight: 650; }
+    .track { height: 6px; border-radius: 99px; background: var(--fill); overflow: hidden; }
+    .fill { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, #33c77a, #24a35b); }
+    .next {
+      display: flex;
+      gap: 8px;
+      margin-top: 13px;
+      padding-top: 11px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .next b { flex: 0 0 auto; color: #0a6ccb; font-weight: 700; }
+    .next div, .next > span:not(.chev) { min-width: 0; color: var(--ink); }
+    .next div small, .next > span:not(.chev) small { display: block; color: var(--faint); font-size: 12px; }
+    .chev { flex: 0 0 auto; margin-left: auto; align-self: center; color: #c5c5cc; font-size: 19px; }
+    .hidden-card { display: none; }
+    .show-all {
+      display: block;
+      min-height: 44px;
+      margin-top: 1px;
+      padding: 12px 15px;
+      border-radius: 16px;
+      background: var(--card);
+      color: var(--blue);
+      font-size: 14px;
+      font-weight: 650;
+      text-align: center;
+      text-decoration: none;
+      box-shadow: 0 1px 2px rgba(28, 30, 44, .04);
+    }
+    .expanded .show-all { display: none; }
+    footer { margin-top: 20px; color: var(--faint); font-size: 12px; text-align: center; }
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: calc(26px + env(safe-area-inset-bottom));
+      z-index: 20;
+      padding: 11px 17px;
+      border-radius: 99px;
+      background: rgba(28, 30, 44, .92);
+      color: white;
+      font-size: 14px;
+      font-weight: 600;
+      transform: translate(-50%, 18px);
+      opacity: 0;
+      pointer-events: none;
+      transition: .22s ease;
+    }
+    .toast.show { transform: translate(-50%, 0); opacity: 1; }
+  </style>
+</head>
+<body>
+  <div class="phone" id="board">
+    <header class="topbar">
+      <div class="top-row">
+        <div>
+          <h1>管线进度</h1>
+          <div class="sub" id="updated">3 分钟前更新 · 默认显示 5 / 8</div>
+        </div>
+        <button class="refresh" type="button" id="refresh">立即刷新</button>
+      </div>
+    </header>
+
+    <p class="section-label">需要处理</p>
+    <div class="stack">
+      <a class="repo-card attention" href="repo.html" aria-label="查看 allanpk716/oa-helper">
+        <span class="repo-head">
+          <span class="repo-name">allanpk716/oa-helper<small>68 分钟前活动</small></span>
+          <span class="badge">需处理</span>
+        </span>
+        <span class="reason">impl-66: worker 结束状态为 error<br>impl-66-r2: worker 结束状态为 error</span>
+        <span class="metrics"><span>地图 <b>1 开</b> / 2 关</span><span>Spec <b>1 开</b> / 8 关</span><span>Ticket <b>23 / 29 关</b></span></span>
+        <span class="progress-wrap">
+          <span class="progress-label"><span>Ticket 完成比例</span><b>79%</b></span>
+          <span class="track"><span class="fill" style="width:79%"></span></span>
+        </span>
+        <span class="next"><b>下一步</b><span>#65 流程详情状态缓存与变化检测<small>active · integrate · wave 1</small></span><span class="chev">›</span></span>
+      </a>
+
+      <a class="repo-card attention" href="repo.html" aria-label="查看 allanpk716/demo-parked">
+        <span class="repo-head">
+          <span class="repo-name">allanpk716/demo-parked<small>9 天前活动</small></span>
+          <span class="badge">需处理</span>
+        </span>
+        <span class="reason">Spec #42 已停车（停车报告）<br>Spec #40 中断</span>
+        <span class="metrics"><span>地图 <b>1 开</b> / 1 关</span><span>Spec <b>2 开</b> / 2 关</span><span>Ticket <b>5 / 10 关</b></span></span>
+        <span class="progress-wrap">
+          <span class="progress-label"><span>Ticket 完成比例</span><b>50%</b></span>
+          <span class="track"><span class="fill" style="width:50%"></span></span>
+        </span>
+        <span class="next"><b>下一步</b><span>无可启动<small>先查看停车与中断报告</small></span><span class="chev">›</span></span>
+      </a>
+    </div>
+
+    <p class="section-label">按最近活动</p>
+    <div class="stack">
+      <a class="repo-card" href="repo.html" aria-label="查看 allanpk716/implement-spec-split">
+        <span class="repo-head">
+          <span class="repo-name">allanpk716/implement-spec-split<small>37 分钟前活动</small></span>
+        </span>
+        <span class="metrics"><span>地图 <b>0 开</b> / 0 关</span><span>Spec <b>1 开</b> / 1 关</span><span>Ticket <b>2 / 9 关</b></span></span>
+        <span class="progress-wrap">
+          <span class="progress-label"><span>Ticket 完成比例</span><b>22%</b></span>
+          <span class="track"><span class="fill" style="width:22%"></span></span>
+        </span>
+        <span class="next"><b>下一步</b><span>#7 Progress board：手机上查看管线进度<small>active</small></span><span class="chev">›</span></span>
+      </a>
+
+      <a class="repo-card" href="repo.html" aria-label="查看 allanpk716/ssh-manager-mcp">
+        <span class="repo-head">
+          <span class="repo-name">allanpk716/ssh-manager-mcp<small>28 分钟前活动</small></span>
+        </span>
+        <span class="metrics"><span>地图 <b>0 开</b> / 2 关</span><span>Spec <b>3 开</b> / 35 关</span><span>Ticket <b>187 / 200 关</b></span></span>
+        <span class="progress-wrap">
+          <span class="progress-label"><span>Ticket 完成比例</span><b>94%</b></span>
+          <span class="track"><span class="fill" style="width:94%"></span></span>
+        </span>
+        <span class="next"><b>下一步</b><span>#294 权威端 Web UI 信息架构重构<br>#304 后台任务终态可见前写入结束审计<small>2 个 active</small></span><span class="chev">›</span></span>
+      </a>
+
+      <a class="repo-card" href="repo.html" aria-label="查看 allanpk716/nexa">
+        <span class="repo-head">
+          <span class="repo-name">allanpk716/nexa<small>4 天前活动</small></span>
+        </span>
+        <span class="metrics"><span>地图 <b>0 开</b> / 2 关</span><span>Spec <b>0 开</b> / 1 关</span><span>Ticket <b>7 / 8 关</b></span></span>
+        <span class="progress-wrap">
+          <span class="progress-label"><span>Ticket 完成比例</span><b>88%</b></span>
+          <span class="track"><span class="fill" style="width:88%"></span></span>
+        </span>
+        <span class="next"><b>下一步</b><span>无可启动<small>近期安静</small></span><span class="chev">›</span></span>
+      </a>
+    </div>
+
+    <p class="section-label" id="more-label">安静仓库</p>
+    <div class="stack">
+      <a class="repo-card hidden-card" href="repo.html" aria-label="查看 allanpk716/ferryman">
+        <span class="repo-head"><span class="repo-name">allanpk716/ferryman<small>无活动</small></span></span>
+        <span class="metrics"><span>地图 <b>0 开</b> / 0 关</span><span>Spec <b>0 开</b> / 1 关</span><span>Ticket <b>5 / 5 关</b></span></span>
+        <span class="track" style="margin-top:12px"><span class="fill" style="width:100%"></span></span>
+        <span class="next"><b>下一步</b><span>无可启动<small>全部落地</small></span><span class="chev">›</span></span>
+      </a>
+      <a class="repo-card hidden-card" href="repo.html" aria-label="查看 allanpk716/model-convert">
+        <span class="repo-head"><span class="repo-name">allanpk716/model-convert<small>无活动</small></span></span>
+        <span class="metrics"><span>地图 <b>0 开</b> / 1 关</span><span>Spec <b>1 开</b> / 2 关</span><span>Ticket <b>15 / 16 关</b></span></span>
+        <span class="track" style="margin-top:12px"><span class="fill" style="width:94%"></span></span>
+        <span class="next"><b>下一步</b><span>#1 待启动 Spec<small>已拆待做</small></span><span class="chev">›</span></span>
+      </a>
+      <a class="repo-card hidden-card" href="repo.html" aria-label="查看 allanpk716/agent-taskboard">
+        <span class="repo-head"><span class="repo-name">allanpk716/agent-taskboard<small>无活动</small></span></span>
+        <span class="metrics"><span>地图 <b>1 开</b> / 5 关</span><span>Spec <b>1 开</b> / 19 关</span><span>Ticket <b>129 / 130 关</b></span></span>
+        <span class="track" style="margin-top:12px"><span class="fill" style="width:99%"></span></span>
+        <span class="next"><b>下一步</b><span>待处理迷雾毕业<small>地图仍开着</small></span><span class="chev">›</span></span>
+      </a>
+      <a class="show-all" href="#all" id="show-all">显示全部（另有 3 个）</a>
+    </div>
+
+    <footer>只读进度板 · 数据快照 2026-11-19 10:17</footer>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite">已触发刷新</div>
+
+  <script>
+    const board = document.getElementById('board');
+    document.getElementById('refresh').addEventListener('click', () => {
+      const toast = document.getElementById('toast');
+      toast.classList.add('show');
+      clearTimeout(window.__toastTimer);
+      window.__toastTimer = setTimeout(() => toast.classList.remove('show'), 1800);
+    });
+    document.getElementById('show-all').addEventListener('click', event => {
+      event.preventDefault();
+      board.classList.add('expanded');
+      document.querySelectorAll('.hidden-card').forEach(card => card.classList.remove('hidden-card'));
+      document.getElementById('more-label').textContent = '安静仓库（已展开）';
+      document.getElementById('updated').textContent = '3 分钟前更新 · 显示全部 8 个';
+    });
+  </script>
+</body>
+</html>

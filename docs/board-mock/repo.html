@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>oa-helper · 管线进度</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f2f2f7;
+      --card: #fff;
+      --ink: #111;
+      --muted: #6d6d78;
+      --faint: #8e8e96;
+      --line: rgba(60,60,67,.11);
+      --blue: #007aff;
+      --green: #34c759;
+      --orange: #ff9500;
+      --red: #ff3b30;
+      --track: #e9ebf0;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      font-size: 15px;
+      line-height: 1.45;
+      letter-spacing: -.01em;
+    }
+    .phone { max-width: 430px; margin: 0 auto; padding: 0 14px calc(30px + env(safe-area-inset-bottom)); }
+    .topbar {
+      position: sticky; top: 0; z-index: 5;
+      margin: 0 -14px;
+      padding: calc(8px + env(safe-area-inset-top)) 12px 8px 8px;
+      background: rgba(242,242,247,.92);
+      border-bottom: 1px solid rgba(60,60,67,.09);
+      backdrop-filter: saturate(180%) blur(18px);
+      -webkit-backdrop-filter: saturate(180%) blur(18px);
+      display: flex; align-items: center; gap: 6px;
+    }
+    .back {
+      min-width: 42px; min-height: 40px;
+      display: inline-flex; align-items: center; justify-content: center;
+      border-radius: 12px; color: var(--blue); font-size: 25px; text-decoration: none;
+    }
+    .title { min-width: 0; margin-right: auto; }
+    .title h1 { margin: 0; font-size: 18px; line-height: 1.2; letter-spacing: -.025em; overflow-wrap: anywhere; }
+    .title p { margin: 1px 0 0; color: var(--muted); font-size: 12px; }
+    .refresh {
+      min-height: 40px; padding: 9px 12px; border: 0; border-radius: 12px;
+      background: var(--blue); color: white; font-family: inherit; font-size: 13px; font-weight: 650; cursor: pointer;
+    }
+    .group-label { margin: 20px 8px 7px; color: var(--muted); font-size: 13px; font-weight: 650; }
+    .cards { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; }
+    .count-card { padding: 12px 11px; border-radius: 16px; background: var(--card); box-shadow: 0 1px 2px rgba(28,30,44,.04); }
+    .count-card h2 { margin: 0; color: var(--muted); font-size: 12px; }
+    .count-card strong { display: block; margin: 3px 0 6px; font-size: 24px; line-height: 1; letter-spacing: -.035em; }
+    .count-card strong small { color: var(--muted); font-size: 12px; font-weight: 600; }
+    .split { display: grid; gap: 3px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+    .split b { color: var(--ink); font-weight: 650; }
+    .card { border-radius: 18px; background: var(--card); box-shadow: 0 1px 2px rgba(28,30,44,.04); overflow: hidden; }
+    .pad { padding: 14px 15px; }
+    .attention { border-left: 4px solid; border-image: linear-gradient(#ff9500,#ff3b30) 1; background: #fffaf8; }
+    .next-head { display: flex; justify-content: space-between; align-items: start; gap: 8px; }
+    .next-head h2 { margin: 0; font-size: 16px; line-height: 1.3; overflow-wrap: anywhere; }
+    .pill { flex: 0 0 auto; padding: 4px 8px; border-radius: 99px; background: #e8f1ff; color: #0a6ccb; font-size: 12px; font-weight: 700; }
+    .meta { margin-top: 8px; color: var(--muted); font-size: 12px; }
+    details { background: var(--card); border-radius: 17px; box-shadow: 0 1px 2px rgba(28,30,44,.04); overflow: hidden; }
+    summary {
+      min-height: 46px; padding: 11px 14px; cursor: pointer; list-style: none;
+      display: flex; align-items: center; gap: 9px; user-select: none; -webkit-tap-highlight-color: transparent;
+    }
+    summary::-webkit-details-marker { display: none; }
+    summary:active { background: #f6f6f9; }
+    .caret { color: #b9b9c1; font-size: 13px; transition: transform .15s; }
+    details[open] > summary .caret { transform: rotate(90deg); }
+    .node-title { min-width: 0; flex: 1; }
+    .node-title b { display: block; font-size: 15px; line-height: 1.25; font-weight: 650; overflow-wrap: anywhere; }
+    .node-title span { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }
+    .state { flex: 0 0 auto; font-size: 12px; font-weight: 700; white-space: nowrap; }
+    .closed { color: #6a7480; }
+    .running { color: #0a6ccb; }
+    .interrupted { color: #c22b20; }
+    .needs { color: #9a5b00; }
+    .open { color: #177c39; }
+    .inner { border-top: 1px solid var(--line); padding: 3px 10px 10px 12px; }
+    .child { margin-top: 7px; border-radius: 13px; background: #f7f7fa; box-shadow: none; }
+    .child summary { padding: 10px 11px; min-height: 42px; }
+    .child .inner { padding: 2px 8px 8px 9px; border-top: 1px solid var(--line); }
+    .leaf {
+      display: flex; align-items: center; gap: 7px; min-height: 42px;
+      margin-top: 6px; padding: 9px 10px; border-radius: 11px; background: white;
+      color: inherit; text-decoration: none; box-shadow: 0 0 0 1px var(--line);
+    }
+    .leaf span { min-width: 0; flex: 1; overflow-wrap: anywhere; font-size: 13px; }
+    .leaf small { flex: 0 0 auto; color: var(--muted); font-size: 11px; white-space: nowrap; }
+    .done { color: #6d6d78; }
+    .stage-card { margin: 7px 0; padding: 12px; border-radius: 13px; background: white; box-shadow: 0 0 0 1px var(--line); }
+    .stage-top { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 12px; }
+    .stage-top b { color: var(--ink); }
+    .stages { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 3px; margin-top: 10px; }
+    .stage { min-width: 0; text-align: center; }
+    .stage i { display: block; height: 5px; border-radius: 99px; background: var(--track); }
+    .stage em { display: block; margin-top: 5px; color: var(--faint); font-size: 10px; font-style: normal; white-space: nowrap; }
+    .stage.complete i { background: #9fd8b2; }
+    .stage.complete em { color: #177c39; }
+    .stage.current i { background: linear-gradient(90deg,#ff9500,#ff6a00); }
+    .stage.current em { color: #a34c00; font-weight: 800; }
+    .ticket-meter { display: flex; gap: 4px; margin-top: 10px; height: 6px; }
+    .ticket-meter i { display: block; flex: 3; border-radius: 99px; background: #34c759; }
+    .ticket-meter i.progress { flex: 1; background: #007aff; }
+    .ticket-meter i.todo { flex: 2; background: #d8dce3; }
+    .meter-note { display: flex; justify-content: space-between; margin-top: 6px; color: var(--muted); font-size: 11px; }
+    .worker { margin-top: 7px; border-radius: 12px; background: white; box-shadow: 0 0 0 1px var(--line); overflow: hidden; }
+    .worker summary { padding: 10px 11px; min-height: 42px; }
+    .worker-error summary { background: #fff4f2; }
+    .worker-stalled summary { background: #fff7ed; }
+    .worker-body { padding: 9px 11px 11px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+    .status { padding: 3px 7px; border-radius: 99px; font-size: 11px; font-weight: 800; }
+    .s-error { background: #ffe3df; color: #bf2016; }
+    .s-running { background: #e8f1ff; color: #0a6ccb; }
+    .s-stalled { background: #ffedd5; color: #a34c00; }
+    .s-active { background: #e8f1ff; color: #0a6ccb; }
+    .tree-title { margin: 22px 8px 8px; color: var(--muted); font-size: 13px; font-weight: 650; }
+    .tree { display: grid; gap: 9px; }
+    .loose { border-top: 6px solid #e4e6eb; }
+    footer { margin-top: 20px; color: var(--faint); font-size: 12px; text-align: center; }
+    .toast {
+      position: fixed; left: 50%; bottom: calc(26px + env(safe-area-inset-bottom)); z-index: 20;
+      padding: 11px 17px; border-radius: 99px; background: rgba(28,30,44,.92); color: white;
+      font-size: 14px; font-weight: 650; transform: translate(-50%,18px); opacity: 0; pointer-events: none; transition: .2s;
+    }
+    .toast.show { transform: translate(-50%,0); opacity: 1; }
+    @media (max-width:370px) { .cards { grid-template-columns: 1fr; } .stage em { font-size: 9px; } }
+  </style>
+</head>
+<body>
+  <div class="phone">
+    <header class="topbar">
+      <a class="back" href="home.html" aria-label="返回首页">‹</a>
+      <div class="title">
+        <h1>allanpk716/oa-helper</h1>
+        <p>3 分钟前更新 · 需要处理</p>
+      </div>
+      <button class="refresh" type="button" id="refresh">立即刷新</button>
+    </header>
+
+    <section aria-label="总览">
+      <div class="group-label">三类计数</div>
+      <div class="cards">
+        <article class="count-card">
+          <h2>地图</h2><strong>5<small> 张</small></strong>
+          <div class="split"><span>已关 <b>2</b></span><span>开 · 探索 <b>1</b></span><span>开 · 迷雾待毕业 <b>1</b></span><span>开 · 未转 Spec <b>1</b></span></div>
+        </article>
+        <article class="count-card">
+          <h2>Spec</h2><strong>11<small> 份</small></strong>
+          <div class="split"><span>已落地 <b>8</b></span><span>没拆 Ticket <b>1</b></span><span>已拆待做 <b>0</b></span><span>实现中 <b>1</b></span><span>中断 <b>1</b></span></div>
+        </article>
+        <article class="count-card">
+          <h2>Ticket</h2><strong>32<small> 张</small></strong>
+          <div class="split"><span>已关 / 合入 <b>26</b></span><span>进行中 <b>1</b></span><span>待做 <b>2</b></span><span>完成 <b>81%</b></span></div>
+        </article>
+      </div>
+    </section>
+
+    <section aria-label="下一波起点">
+      <div class="group-label">下一波起点</div>
+      <div class="card pad attention">
+        <div class="next-head">
+          <h2>#65 流程详情状态缓存与变化检测</h2>
+          <span class="pill">active</span>
+        </div>
+        <p class="meta">共享快照、list_work_changes 与 Rakazo 切换 · wave 1 正在 integrate；wave1 队列为空。</p>
+      </div>
+    </section>
+
+    <section aria-label="管线树">
+      <div class="tree-title">地图 → Spec → Ticket</div>
+      <div class="tree">
+        <details>
+          <summary><span class="caret">▶</span><span class="node-title"><b>地图 #1 · OA 我的流程工具 v1</b><span>已关闭 · 1 Spec · 11 Ticket</span></span><span class="state closed">关</span></summary>
+          <div class="inner">
+            <details class="child">
+              <summary><span class="caret">▶</span><span class="node-title"><b>Spec #11 · OA 流程查看与办理</b><span>已落地 · 11/11 Ticket</span></span><span class="state closed">落地</span></summary>
+              <div class="inner">
+                <div class="leaf"><span>#12 会话稳定性与登录冷却</span><small>关</small></div>
+                <div class="leaf"><span>#13 其余三类列表</span><small>关</small></div>
+                <div class="leaf"><span>#14 MCP 薄壳与 list_works</span><small>关</small></div>
+                <div class="leaf"><span>#15 流程详情与会签意见视图</span><small>关</small></div>
+                <div class="leaf"><span>#16 prepare_complete 主路径</span><small>关</small></div>
+                <div class="leaf"><span>#17 prepare 拒绝与扩展点</span><small>关</small></div>
+                <div class="leaf"><span>#18 commit_complete 主路径</span><small>关</small></div>
+                <div class="leaf"><span>#19 commit_complete 异常路径</span><small>关</small></div>
+                <div class="leaf"><span>#20 部署上线四件套</span><small>关</small></div>
+                <div class="leaf"><span>#21 真实 OA 人工验收</span><small>关</small></div>
+                <div class="leaf"><span>#22 Tracer 与 CLI list</span><small>关</small></div>
+              </div>
+            </details>
+          </div>
+        </details>
+
+        <details>
+          <summary><span class="caret">▶</span><span class="node-title"><b>地图 #29 · 会议模块只读接入</b><span>已关闭 · 1 Spec · 0 Ticket</span></span><span class="state closed">关</span></summary>
+          <div class="inner">
+            <div class="leaf"><span>Spec #31 · list_meetings + get_meeting_detail</span><small>落地 · 未拆票</small></div>
+          </div>
+        </details>
+
+        <details open>
+          <summary><span class="caret">▶</span><span class="node-title"><b>地图 #58 · 流程详情状态缓存</b><span>开着 · 2 Spec · 5 Ticket</span></span><span class="state open">探索</span></summary>
+          <div class="inner">
+            <details class="child" open>
+              <summary><span class="caret">▶</span><span class="node-title"><b>Spec #65 · 状态缓存与变化检测</b><span>integrate · wave 1 · 3/5 合入</span></span><span class="status s-active">active</span></summary>
+              <div class="inner">
+                <div class="stage-card">
+                  <div class="stage-top"><span>Run 阶段 <b>integrate</b></span><span>claim <b>active</b></span></div>
+                  <div class="stages">
+                    <span class="stage complete"><i></i><em>split</em></span>
+                    <span class="stage complete"><i></i><em>implement</em></span>
+                    <span class="stage current"><i></i><em>integrate</em></span>
+                    <span class="stage"><i></i><em>review</em></span>
+                    <span class="stage"><i></i><em>land</em></span>
+                  </div>
+                  <div class="ticket-meter" title="merged 3 / in progress 1 / todo 2"><i></i><i class="progress"></i><i class="todo"></i></div>
+                  <div class="meter-note"><span>已合 3</span><span>进行 1</span><span>待做 2</span></div>
+                </div>
+                <div class="leaf"><span>#66 Worker 错误与重试处理</span><small>已合入</small></div>
+                <div class="leaf"><span>#67 共享快照读取路径</span><small>进行中</small></div>
+                <div class="leaf"><span>#68 list_work_changes 集成</span><small>待做</small></div>
+                <div class="leaf"><span>#69 Rakazo 切换验证</span><small>已合入</small></div>
+                <div class="leaf"><span>#72 文档与回归收口</span><small>待做</small></div>
+
+                <details class="worker worker-error" open>
+                  <summary><span class="caret">▶</span><span class="node-title"><b>impl-66</b><span>impl · 异常，自动展开</span></span><span class="status s-error">error</span></summary>
+                  <div class="worker-body">角色 impl · Ticket #66 · worker 结束状态为 error，需要人工查看输出。</div>
+                </details>
+                <details class="worker">
+                  <summary><span class="caret">▶</span><span class="node-title"><b>impl-67</b><span>impl · 22 分钟 · 40 秒，正常</span></span><span class="status s-running">running</span></summary>
+                  <div class="worker-body">角色 impl · Ticket #67 · 已运行 22 分钟，距上次活动 40 秒。</div>
+                </details>
+                <details class="worker worker-stalled" open>
+                  <summary><span class="caret">▶</span><span class="node-title"><b>merge-68</b><span>merge · 720 秒，异常</span></span><span class="status s-stalled">stalled</span></summary>
+                  <div class="worker-body">角色 merge · Ticket #68 · 距上次活动 720 秒。</div>
+                </details>
+              </div>
+            </details>
+
+            <details class="child">
+              <summary><span class="caret">▶</span><span class="node-title"><b>Spec #70 · 变化检测回补</b><span>claim interrupted · 0 Ticket</span></span><span class="state interrupted">中断</span></summary>
+              <div class="inner"><div class="leaf"><span>中断说明</span><small>等待处理</small></div></div>
+            </details>
+          </div>
+        </details>
+
+        <details open>
+          <summary><span class="caret">▶</span><span class="node-title"><b>地图 #81 · 有迷雾待毕业</b><span>开着 · 0 Spec</span></span><span class="state needs">迷雾</span></summary>
+          <div class="inner"><div class="leaf"><span>尚有待毕业迷雾</span><small>未转 Spec</small></div></div>
+        </details>
+
+        <details open>
+          <summary><span class="caret">▶</span><span class="node-title"><b>地图 #82 · 没有转成 Spec</b><span>开着 · 0 Spec</span></span><span class="state needs">未转</span></summary>
+          <div class="inner"><div class="leaf"><span>地图完成探索后未生成 Spec</span><small>未转 Spec</small></div></div>
+        </details>
+      </div>
+    </section>
+
+    <section aria-label="散 Spec">
+      <div class="tree-title">散 Spec（不属于地图）</div>
+      <div class="tree">
+        <details class="loose" open>
+          <summary><span class="caret">▶</span><span class="node-title"><b>Spec #80 · 独立工具说明补全</b><span>开着 · 没拆 Ticket</span></span><span class="state needs">没拆票</span></summary>
+          <div class="inner"><div class="leaf"><span>尚未拆分 Ticket</span><small>等待拆票</small></div></div>
+        </details>
+
+        <details class="loose">
+          <summary><span class="caret">▶</span><span class="node-title"><b>已落地散 Spec</b><span>6 份 · 13/13 Ticket（#27 中 1 张未关）</span></span><span class="state closed">6 关</span></summary>
+          <div class="inner">
+            <div class="leaf"><span>#23 挂起流程只读接口</span><small>3/3</small></div>
+            <div class="leaf"><span>#27 清单控件明细</span><small>2/3</small></div>
+            <div class="leaf"><span>#28 加签两段式写接口</span><small>3/3</small></div>
+            <div class="leaf"><span>#42 邮件只读接入</span><small>未拆票</small></div>
+            <div class="leaf"><span>#48 使用反馈接口</span><small>未拆票</small></div>
+            <div class="leaf"><span>#51 流程查看页</span><small>4/4</small></div>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <footer>只读进度板 · 返回首页可切换仓库</footer>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite">已触发刷新</div>
+  <script>
+    document.getElementById('refresh').addEventListener('click', () => {
+      const toast = document.getElementById('toast');
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 1800);
+    });
+  </script>
+</body>
+</html>
