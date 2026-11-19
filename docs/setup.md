@@ -98,7 +98,8 @@ spec 是一个 GitHub 父 issue，它的子 issue 就是 ticket，ticket 之间�
 ```text
 /implement-spec-split                      # 不带参数：自动列出未完成的 spec 让你选
 /implement-spec-split #12                  # 指定 spec
-/implement-spec-split #12 --impl sonnet    # 实现角色用 Sonnet 子代理（默认）
+/implement-spec-split #12                  # 不带 --impl：官方订阅会话用 codex，GLM 会话（DELEGATE_GUARD_DISABLE=1）用 agent
+/implement-spec-split #12 --impl sonnet    # 实现角色用 Sonnet 子代理
 /implement-spec-split #12 --impl codex     # 实现角色用 codex worker（需要阶段 2）
 /implement-spec-split #12 --impl codex --parallel 3
 ```

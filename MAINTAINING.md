@@ -96,6 +96,7 @@
     - 不带子命令的 `board.sh` 终端视图先按刷新节奏刷新（过期才调 `gh`）再显示；Orca 返回空列表时，prune 也跳过第 1 类（更保守）。
     - 网页优先，只监听虚拟局域网地址和 127.0.0.1，不暴露到公网，不做登录。首页按「需要你处理」→最近活动排序，默认只显示 7 天内有活动的仓库，但有进行中、中断、停车报告的仓库始终显示。页面先用 mockit 定稿再实现。汇总脚本放本仓库，常驻服务放 `~/ops`。
     - 不写 ADR：用 Orca 当仓库清单、用快照加定时刷新，这两条都容易改回去。
+23. **2026-11-19：默认后端按会话自动选（`IMPLEMENT_BACKEND = auto`）。** 自 10-11 起默认是 `sonnet`。find-next 生成的命令自带 `--impl codex`，所以平时不出问题；但手敲 `/implement-spec-split <n>` 不带 `--impl` 时，官方订阅会话会把实现角色全开成 Sonnet 子代理，花的是 Claude 额度，违背「判断以外交给 codex worker」的分工（Spec #7 的 Run 就是这样跑的）。同一套技能还要在 GLM 驱动的 Claude Code（`claude-glm` / Orca 的 OpenClaude 槽位）里用，那里的子代理本身就是 GLM，不该派 worker。决定：不带 `--impl` 时看环境里的 `DELEGATE_GUARD_DISABLE=1`（`claude-glm` 启动器设置的标记）：有就用 `agent`，没有就用 `codex`。只带 `--agent-model` 时也用 `agent`。显式 `--impl` 照旧优先；find-next 生成的命令不变。
 
 ## find-next 设计要点（2026-11-01 grilling 定稿）
 
