@@ -8,6 +8,7 @@ usage() {
 Usage: launch-wave.sh --repo <owner/name> [--workers N] [--specs K] [--apart A:B]...
                       [--only 222,237] [--apply] [--next-wave]
                       [--impl codex|agent] [--agent-model sonnet|opus|haiku|fable]
+                      [--auto-land]
 
 Print the development order, then optionally reserve and launch its first wave.
 Without --apply, this script only shows what would run and makes no claims.
@@ -21,7 +22,9 @@ agent. With agent, --agent-model names the model (default sonnet) and every
 command gets "--impl agent --agent-model <model>" instead of "--impl codex".
 --apply records the backend in the launch state and --next-wave reuses it;
 state files without the field keep the codex backend. --agent-model is only
-valid together with --impl agent.
+valid together with --impl agent. --auto-land appends the authorization to
+every generated command; --apply records it for the current batch only and
+--next-wave reuses it. --next-wave cannot accept --auto-land itself.
 EOF
 }
 
@@ -53,6 +56,7 @@ IMPL=codex
 AGENT_MODEL=sonnet
 IMPL_GIVEN=0
 AGENT_MODEL_GIVEN=0
+AUTO_LAND=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --repo)
@@ -120,6 +124,10 @@ while [ $# -gt 0 ]; do
       AGENT_MODEL_GIVEN=1
       shift 2
       ;;
+    --auto-land)
+      AUTO_LAND=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -131,6 +139,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+[ "$AUTO_LAND" -eq 0 ] || [ "$NEXT_WAVE" -eq 0 ] ||
+  die "--auto-land is not valid with --next-wave; authorize it with the initial --apply"
 [ -n "$REPO" ] || die "--repo is required"
 [[ "$REPO" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]] ||
   die "--repo must be <owner/name>"
@@ -215,6 +225,16 @@ state_apart() {
   '
 }
 
+state_auto_land() {
+  STATE_FILE_ACT="$LAUNCH_STATE_FILE" node -e '
+    const fs = require("fs");
+    let value = null;
+    try { value = JSON.parse(fs.readFileSync(process.env.STATE_FILE_ACT, "utf8")); }
+    catch (_) { process.exit(1); }
+    process.exit(value && value.auto_land === true ? 0 : 1);
+  '
+}
+
 valid_positive() {
   [[ "$1" =~ ^[1-9][0-9]*$ ]]
 }
@@ -287,6 +307,9 @@ read_next_wave_state() {
         ;;
     esac
   fi
+  if state_auto_land; then
+    AUTO_LAND=1
+  fi
 }
 
 write_launch_state() {
@@ -297,18 +320,20 @@ write_launch_state() {
   fi
   STATE_DIR_ACT="$LAUNCH_STATE_DIR" STATE_FILE_ACT="$LAUNCH_STATE_FILE" \
   STATE_WORKERS="$WORKERS" STATE_SPECS="$SPECS" STATE_APART="$state_apart_value" \
-  STATE_IMPL="$IMPL" STATE_AGENT_MODEL="$AGENT_MODEL" \
+  STATE_IMPL="$IMPL" STATE_AGENT_MODEL="$AGENT_MODEL" STATE_AUTO_LAND="$AUTO_LAND" \
   STATE_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ) node -e '
     const fs = require("fs"), path = require("path");
     const apart = process.env.STATE_APART.split(/\r?\n/).filter(Boolean);
     const backend = process.env.STATE_IMPL === "agent"
       ? {impl: "agent", agent_model: process.env.STATE_AGENT_MODEL}
       : {};
+    const authorization = process.env.STATE_AUTO_LAND === "1" ? {auto_land: true} : {};
     const value = JSON.stringify({
       workers: +process.env.STATE_WORKERS,
       specs: +process.env.STATE_SPECS,
       apart,
       ...backend,
+      ...authorization,
       updated: process.env.STATE_AT,
     }, null, 2) + "\n";
     const temporary = path.join(process.env.STATE_DIR_ACT, `.${path.basename(process.env.STATE_FILE_ACT)}.write.${process.pid}`);
@@ -339,8 +364,15 @@ first_error_line() {
 
 pipeline_args() {
   PIPELINE_ARGS=(--order --repo "$REPO" --parallel "$SPECS" --workers "$WORKERS")
-  if [ "$IMPL" = agent ]; then
-    PIPELINE_ARGS+=(--cmd-suffix "--impl agent --agent-model $AGENT_MODEL")
+  if [ "$IMPL" = agent ] || [ "$AUTO_LAND" -eq 1 ]; then
+    CMD_SUFFIX="--impl codex"
+    if [ "$IMPL" = agent ]; then
+      CMD_SUFFIX="--impl agent --agent-model $AGENT_MODEL"
+    fi
+    if [ "$AUTO_LAND" -eq 1 ]; then
+      CMD_SUFFIX="$CMD_SUFFIX --auto-land"
+    fi
+    PIPELINE_ARGS+=(--cmd-suffix "$CMD_SUFFIX")
   fi
   if [ "${#APART[@]}" -gt 0 ]; then
     for pair in "${APART[@]}"; do

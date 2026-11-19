@@ -102,6 +102,14 @@ _Avoid_: lock file, Orca status
 The repo-wide lock (`scripts/lock.sh acquire land --scope repo`) a Run holds from merging the latest main branch into its integration branch until it has pushed the merged main branch, so that what it tested is what lands.
 _Avoid_: merge lock (mergers inside one Run are already serialised)
 
+**Unattended landing**:
+A Run landing its Spec without asking the user first, because the user authorised the whole batch (and its later waves) in find-next's question round; a Run that would otherwise stop to ask posts a Parking report instead.
+_Avoid_: auto-push, auto-merge, permanent authorisation (it covers one batch only)
+
+**Parking report**:
+The comment an unattended Run leaves on its Spec issue when it cannot land, saying why and what to do next; the Run then releases its claim and ends, so the Spec shows as interrupted until someone resumes it.
+_Avoid_: failure report, blocking question
+
 **Handoff reservation**:
 A Claim record that `find-next/scripts/launch-wave.sh` writes with `claim.sh reserve` before it starts a session in Orca; it counts as active until `handoff_until_epoch` even though no live process holds it, and `claim.sh take` run inside that Spec's worktree adopts it (exit 4 when it was a resume).
 _Avoid_: pre-claim, lease

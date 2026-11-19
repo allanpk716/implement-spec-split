@@ -16,7 +16,7 @@
 4. **编排的主代理跑在会话模型上。** 只有子代理的模型由本技能决定。主代理要判断 review 意见属于设计层面还是机械修复，所以会话不建议用太弱的模型。
 5. **draft PR 流程。** 如果 tracker 靠 PR 关单，第一次合并后开 draft PR，最后标成可以 review。原版有这一步，最早的 split 版漏了，后来补回。
 6. **找 spec（第 0 步）。** 原版没有这一步，是本技能加的。现在用 `scripts/pipeline-status.sh` 按 to-spec 模板标题 `## Problem Statement` 和 wayfinder 地图结构识别 Spec / Ticket，再保留旧的“开着父 issue + 未完成子票”形状；不要改回依赖标题里的“规格：”字样。原因是单票规格的正文只引用地图实现票（例如“实现票：#58”），实现票自己没有子票，旧的父 issue 查询会把它漏掉。
-7. **push 和关单前先问用户。** 本技能加了这条，原版没有。
+7. **push 和关单前先问用户。** 本技能加了这条，原版没有。例外是第 21 条的无人值守落地：用户在 find-next 里给整批授权后不再问。
 8. **GLM 只能放到会话外面跑（External worker）。**
    - Agent 工具的 `model` 参数只能选 `sonnet`、`opus`、`haiku`、`fable`。
    - 服务地址和 token 是整个进程共用的，所以没法让会话里的某一个子代理单独走 GLM。
@@ -82,6 +82,11 @@
     - find-next 只有一个开关 `--worker agent [--agent-model <model>]`，同时管自己的调研/决策/起草方式和生成的开发命令后端，不提供混搭。agent 路径与 codex 路径同构：照旧建运行目录、写 `brief.md`，子代理 prompt 固定为「读 brief.md 并照做，把最终报告写到 result.md，同时作为你的最终回复」，主会话照旧审 `result.md`；没有 `status.json`，以子代理返回为准。`launch-wave.sh` 新增 `--impl codex|agent [--agent-model X]`，agent 时透传 `--cmd-suffix "--impl agent --agent-model X"` 给 `pipeline-status.sh` 并写进启动状态，`--next-wave` 读回；旧状态文件没有该字段按 codex 处理。
 
 20. **并行子代理与按需 MCP（2026-11-15 实测后改）。** 530 个 codex 会话里 `spawn_agent` 调用为 0；一轮里同时发出多个工具调用的只占 2.3%；等模型的时间占 70–95%；1 到 6 个 worker 并发时，每轮延迟基本不变（中位 6–8 秒）；关掉 MCP 后启动从 9.4 秒降到 3.8 秒，且没有了 rmcp 报错。因此：新会话 prompt 固定要求并行调用并按需开 explorer 子代理；codex-worker 默认关 MCP，用 `--mcp` 按需开启；`~/.codex/config.toml` 设 `[agents] max_concurrent_threads_per_session = 3`（子代理不占 Worker slot）。主会话最清楚每个任务需要什么，所以「默认不带、按需分配」由派活的一方决定。
+21. **2026-11-19：无人值守落地（`--auto-land`）。** 用户常在通宵跑 find-next 启动的整批规格：睡着时没人答问题，醒来后会话缓存早已过期，回去点「推送」既要等又费 token。决定：
+    - 授权只在 find-next 推进模式取得（第 6 步那一问，或调用时带 `--auto-land`），经 launch-wave 写进启动状态、由 `--next-wave` 沿用；下一次不带它的 `--apply` 清掉授权。不做成仓库永久设置，免得哪天白天也无声 push 到 main；手动敲 `/implement-spec-split <n>` 不带参数时仍然确认。
+    - 落地方式不变：直接合入 main 并开下一波；走 PR 的仓库改为等 checks 后自动 `gh pr merge`，同样开下一波（只开 PR 等人审会让通宵只跑一波）。
+    - 原先「问用户」的节点改为自动处理，有次数上限，超限就**停车**（规格 issue 下留停车报告、释放认领、结束会话，之后显示为「先恢复」），绝不挂着等人：测试红/CI 红派 fix 最多 2 轮；合 main 冲突由 merger 解决后，再由 REVIEW_MODEL 只审冲突解决部分；规格/ADR 已有答案的设计问题由主会话判断并写进落地报告，真取舍才停车；`transient` 等 10 分钟重试一次；`quota` 后台 sleep、每 30 分钟 preflight、最多 5 小时（sleep 不花 token）；`auth` 和 worker 第二次失败直接停车，不试第三次（两次都失败多半需要人）。
+    - 落地成功也在规格 issue 下留落地报告，早上看 GitHub 即可，不回到过期会话。同一批里其他规格互不影响、照常落地。
 
 ## find-next 设计要点（2026-11-01 grilling 定稿）
 

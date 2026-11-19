@@ -1,6 +1,6 @@
 ---
 name: find-next
-description: 默认进入推进模式：循环扫描当前 GitHub 仓库的 wayfinder 地图与票，自动调查并关闭可关的 research 票、为决策票准备选项、推进没讨论完的地图（迷雾毕业、task/prototype 票）、分流地图外散票（等待时机 / 开地图 / 单个决策 / 重复或过时）、批量起草规格和执行票，把所有需要人拍板的问题合成一轮，答完后自动发布并启动第 1 波 implement-spec-split 会话；规格合入 main 后可由 implement-spec-split 调 --next-wave 自动开下一波。--suggest 保留原先只推荐一个下一步的只读行为；--list 列出待办清单；--batch 是推进模式别名。用户问"下一步做什么""推进仓库""该推哪张票""哪个该 to-spec / to-tickets / grill 了""还有什么没做完""给我待办清单""批量写规格 / 批量拆票""接下来开发哪几份规格""开发顺序"，或输入 /find-next 时使用。参数 --suggest、--list、--batch、--workers N（可选）、--specs K、--worker codex|pi|self|agent、--agent-model sonnet|opus|haiku|fable（仅 agent）。
+description: 默认进入推进模式：循环扫描当前 GitHub 仓库的 wayfinder 地图与票，自动调查并关闭可关的 research 票、为决策票准备选项、推进没讨论完的地图（迷雾毕业、task/prototype 票）、分流地图外散票（等待时机 / 开地图 / 单个决策 / 重复或过时）、批量起草规格和执行票，把所有需要人拍板的问题合成一轮，答完后自动发布并启动第 1 波 implement-spec-split 会话；规格合入 main 后可由 implement-spec-split 调 --next-wave 自动开下一波。--suggest 保留原先只推荐一个下一步的只读行为；--list 列出待办清单；--batch 是推进模式别名。用户问"下一步做什么""推进仓库""该推哪张票""哪个该 to-spec / to-tickets / grill 了""还有什么没做完""给我待办清单""批量写规格 / 批量拆票""接下来开发哪几份规格""开发顺序"，或输入 /find-next 时使用。参数 --suggest、--list、--batch、--workers N（可选）、--specs K、--worker codex|pi|self|agent、--agent-model sonnet|opus|haiku|fable（仅 agent）、--auto-land（预先授权本批无人值守落地，适合通宵运行）。
 ---
 
 # find-next
@@ -11,12 +11,13 @@ description: 默认进入推进模式：循环扫描当前 GitHub 仓库的 wayf
 
 ## 用法
 
-- `/find-next [--workers N] [--specs K] [--worker codex|pi|agent] [--agent-model <model>] [地图号、实现票号或规格号…]`：默认推进模式（见「推进模式」），也是地图、规格、票、开发的通用入口。它循环执行：扫描 → 自动调查/关闭 research 票 → 准备决策题 / 迷雾毕业建议 / task 清单 / prototype 反应题 / 散票分流建议 → 起草规格和执行票 → 有问题就一轮问用户 → 应用答案并再扫描 → 发布 → 启动第 1 波。起草、调研、决策准备、迷雾毕业、散票分流、task 和 prototype 交给 worker：不给 `--worker` 或给 `codex` 时照旧派 codex worker；`pi` 维持现状（被忽略，等同 codex）；`agent` 时改由主会话开 Agent 子代理执行这些步骤（`model` 显式传 `--agent-model`，默认 `sonnet`），并让生成的开发命令也用 `--impl agent`。只支持 GitHub 跟踪器；本地 markdown 跟踪器请用 `--suggest` 或 `--list`
+- `/find-next [--workers N] [--specs K] [--worker codex|pi|agent] [--agent-model <model>] [--auto-land] [地图号、实现票号或规格号…]`：默认推进模式（见「推进模式」），也是地图、规格、票、开发的通用入口。它循环执行：扫描 → 自动调查/关闭 research 票 → 准备决策题 / 迷雾毕业建议 / task 清单 / prototype 反应题 / 散票分流建议 → 起草规格和执行票 → 有问题就一轮问用户 → 应用答案并再扫描 → 发布 → 启动第 1 波。起草、调研、决策准备、迷雾毕业、散票分流、task 和 prototype 交给 worker：不给 `--worker` 或给 `codex` 时照旧派 codex worker；`pi` 维持现状（被忽略，等同 codex）；`agent` 时改由主会话开 Agent 子代理执行这些步骤（`model` 显式传 `--agent-model`，默认 `sonnet`），并让生成的开发命令也用 `--impl agent`。只支持 GitHub 跟踪器；本地 markdown 跟踪器请用 `--suggest` 或 `--list`
 - `/find-next --suggest [--worker codex|pi|self|agent] [--agent-model <model>]`：原先的默认行为，只读挑一个 Next step（见「建议模式流程」）；未给 `--worker` 时等同于 `codex`。支持 GitHub 和本地 markdown 跟踪器
 - `/find-next --list`：不挑一个，列出当前仓库的全部待办清单（见「清单模式」）。总是我自己做，不派 worker，`--worker` 被忽略
 - `/find-next --batch …`：推进模式别名，兼容旧用法
 - `--workers N` 可选，是全机 GLM worker 总数；每份规格的 `--parallel` = N ÷ K（至少 1）。没给时读 `~/.cache/implement-spec-split/max-workers`（`scripts/max-workers.sh` 用的同一文件）；文件也没有就把 worker 上限并入本轮最后一个问题问用户。`--specs K` 是同时开几份规格，默认 2。**同一仓库同一时间只在一个会话里运行推进模式**：起草、发布和地图更新没有全流程锁，两个会话同时跑会重复起草或重复关票
 - `--agent-model <sonnet|opus|haiku|fable>` 只在 `--worker agent` 时有效，默认 `sonnet`；给了 `--worker codex`/`pi`/`self`（或不给 `--worker`）却给 `--agent-model` 是参数冲突，报错让用户改。一个开关管全程：`--worker agent` 同时决定本技能自己的调研/决策/起草方式和生成的开发命令后端，不提供混搭。
+- `--auto-land` 只在推进模式有效：预先同意本批规格（含之后自动开的波次）**无人值守落地**（GLOSSARY.md），第 6 步不再问这一条，第 10 步给 launch-wave.sh 追加 `--auto-land`。适合问完问题就去睡觉的通宵运行。
 
 只扫当前仓库，不跨仓库汇总。
 
@@ -180,7 +181,7 @@ I. 散票（bug / needs-triage 等；含等待时机、疑似重复和推进模�
       草稿只在运行目录，不在仓库内。不能调用 `/to-spec`、`/to-tickets` 本身；worker 直接读最新上游技能规则。
    4. **审稿（我做）**：读 `result.md`、`manifest.json`、`spec.md` 和执行票正文，检查实现决定都有出处且出处确实这么定了；`实现票：`、`地图：`两行正确；执行票是竖切、阻塞合理、跨组阻塞对得上；`blocked_by` 不挂还没有规格的实现票，该交接的写进 `handoffs`；`unresolved` 只留真正要用户拍板的事，每条带推荐答案；标题格式与仓库一致。用 `publish-batch.sh <全部 manifest.json>` 试运行核对计划。小问题直接改；大问题换新 Brief 重派那一组。
 
-6. **一轮问用户（没有问题就跳过）**：把第 3 步决策题、迷雾毕业建议、task 人工清单、prototype 反应题、`staleClaims` 处理题、第 2 步转来的取舍题、第 4 步散票分流建议、第 5 步每组 `unresolved`、以及缺少的全机 worker 上限，合成一条手机友好的消息。编号全批连续（a、b、c…），每组只给一两行摘要和必要上下文，选项各占一行；最后一个问题可以是「全机 GLM worker 总数用 N 吗？」。**单次运行累计最多问用户 3 轮**；第 3 轮结束后不再发起第 4 轮，剩余待拍板事项留到收尾，下次 `/find-next --batch` 接着推。结尾写：
+6. **一轮问用户（没有问题就跳过）**：把第 3 步决策题、迷雾毕业建议、task 人工清单、prototype 反应题、`staleClaims` 处理题、第 2 步转来的取舍题、第 4 步散票分流建议、第 5 步每组 `unresolved`、缺少的全机 worker 上限，以及无人值守落地授权，合成一条手机友好的消息。编号全批连续（a、b、c…），每组只给一两行摘要和必要上下文，选项各占一行；最后一个问题可以是「全机 GLM worker 总数用 N 吗？」。**无人值守落地**（GLOSSARY.md）：本次会启动规格、且调用时没带 `--auto-land` 时，加一问「本批规格（含之后自动开的波次）无人值守落地吗？——合入 main/合 PR、CI 红自动修、出问题在规格 issue 留停车报告，不停下等你」；只剩这一问时也要问，它是唯一的授权入口。调用时带了 `--auto-land` 即视为已同意，不再问。**单次运行累计最多问用户 3 轮**；第 3 轮结束后不再发起第 4 轮，剩余待拍板事项留到收尾，下次 `/find-next --batch` 接着推。结尾写：
 
    ```
    推进器 · <仓库名> · 需要拍板 <N> 条
@@ -233,16 +234,18 @@ I. 散票（bug / needs-triage 等；含等待时机、疑似重复和推进模�
 10. **开发顺序与启动（每次都做）**：发布完或不需要发布时，先运行：
 
    ```bash
-   <本技能目录>/scripts/launch-wave.sh --repo <owner/name> [--workers N] [--specs K] [--apart 224:239 …] [--impl agent --agent-model <model>]
+   <本技能目录>/scripts/launch-wave.sh --repo <owner/name> [--workers N] [--specs K] [--apart 224:239 …] [--impl agent --agent-model <model>] [--auto-land]
    ```
 
    排序由 `pipeline-status.sh --order` 确定性计算：被依赖的先做 → 解锁下游多的先做 → 编号小的先做；完全被挡住的不进第 1 波；进行中的不排；中断的标「先恢复」；搁置执行票不算待实现，未关执行票全是搁置票的规格不进顺序或波次。我只补「改同一块代码」的 `--apart A:B` 判断，依据规格正文里的模块；拿不准不传。有 `--apart` 时按重跑后的结果为准。`--apply` 会把本次 workers/specs/apart（`agent` 后端时还包括后端与模型）写入 `~/.cache/implement-spec-split/launch/<owner>__<name>.json`，供合入后的 `--next-wave` 复用；开发顺序本身每次重算。没给 `--workers` 时脚本按第 6 步得到的答案传入；第 6 步也没问（已有 max-workers 文件）就不传，让脚本读状态文件或 max-workers 文件。
 
    `--worker agent` 时，试运行和 `--apply` 两次都要在 launch-wave.sh 后面追加 `--impl agent --agent-model <model>`（即第 1 波每条命令变成 `/implement-spec-split <n> --impl agent --agent-model <model> --parallel <P>`）。`--apply` 会把它写进启动状态，合入后的 `--next-wave --apply` 不带参数也会沿用；不给 `--worker agent` 时不追加任何后端参数，生成命令与现状逐字一致。
 
+   用户同意了无人值守落地时，试运行和 `--apply` 都追加 `--auto-land`：每条命令末尾带 `--auto-land`，`--apply` 把授权写进启动状态，`--next-wave` 沿用；不带 `--auto-land` 的 `--apply` 会清掉旧授权（授权只对这一批有效）。
+
    **原样转述试运行输出，不加解释**，不问用户，紧接着用同样参数加 `--apply` 再运行一次。唯一例外：出现「循环依赖」时不加 `--apply`，问用户怎么定。另需单独提醒一行：表里写「另需 #N」的规格要另开会话处理那张票。脚本会写全机 worker 上限、预留规格、在 Orca 里建 worktree 并启动 `/implement-spec-split <n> --impl codex --parallel <P>`（`--worker agent` 时为 `--impl agent --agent-model <model> --parallel <P>`）；「需手动」条目按脚本输出提醒。合入后的自动下一波见 implement-spec-split 根技能第 9 步。
 
-11. **收尾**：原样转述启动结果，列出已启动、跳过、失败和需手动的规格。列出 `emptyMaps`（若有），逐张提示「用 `/wayfinder <地图号>` 画图」，不代画、不建第一批票。单列「等待时机」（#号、标题、条件、要现在开就回「开 #N」）与未结案的散票分流建议。列出因单次 2 张上限未处理的 prototype 票、因 3 轮问询上限或「先到这」留下的待拍板事项，提示下次运行 `/find-next --batch` 接着推。提醒用户：之后每份规格合入 main 时，implement-spec-split 会在第 9 步末尾只运行一条 `launch-wave.sh --next-wave --apply` 开新会话；本推进器会话可以 `/clear`。各规格会话仍会在 push 前确认、GLM 额度/auth/transient 出错、worker 连续失败时停下等人。
+11. **收尾**：原样转述启动结果，列出已启动、跳过、失败和需手动的规格。列出 `emptyMaps`（若有），逐张提示「用 `/wayfinder <地图号>` 画图」，不代画、不建第一批票。单列「等待时机」（#号、标题、条件、要现在开就回「开 #N」）与未结案的散票分流建议。列出因单次 2 张上限未处理的 prototype 票、因 3 轮问询上限或「先到这」留下的待拍板事项，提示下次运行 `/find-next --batch` 接着推。提醒用户：之后每份规格合入 main 时，implement-spec-split 会在第 9 步末尾只运行一条 `launch-wave.sh --next-wave --apply` 开新会话；本推进器会话可以 `/clear`。各规格会话仍会在 push 前确认、GLM 额度/auth/transient 出错、worker 连续失败时停下等人；无人值守落地时不确认、不等人，落地或停车都在规格 issue 下留报告，早上看 GitHub 即可。
 
 ## 推进模式出错处理与终止
 
