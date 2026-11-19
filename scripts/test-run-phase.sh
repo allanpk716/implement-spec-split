@@ -49,6 +49,11 @@ HOME=$H "$RP" land --repo myrepo --spec 7
 [ -f "$H/.cache/implement-spec-split/runs/myrepo-7-99990101-0000/run.json" ] && ok "uses latest run dir" || bad "uses latest run dir" "missing"
 [ ! -f "$H/.cache/implement-spec-split/runs/myrepo-70-99990101-0000/run.json" ] && ok "spec 7 does not match 70" || bad "spec 7 vs 70" "wrong dir"
 
+# ISS_STATE_DIR chooses the same Run root as board.sh.
+S=$WORK/custom-state
+HOME=$H ISS_STATE_DIR=$S "$RP" split --repo myrepo --spec 9 --wave 1
+[ -f "$S/runs/myrepo-9-"*/run.json ] && ok "ISS_STATE_DIR selects run root" || bad "ISS_STATE_DIR selects run root" "missing custom-state run"
+
 # invalid phase
 out=$("$RP" bogus --run-dir "$WORK/p-done" 2>&1); rc=$?
 [ $rc -ne 0 ] && echo "$out" | grep -qi usage && ok "invalid phase" || bad "invalid phase" "rc=$rc"

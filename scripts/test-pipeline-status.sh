@@ -702,6 +702,12 @@ NODE
 RUN_EXIT=$?
 expect_exit 0 "order JSON has no shelved-only spec entries"
 
+mkdir -p "$REPO/.git/implement-spec-split/claims"
+printf '%s\n' '{"spec":88,"worktree":null,"handoff":"fresh","handoff_until_epoch":9999999999}' \
+  > "$REPO/.git/implement-spec-split/claims/spec-88.json"
+printf '%s\n' '{"spec":95,"worktree":null,"handoff":"fresh","handoff_until_epoch":1794743900}' \
+  > "$REPO/.git/implement-spec-split/claims/spec-95.json"
+
 run_status "$REPO" "$WORK/graph.json" --graph
 expect_exit 0 "graph scan succeeds"
 run_status "$REPO" "$WORK/graph-order.json" --order --json
@@ -717,7 +723,7 @@ assert.deepStrictEqual(graph.counts.maps, {
   total: 18, closed: 3, shelved: 2, empty: 1, exploring: 2, fog_pending: 2, unconverted: 5,
 });
 assert.deepStrictEqual(graph.counts.specs, {
-  total: 13, landed: 4, needs_tickets: 3, ready: 3, running: 0, interrupted: 2, shelved: 1,
+  total: 13, landed: 4, needs_tickets: 3, ready: 2, running: 1, interrupted: 2, shelved: 1,
 });
 assert.deepStrictEqual(graph.counts.tickets, {total: 24, closed: 6});
 const map = (n) => graph.maps.find((item) => item.number === n);
@@ -739,11 +745,15 @@ assert.strictEqual(spec(195).map, 46);
 assert.strictEqual(spec(89).map, null);
 assert.strictEqual(spec(89).status, 'interrupted');
 assert.strictEqual(spec(89).claim.branch, 'spec-89');
-assert.strictEqual(spec(88).status, 'ready');
-assert.strictEqual(spec(88).claim.state, 'idle');
+assert.strictEqual(spec(88).status, 'running');
+assert.strictEqual(spec(88).claim.state, 'reserved');
 assert.strictEqual(spec(93).status, 'needs_tickets');
 assert.strictEqual(spec(93).has_tickets, false);
 assert.strictEqual(spec(93).claim, null);
+assert.strictEqual(spec(88).claim.branch, 'spec-88');
+assert.strictEqual(spec(95).status, 'ready');
+assert.strictEqual(spec(95).claim.state, 'idle');
+assert.notStrictEqual(spec(95).claim.state, 'reserved');
 assert.strictEqual(spec(160).status, 'shelved');
 assert.strictEqual(spec(94).status, 'landed');
 assert.deepStrictEqual(spec(94).tickets.map((t) => [t.number, t.state]), [[190, 'closed']]);
@@ -757,6 +767,8 @@ NODE
 RUN_EXIT=$?
 expect_exit 0 "graph counts, relations and wave 1 match hand-counted fixture"
 [ "$RUN_EXIT" -eq 0 ] || cat "$WORK/graph-check.txt"
+rm -f "$REPO/.git/implement-spec-split/claims/spec-88.json" \
+  "$REPO/.git/implement-spec-split/claims/spec-95.json"
 run_status "$REPO" "$WORK/help.out" --help
 expect_has '--graph' 'help documents --graph' "$WORK/help.out"
 run_status "$REPO" "$WORK/graph-order.out" --order --parallel 20 --cmd-suffix ''

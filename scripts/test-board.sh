@@ -101,7 +101,7 @@ run_board() {
   : > "$output.err"
   env HOME="$HOME_DIR" ISS_STATE_DIR="$STATE" BOARD_DIR="$BOARD" \
     BOARD_NOW="$NOW_ISO" BOARD_PIPELINE_STATUS="$BIN/fake-pipeline" \
-    BOARD_CONCURRENCY=2 BOARD_STALL_SECS="${BOARD_STALL_SECS:-1}" \
+    BOARD_CONCURRENCY=2 \
     PATH="$BIN:$PATH" bash "$SCRIPT" "$@" > "$output" 2> "$output.err"
   RUN_EXIT=$?
 }
@@ -186,14 +186,18 @@ NODE
 # to pipeline-status --graph is clearer than replaying the large fake gh dataset.
 cat > "$GRAPHS/alpha.json" <<EOF
 {
-  "repo": "owner/alpha", "counts": {"maps": {"total":1,"closed":0,"shelved":0,"empty":0,"exploring":0,"fog_pending":0,"unconverted":0}, "specs": {"total":5,"landed":1,"needs_tickets":0,"ready":1,"running":1,"interrupted":1,"shelved":0}, "tickets": {"total":4,"closed":0}},
-  "maps": [{"number":10,"title":"Alpha map","state":"open","shelved":false,"has_fog":false,"status":"converted","decisions_total":1,"decisions_open":0,"spec_numbers":[101,102,103],"tickets":[]}],
+  "repo": "owner/alpha", "counts": {"maps": {"total":2,"closed":1,"shelved":0,"empty":0,"exploring":0,"fog_pending":0,"unconverted":0}, "specs": {"total":6,"landed":1,"needs_tickets":0,"ready":2,"running":2,"interrupted":1,"shelved":0}, "tickets": {"total":7,"closed":2}},
+  "maps": [
+    {"number":10,"title":"Alpha map","state":"open","shelved":false,"has_fog":false,"status":"converted","decisions_total":1,"decisions_open":0,"spec_numbers":[101,102,103,107],"tickets":[]},
+    {"number":11,"title":"Closed map","state":"closed","shelved":false,"has_fog":false,"status":"closed","decisions_total":1,"decisions_open":0,"spec_numbers":[105],"tickets":[{"number":206,"title":"Old map ticket","state":"closed","shelved":false},{"number":208,"title":"Open map ticket","state":"open","shelved":false}]}
+  ],
   "specs": [
-    $(spec_json 101 running running 10),
+    $(spec_json 101 running active 10),
     $(spec_json 102 ready idle 10),
     $(spec_json 103 interrupted interrupted 10),
-    $(spec_json 104 ready none),
-    {"number":105,"title":"Landed spec","kind":"spec","state":"closed","status":"landed","map":10,"has_tickets":true,"tickets":[{"number":205,"title":"Old ticket","state":"closed","shelved":false}],"tickets_total":1,"tickets_closed":1,"claim":null,"depends_on":[],"extra_blockers":[]}
+    $(spec_json 104 ready reserved),
+    $(spec_json 107 running active 10),
+    {"number":105,"title":"Landed spec","kind":"spec","state":"closed","status":"landed","map":11,"has_tickets":true,"tickets":[{"number":205,"title":"Old ticket","state":"closed","shelved":false}],"tickets_total":1,"tickets_closed":1,"claim":null,"depends_on":[],"extra_blockers":[]}
   ],
   "loose_specs": [104],
   "next_wave": {"parallel_specs":2,"workers":4,"per_spec_parallel":2,"resume":[],"active":[],"wave1":[{"spec":104,"title":"Spec 104","command":"/implement-spec-split 104","note":""}],"later":[],"cycles":[],"standalone":[]}
@@ -276,6 +280,9 @@ RUN103=$(run_json run103 review 1 0 0 1 864000 103 alpha)
 RUN201=$(run_json run201 review 2 1 0 0 3600 201 recent)
 RUN301=$(run_json run301 parked 1 0 1 0 864000 301 old)
 RUN401=$(run_json run401 review 1 0 0 1 1728000 401 cold)
+RUN107_OLD=$(run_json run107old review 1 1 0 0 864000 107 alpha)
+RUN107_NEW=$STATE/runs/alpha-107-$(stamp 400)
+mkdir -p "$RUN107_NEW"
 
 worker() { # run name pid status watchIdle
   run=$1 name=$2 pid=$3 status=${4:-} idle=${5:-0}
@@ -289,7 +296,7 @@ fs.writeFileSync(file, JSON.stringify({started_at:n-i-30, last_progress_at:n-i, 
 NODE
   case $status in
     '') ;;
-    ok|error)
+    ok|error|stalled|quota|auth|transient|timeout|violation)
       printf '{"status":"%s","error":%s}\n' "$status" "$([ "$status" = ok ] && echo null || echo '"failed"')" > "$dir/status.json"
       sleep 0.02
       touch "$dir/status.json"
@@ -311,6 +318,8 @@ worker "$RUN101" impl-402 "$LIVE_PID" '' 0
 worker "$RUN101" impl-403 "$LIVE_PID" '' 2
 worker "$RUN101" merge-1 "$LIVE_PID" ok 0
 worker "$RUN101" fix-404 "$LIVE_PID" error 0
+worker "$RUN101" impl-405 "$LIVE_PID" '' 3600
+worker "$RUN101" fix-406 "$LIVE_PID" quota 0
 worker "$RUN103" impl-303 "$DEAD_PID" '' 0
 
 # The first command is the normal snapshot fixture.  During test-first
@@ -331,9 +340,10 @@ fi
 check "non-github registry entry filtered" "$BOARD/snapshot.json" 'j.repos.some(r => r.repo === "owner/other")' false
 check "unused repo retained in machine snapshot" "$BOARD/snapshot.json" 'j.repos.find(r => r.repo === "owner/unused").unused' true
 check "used repo is not unused" "$BOARD/repos/owner__alpha.json" 'j.unused' false
-check "graph counts copied" "$BOARD/repos/owner__alpha.json" 'j.counts.specs.total' 5
+check "graph counts copied" "$BOARD/repos/owner__alpha.json" 'j.counts.specs.total' 6
 check "next wave copied" "$BOARD/repos/owner__alpha.json" 'j.next_wave.wave1[0].spec' 104
 check "map embeds spec objects" "$BOARD/repos/owner__alpha.json" 'j.maps[0].specs[0].number' 101
+check "closed map embeds spec objects" "$BOARD/repos/owner__alpha.json" 'j.maps.find(m=>m.number===11).specs[0].number' 105
 check "loose spec embeds object" "$BOARD/repos/owner__alpha.json" 'j.loose_specs[0].number' 104
 
 # Orca failure falls back to cache; failure with no cache is fatal.
@@ -422,12 +432,14 @@ check "failed refresh records github error" "$BOARD/repos/owner__alpha.json" 'ty
 
 # Claim, Run and worker semantics.
 check "active claim mapped" "$BOARD/repos/owner__alpha.json" 'j.specs.find(s=>s.number===101).claim.state' active
-check "reserved claim mapped" "$BOARD/repos/owner__alpha.json" 'j.specs.find(s=>s.number===102).claim.state' reserved
+check "expired reservation follows graph idle" "$BOARD/repos/owner__alpha.json" 'j.specs.find(s=>s.number===102).claim' null
+check "graph reservation mapped without local branch check" "$BOARD/repos/owner__alpha.json" 'j.specs.find(s=>s.number===104).claim.state' reserved
 check "interrupted claim mapped" "$BOARD/repos/owner__alpha.json" 'j.specs.find(s=>s.number===103).claim.state' interrupted
-check "claim counts calculated" "$BOARD/repos/owner__alpha.json" 'j.claims.active+","+j.claims.reserved+","+j.claims.interrupted' '1,1,1'
+check "claim counts calculated" "$BOARD/repos/owner__alpha.json" 'j.claims.active+","+j.claims.reserved+","+j.claims.interrupted' '2,1,1'
 check "run attached to claimed open spec" "$BOARD/repos/owner__alpha.json" 'j.specs.find(s=>s.number===101).run.phase' implement
 check "parked run attached without claim" "$BOARD/repos/owner__alpha.json" 'j.specs.find(s=>s.number===104).run.phase' parked
 check "latest run selected" "$BOARD/repos/owner__alpha.json" 'j.specs.find(s=>s.number===101).run.dir.endsWith("/state/runs/alpha-101-'$(stamp 300)'")' true
+check "latest run name wins without run.json" "$BOARD/repos/owner__alpha.json" 'j.specs.find(s=>s.number===107).run.dir.endsWith("/state/runs/alpha-107-'$(stamp 400)'") && j.specs.find(s=>s.number===107).run.phase===null' true
 check "worker dead state" "$BOARD/repos/owner__alpha.json" 'j.specs.find(s=>s.number===101).workers.find(w=>w.name==="impl-401").state' dead
 check "worker running state" "$BOARD/repos/owner__alpha.json" 'j.specs.find(s=>s.number===101).workers.find(w=>w.name==="impl-402").state' running
 check "worker finished ok" "$BOARD/repos/owner__alpha.json" 'j.specs.find(s=>s.number===101).workers.find(w=>w.name==="merge-1").state' finished
@@ -435,8 +447,10 @@ check "worker finished error" "$BOARD/repos/owner__alpha.json" 'j.specs.find(s=>
 check "worker duration fields" "$BOARD/repos/owner__alpha.json" 'j.specs.find(s=>s.number===101).workers.find(w=>w.name==="impl-402").duration_s>=0' true
 check "dead worker anomalous" "$BOARD/repos/owner__alpha.json" 'j.specs.find(s=>s.number===101).workers.find(w=>w.name==="impl-401").anomalous' true
 check "fresh running worker normal" "$BOARD/repos/owner__alpha.json" 'j.specs.find(s=>s.number===101).workers.find(w=>w.name==="impl-402").anomalous' false
-check "stalled running worker anomalous" "$BOARD/repos/owner__alpha.json" 'j.specs.find(s=>s.number===101).workers.find(w=>w.name==="impl-403").anomalous' true
+check "wrapper owns running idle judgment" "$BOARD/repos/owner__alpha.json" 'j.specs.find(s=>s.number===101).workers.find(w=>w.name==="impl-403").anomalous' false
+check "long-idle running worker stays normal" "$BOARD/repos/owner__alpha.json" 'j.specs.find(s=>s.number===101).workers.find(w=>w.name==="impl-405").anomalous' false
 check "failed finish anomalous" "$BOARD/repos/owner__alpha.json" 'j.specs.find(s=>s.number===101).workers.find(w=>w.name==="fix-404").anomalous' true
+check "quota finish anomalous" "$BOARD/repos/owner__alpha.json" 'j.specs.find(s=>s.number===101).workers.find(w=>w.name==="fix-406").anomalous' true
 check "interrupted worker listed but normal" "$BOARD/repos/owner__alpha.json" 'j.specs.find(s=>s.number===103).workers.find(w=>w.name==="impl-303").anomalous' false
 check "interrupted attention" "$BOARD/repos/owner__alpha.json" 'j.attention.some(a=>a.kind==="interrupted"&&a.spec===103)' true
 check "parked attention" "$BOARD/repos/owner__alpha.json" 'j.attention.some(a=>a.kind==="parked"&&a.spec===104)' true
@@ -476,12 +490,32 @@ expect_without 'owner/unused' "--all still excludes unused repo" "$WORK/all.out"
 # Single-repo rendering and all accepted selector forms.
 run_board "$WORK/repo-owner.out" owner/alpha
 expect_exit 0 "owner/name selector succeeds"
-expect_has '地图：1' "single repo shows map count" "$WORK/repo-owner.out"
+expect_has '地图：2' "single repo shows map count" "$WORK/repo-owner.out"
+expect_has '规格：6（已落地 1，实现中 2，中断 1，待拆 0，可实现 2）｜Ticket 已关 2/7' "single repo labels counts" "$WORK/repo-owner.out"
 expect_has '#10 Alpha map' "single repo shows map tree" "$WORK/repo-owner.out"
+expect_has '#11 Closed map［closed］（Ticket 3 张）' "closed map tickets collapse to a total count" "$WORK/repo-owner.out"
+expect_without '#105 ' "closed map hides closed specs" "$WORK/repo-owner.out"
+expect_without '#206 ' "closed map hides direct tickets" "$WORK/repo-owner.out"
+expect_without '#208 ' "closed map hides open direct tickets" "$WORK/repo-owner.out"
 expect_has '#101 Spec 101' "single repo shows open spec" "$WORK/repo-owner.out"
 expect_has '实现 implement（第 1 波）' "single repo shows run phase" "$WORK/repo-owner.out"
-expect_has 'impl-401' "single repo shows worker" "$WORK/repo-owner.out"
+expect_has 'impl-401' "single repo shows abnormal worker" "$WORK/repo-owner.out"
+expect_has 'fix-406' "single repo shows quota worker" "$WORK/repo-owner.out"
+expect_has '另有 4 个正常 Worker' "normal workers collapse to a count" "$WORK/repo-owner.out"
+expect_without 'impl-402' "normal workers are not listed individually" "$WORK/repo-owner.out"
+expect_without 'impl-405' "long-idle normal worker is not listed individually" "$WORK/repo-owner.out"
 expect_has '!' "single repo marks anomaly" "$WORK/repo-owner.out"
+
+(
+  env HOME="$HOME_DIR" ISS_STATE_DIR="$STATE" BOARD_DIR="$BOARD" \
+    BOARD_NOW="$NOW_ISO" BOARD_PIPELINE_STATUS="$BIN/fake-pipeline" \
+    BOARD_CONCURRENCY=2 PATH="$BIN:$PATH" \
+    bash "$SCRIPT" owner/alpha 2> "$WORK/epipe.err" | head -n 1 > "$WORK/epipe.out"
+  printf '%s\n' "${PIPESTATUS[0]}" > "$WORK/epipe.rc"
+)
+RUN_EXIT=$(cat "$WORK/epipe.rc")
+expect_exit 0 "closed stdout pipe exits zero"
+expect_without 'EPIPE' "closed stdout pipe is silent" "$WORK/epipe.err"
 
 run_board "$WORK/repo-dir.out" alpha
 expect_exit 0 "directory selector succeeds"
@@ -598,6 +632,9 @@ GAMMA_AT=$(grep -n '查看 owner/gamma' "$HOME_HTML" | head -1 | cut -d: -f1)
 expect_without 'owner/delta' "unused repo not on home" "$HOME_HTML"
 expect_has '需处理' "attention badge" "$HOME_HTML"
 expect_has 'impl-67: worker 结束状态为 error' "attention reason on home" "$HOME_HTML"
+expect_has '地图 已关 1/3' "home map count is labelled" "$HOME_HTML"
+expect_has 'Spec 已落 2/4' "home spec count is labelled" "$HOME_HTML"
+expect_has 'Ticket 已关 4/10' "home ticket count is labelled" "$HOME_HTML"
 expect_has '地图完成比例</span><b>33%</b>' "home map percent" "$HOME_HTML"
 expect_has 'Spec完成比例</span><b>50%</b>' "home spec percent" "$HOME_HTML"
 expect_has 'Ticket完成比例</span><b>40%</b>' "home ticket percent" "$HOME_HTML"
@@ -620,7 +657,8 @@ expect_has '待做票OPENTICKET' "open ticket listed" "$ALPHA_HTML"
 expect_without '已做票CLOSEDTICKET' "closed ticket collapsed" "$ALPHA_HTML"
 expect_has '已关 Ticket 1 张' "closed tickets show count" "$ALPHA_HTML"
 expect_has 'Run 阶段 <b>integrate</b> · 第 2 波' "run phase and wave" "$ALPHA_HTML"
-expect_has '已合 3' "run merged count" "$ALPHA_HTML"
+expect_has 'Run：已合 3 · 进行中 1 · 待做 2' "run ticket counts are labelled" "$ALPHA_HTML"
+expect_has 'Run 已合 3/6' "run summary distinguishes merged count" "$ALPHA_HTML"
 expect_has 'claim <b>active</b>' "claim state" "$ALPHA_HTML"
 expect_has '散 Spec（不属于地图）' "loose spec group" "$ALPHA_HTML"
 expect_has '散规格LOOSESPEC' "loose spec listed" "$ALPHA_HTML"
@@ -739,6 +777,8 @@ else
 fi
 run_board "$WORK/prune-help.out" --help
 expect_has "Do NOT put prune in a scheduled job" "help warns against scheduling" "$WORK/prune-help.out"
+expect_has "先按刷新节奏刷新（过期才调 gh）再显示" "help explains terminal refresh cadence" "$WORK/prune-help.out"
+expect_has "Orca 返回空列表时也跳过第 1 类" "help explains conservative empty registry" "$WORK/prune-help.out"
 run_board "$WORK/prune-bad.out" --yes
 expect_exit 1 "--yes without prune is rejected"
 

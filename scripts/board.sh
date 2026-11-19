@@ -11,7 +11,9 @@ Usage: board.sh snapshot [--force] [--repo <owner/name|dir|path>]
 
 Build a Progress board snapshot from the Orca Repo registry, pipeline-status
 relation graphs, Claim records, Run directories and External workers.  Without
-a subcommand, the same refresh is followed by a Chinese terminal view.
+a subcommand, the same refresh is followed by a Chinese terminal view: it first
+refreshes on the cache cadence (only expired repositories call gh), then shows
+the current snapshot.  In Chinese: 先按刷新节奏刷新（过期才调 gh）再显示。
 
   snapshot               Refresh caches and write board JSON snapshots
   <repo>                 Refresh, then show one repository
@@ -27,14 +29,15 @@ a subcommand, the same refresh is followed by a Chinese terminal view.
 
 BOARD_DIR overrides the board directory (default
 ${ISS_STATE_DIR:-~/.cache/implement-spec-split}/board). BOARD_NOW is an ISO time
-for deterministic tests. BOARD_PIPELINE_STATUS, BOARD_CONCURRENCY and
-BOARD_STALL_SECS are also test/operation seams.
+for deterministic tests. BOARD_PIPELINE_STATUS and BOARD_CONCURRENCY are also
+test/operation seams.
 
 PRUNE
   Two kinds of leftovers, nothing else:
     1. Repos no longer in the Orca Repo registry: their Run directories,
        Launch state and board snapshots/graphs.  Skipped (with the reason
-       printed) when the orca call fails or lists no repos.
+       printed) when the orca call fails or lists no repos; Orca 返回空列表时也跳过第 1 类
+       (an empty list is treated conservatively as Orca not being ready).
     2. Repos still in the registry: Run directories whose Spec has been closed
        for more than 14 days, and Claim records whose holder process is dead
        and whose Spec is closed.
@@ -66,6 +69,11 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const {spawnSync, execFile} = require("child_process");
+
+process.stdout.on("error", (error) => {
+  if (error?.code === "EPIPE") process.exit(0);
+  throw error;
+});
 
 const scriptDir = process.argv[2];
 const rawArgs = process.argv.slice(3);
@@ -158,8 +166,6 @@ const nowEpoch = Math.floor(nowDate.getTime() / 1000);
 const nowIso = nowDate.toISOString();
 const concurrency = Number(env.BOARD_CONCURRENCY || 3);
 if (!Number.isSafeInteger(concurrency) || concurrency < 1) fail("BOARD_CONCURRENCY must be a positive integer");
-const stallSecs = Number(env.BOARD_STALL_SECS ?? 900);
-if (!Number.isFinite(stallSecs) || stallSecs < 0) fail("BOARD_STALL_SECS must be a non-negative number");
 const stateDir = env.ISS_STATE_DIR || path.join(os.homedir(), ".cache", "implement-spec-split");
 const boardDir = env.BOARD_DIR || path.join(stateDir, "board");
 const pipelineScript = env.BOARD_PIPELINE_STATUS || path.join(scriptDir, "pipeline-status.sh");
@@ -173,11 +179,19 @@ function readJson(file) {
   }
 }
 
-function atomicWriteJson(file, value) {
+function repoKey(repo) {
+  return String(repo).replace("/", "__");
+}
+
+function atomicWrite(file, text) {
   fs.mkdirSync(path.dirname(file), {recursive: true});
   const temporary = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.tmp`);
-  fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`);
+  fs.writeFileSync(temporary, text);
   fs.renameSync(temporary, file);
+}
+
+function atomicWriteJson(file, value) {
+  atomicWrite(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 function warn(message) {
@@ -191,15 +205,40 @@ function commandText(result, command) {
   return [stderr, stdout].filter(Boolean).join(": ") || `${command} failed`;
 }
 
-function loadRegistry() {
-  const cache = path.join(boardDir, "registry.json");
+function parseOrcaRegistry() {
   const result = spawnSync("orca", ["repo", "list", "--json"], {
     encoding: "utf8", maxBuffer: 64 * 1024 * 1024,
   });
+  let repos = null;
   if (result.status === 0) {
     let value = null;
     try { value = JSON.parse(result.stdout || "null"); } catch {}
-    const repos = Array.isArray(value?.result?.repos) ? value.result.repos : null;
+    if (Array.isArray(value?.result?.repos)) repos = value.result.repos;
+  }
+  return {result, repos};
+}
+
+function githubRegistryRepos(items) {
+  const filtered = [];
+  for (const item of items) {
+    const remote = String(item?.gitRemoteIdentity?.canonicalKey || "");
+    const repoPath = String(item?.path || "");
+    if (!remote.startsWith("github.com/") || !repoPath) continue;
+    const name = remote.slice("github.com/".length);
+    if (!name.includes("/")) continue;
+    filtered.push({
+      repo: name,
+      path: path.resolve(repoPath),
+      dir: path.basename(path.resolve(repoPath)),
+    });
+  }
+  return filtered;
+}
+
+function loadRegistry() {
+  const cache = path.join(boardDir, "registry.json");
+  const {result, repos} = parseOrcaRegistry();
+  if (result.status === 0) {
     if (!repos) {
       const cachedInvalid = readJson(cache);
       if (!Array.isArray(cachedInvalid?.repos)) {
@@ -208,19 +247,7 @@ function loadRegistry() {
       warn("orca repo list returned invalid JSON; using cached registry");
       return {source: "cache", fetched_at: cachedInvalid.fetched_at || null, repos: cachedInvalid.repos};
     }
-    const filtered = [];
-    for (const item of repos) {
-      const remote = String(item?.gitRemoteIdentity?.canonicalKey || "");
-      const repoPath = String(item?.path || "");
-      if (!remote.startsWith("github.com/") || !repoPath) continue;
-      const name = remote.slice("github.com/".length);
-      if (!name.includes("/")) continue;
-      filtered.push({
-        repo: name,
-        path: path.resolve(repoPath),
-        dir: path.basename(path.resolve(repoPath)),
-      });
-    }
+    const filtered = githubRegistryRepos(repos);
     const cached = {fetched_at: nowIso, repos: filtered};
     atomicWriteJson(cache, cached);
     return {source: "orca", fetched_at: nowIso, repos: filtered};
@@ -249,11 +276,6 @@ function resolveGitCommon(repoPath) {
   const value = String(result.stdout || "").trim();
   if (!value) return null;
   return absoluteReal(path.isAbsolute(value) ? value : path.resolve(repoPath, value));
-}
-
-function branchExists(repoPath, spec) {
-  const result = spawnSync("git", ["-C", repoPath, "show-ref", "--verify", "--quiet", `refs/heads/spec-${spec}`]);
-  return result.status === 0;
 }
 
 function localTimestamp(name) {
@@ -300,16 +322,10 @@ function runRender() {
   if (!machine || !Array.isArray(machine.repos)) fail("没有可用的快照：先运行 board.sh snapshot", 1);
   const renderer = require(path.join(scriptDir, "board-render.js"));
   // snapshot.json is slim; the home cards also need next_wave from the repo file.
-  const repoFile = (name) => path.join(boardDir, "repos", `${name.replace("/", "__")}.json`);
+  const repoFile = (name) => path.join(boardDir, "repos", `${repoKey(name)}.json`);
   const full = machine.repos.map((entry) => ({...entry, next_wave: readJson(repoFile(entry.repo))?.next_wave ?? null}));
   const sel = selectHomeRepos(full, 7);
   const snapshotAt = machine.snapshot_at || nowIso;
-  const writeAtomic = (file, text) => {
-    fs.mkdirSync(path.dirname(file), {recursive: true});
-    const temporary = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.tmp`);
-    fs.writeFileSync(temporary, text);
-    fs.renameSync(temporary, file);
-  };
   const ctx = {snapshotAt, nowEpoch};
   const keep = new Set();
   let pages = 0;
@@ -320,13 +336,13 @@ function runRender() {
     const snap = readJson(repoFile(entry.repo));
     if (!snap) { warn(`缺少 ${entry.repo} 的仓库快照，跳过其页面`); continue; }
     const dir = path.join(boardDir, "r", slug[0], slug[1]);
-    writeAtomic(path.join(dir, "index.html"), renderer.renderRepo(snap, ctx));
+    atomicWrite(path.join(dir, "index.html"), renderer.renderRepo(snap, ctx));
     keep.add(path.join(slug[0], slug[1]));
     pages += 1;
   }
   const attention = sel.visible.filter((value) => value.needs_attention);
   const recent = sel.visible.filter((value) => !value.needs_attention);
-  writeAtomic(path.join(boardDir, "index.html"), renderer.renderHome(
+  atomicWrite(path.join(boardDir, "index.html"), renderer.renderHome(
     {attention, recent, hidden: sel.hidden, unused: sel.unusedCount}, ctx));
   // Drop pages of repos no longer in the snapshot; only ever under <board>/r/.
   const root = path.join(boardDir, "r");
@@ -388,13 +404,7 @@ function scanRuns(repo, runsBase) {
     if (updatedEpoch !== null) activity.push(updatedEpoch);
     const previous = runs.get(spec);
     const key = match[2];
-    if (!previous || key > previous.key) runs.set(spec, {...previous, key, dir, run, name: entry.name});
-    else {
-      // Keep any useful artifacts from an older name only if the newest name
-      // unexpectedly lacks run.json; name order itself is authoritative.
-      const current = runs.get(spec);
-      if (!current.run && run) current.run = run;
-    }
+    if (!previous || key > previous.key) runs.set(spec, {key, dir, run, name: entry.name});
   }
   return {runs, activity};
 }
@@ -425,19 +435,25 @@ function graphAgeSeconds(cache) {
   return Math.max(0, nowEpoch - cache.fetched_at);
 }
 
-function mappedClaimStates(repo, graph, local) {
+function claimFromGraph(spec) {
+  const graphClaim = spec.claim || null;
+  if (!["active", "reserved", "interrupted"].includes(graphClaim?.state)) return null;
+  return {
+    state: graphClaim.state,
+    branch: graphClaim.branch || `spec-${spec.number}`,
+    worktree: graphClaim.worktree || "",
+    claimed_at: graphClaim.claimed_at || null,
+  };
+}
+
+function mappedClaimStates(graph) {
   if (!graph) return [];
   const states = [];
   for (const spec of Array.isArray(graph.specs) ? graph.specs : []) {
     if (spec.state !== "open") continue;
     const number = Number(spec.number);
     if (!Number.isSafeInteger(number)) continue;
-    const raw = local.claims.get(number)?.record || null;
-    const graphState = spec.claim?.state;
-    let state = null;
-    if (spec.status === "running" || graphState === "running") state = "active";
-    if (spec.status === "interrupted" || graphState === "interrupted") state = "interrupted";
-    if (raw?.handoff && !branchExists(repo.path, number)) state = "reserved";
+    const state = claimFromGraph(spec)?.state || null;
     if (state) states.push({spec: number, state});
   }
   return states;
@@ -445,7 +461,7 @@ function mappedClaimStates(repo, graph, local) {
 
 function isRepoActive(repo, graph, local) {
   if (local.lastActivityEpoch !== null && nowEpoch - local.lastActivityEpoch <= 7 * 86400) return true;
-  return mappedClaimStates(repo, graph, local).some((item) => item.state !== null);
+  return mappedClaimStates(graph).some((item) => item.state !== null);
 }
 
 function runPrune() {
@@ -462,11 +478,8 @@ function runPrune() {
   let orcaOk = false;
   let allDirs = new Set();
   let ghRepos = [];
-  const result = spawnSync("orca", ["repo", "list", "--json"], {encoding: "utf8", maxBuffer: 64 * 1024 * 1024});
+  const {result, repos: list} = parseOrcaRegistry();
   if (result.status === 0) {
-    let value = null;
-    try { value = JSON.parse(result.stdout || "null"); } catch {}
-    const list = Array.isArray(value?.result?.repos) ? value.result.repos : null;
     if (!list) notes.push("orca repo list 返回了无法解析的内容，已跳过第 1 类（已不在 Orca 的仓库）");
     else if (list.length === 0) notes.push("orca repo list 返回 0 个仓库，疑似 Orca 未就绪，已跳过第 1 类（已不在 Orca 的仓库）");
     else {
@@ -474,11 +487,8 @@ function runPrune() {
       for (const item of list) {
         const p = String(item?.path || "");
         if (p) allDirs.add(path.basename(path.resolve(p)));
-        const remote = String(item?.gitRemoteIdentity?.canonicalKey || "");
-        if (remote.startsWith("github.com/") && p && remote.slice(11).includes("/")) {
-          ghRepos.push({repo: remote.slice(11), path: path.resolve(p), dir: path.basename(path.resolve(p))});
-        }
       }
+      ghRepos = githubRegistryRepos(list);
     }
   } else {
     notes.push(`orca repo list 失败（${commandText(result, "orca repo list")}），已跳过第 1 类（已不在 Orca 的仓库）`);
@@ -525,7 +535,7 @@ function runPrune() {
   for (const r of ghRepos) dirCount.set(r.dir, (dirCount.get(r.dir) || 0) + 1);
   const ambiguous = (r) => dirCount.get(r.dir) > 1;
   const byDir = new Map(ghRepos.map((r) => [r.dir, r]));
-  const registryKeys = new Set(ghRepos.map((r) => r.repo.replace("/", "__")));
+  const registryKeys = new Set(ghRepos.map((r) => repoKey(r.repo)));
 
   // Class 1: repos gone from Orca.
   if (orcaOk) {
@@ -655,7 +665,7 @@ const repoSnapshotDir = path.join(boardDir, "repos");
 const runsBase = path.join(stateDir, "runs");
 const locals = new Map(repositories.repos.map((repo) => [repo.repo, scanLocal(repo, runsBase)]));
 const oldGraphs = new Map(repositories.repos.map((repo) => {
-  const file = path.join(graphDir, `${repo.repo.replace("/", "__")}.json`);
+  const file = path.join(graphDir, `${repoKey(repo.repo)}.json`);
   return [repo.repo, {file, cache: readJson(file)}];
 }));
 
@@ -713,24 +723,9 @@ function refreshGraph(job) {
   const snapshots = [];
   const repoSnapshots = new Map();
 
-  function enrichSpec(spec, repo, local) {
+  function enrichSpec(spec, local) {
     const number = Number(spec.number);
-    let claim = null;
-    if (spec.state === "open") {
-      const raw = local.claims.get(number)?.record || null;
-      let state = null;
-      if (spec.status === "running" || spec.claim?.state === "running") state = "active";
-      if (spec.status === "interrupted" || spec.claim?.state === "interrupted") state = "interrupted";
-      if (raw?.handoff && !branchExists(repo.path, number)) state = "reserved";
-      if (state) {
-        claim = {
-          state,
-          branch: raw?.branch || spec.claim?.branch || `spec-${number}`,
-          worktree: raw?.worktree || spec.claim?.worktree || "",
-          claimed_at: raw?.claimed_at || null,
-        };
-      }
-    }
+    const claim = spec.state === "open" ? claimFromGraph(spec) : null;
     const runRecord = local.runs.get(number) || null;
     const includeRun = spec.state === "open" && (claim !== null || (runRecord?.run?.phase && runRecord.run.phase !== "done"));
     const run = includeRun && runRecord ? {
@@ -769,13 +764,12 @@ function refreshGraph(job) {
         const idle = Number.isFinite(lastProgressAt) ? Math.max(0, nowEpoch - lastProgressAt) : null;
         let anomalous = false;
         let anomalyReason = null;
+        const badStatuses = new Set(["error", "stalled", "quota", "auth", "transient", "timeout", "violation"]);
         if (claim.state === "active" || claim.state === "reserved") {
           if (state === "dead") {
             anomalous = true; anomalyReason = "worker 已退出且没有结果";
-          } else if (state === "finished" && status !== "ok") {
+          } else if (badStatuses.has(status)) {
             anomalous = true; anomalyReason = `worker 结束状态为 ${status || "unknown"}`;
-          } else if (state === "running" && idle !== null && idle > stallSecs) {
-            anomalous = true; anomalyReason = `超过 ${stallSecs} 秒无进展`;
           }
         }
         const roleMatch = entry.name.match(/^(.*)-(\d+)[a-z]*(?:-.*)?$/);
@@ -817,7 +811,7 @@ function refreshGraph(job) {
     const cache = readJson(graphInfo.file);
     const graph = cache?.graph || null;
     const githubError = errors.get(repo.repo) || null;
-    const specs = (Array.isArray(graph?.specs) ? graph.specs : []).map((spec) => enrichSpec(spec, repo, local));
+    const specs = (Array.isArray(graph?.specs) ? graph.specs : []).map((spec) => enrichSpec(spec, local));
     const specByNumber = new Map(specs.map((spec) => [Number(spec.number), spec]));
     const maps = (Array.isArray(graph?.maps) ? graph.maps : []).map((map) => ({
       number: map.number,
@@ -867,7 +861,7 @@ function refreshGraph(job) {
       specs,
       loose_specs: looseSpecs,
     };
-    atomicWriteJson(path.join(repoSnapshotDir, `${repo.repo.replace("/", "__")}.json`), value);
+    atomicWriteJson(path.join(repoSnapshotDir, `${repoKey(repo.repo)}.json`), value);
     repoSnapshots.set(repo.repo, value);
     snapshots.push({
       repo: value.repo,
@@ -909,7 +903,7 @@ function refreshGraph(job) {
   function countLine(value) {
     const c = value.counts;
     if (!c) return "  计数：不可用（GitHub 关系图缺失）";
-    return `  地图：${c.maps.total}｜规格：${c.specs.total}（已落地 ${c.specs.landed}，待拆 ${c.specs.needs_tickets}，可实现 ${c.specs.ready}）｜Ticket：${c.tickets.closed}/${c.tickets.total}`;
+    return `  地图：${c.maps.total}｜规格：${c.specs.total}（已落地 ${c.specs.landed}，实现中 ${c.specs.running}，中断 ${c.specs.interrupted}，待拆 ${c.specs.needs_tickets}，可实现 ${c.specs.ready}）｜Ticket 已关 ${c.tickets.closed}/${c.tickets.total}`;
   }
 
   if (!selectedRepo) {
@@ -943,6 +937,12 @@ function refreshGraph(job) {
 
   process.stdout.write("\n结构树\n");
   for (const map of value.maps) {
+    if (map.state === "closed") {
+      const ticketTotal = map.specs.reduce((sum, spec) => sum + Number(spec.tickets_total || 0), 0)
+        + map.tickets.length;
+      process.stdout.write(`#${map.number} ${map.title}［${map.status}］（Ticket ${ticketTotal} 张）\n`);
+      continue;
+    }
     process.stdout.write(`#${map.number} ${map.title}［${map.status}］\n`);
     for (const spec of map.specs) {
       if (spec.state === "closed") {
@@ -972,11 +972,17 @@ function refreshGraph(job) {
     for (const spec of running) {
       if (!spec.run && !spec.claim) continue;
       const state = spec.claim ? spec.claim.state : spec.status;
-      const runText = spec.run ? `实现 ${spec.run.phase}${spec.run.wave ? `（第 ${spec.run.wave} 波）` : ""}｜Ticket ${spec.run.tickets?.merged ?? "?"}/${spec.run.tickets ? (spec.run.tickets.merged + spec.run.tickets.in_progress + spec.run.tickets.todo) : "?"}` : "没有 Run 目录";
+      const tickets = spec.run?.tickets;
+      const runText = spec.run
+        ? `实现 ${spec.run.phase}${spec.run.wave ? `（第 ${spec.run.wave} 波）` : ""}｜Run：已合 ${tickets?.merged ?? "?"} · 进行中 ${tickets?.in_progress ?? "?"} · 待做 ${tickets?.todo ?? "?"}`
+        : "没有 Run 目录";
       process.stdout.write(`#${spec.number} ${spec.title}［${state}｜${runText}］\n`);
-      for (const worker of spec.workers) {
+      const anomalousWorkers = spec.workers.filter((worker) => worker.anomalous);
+      for (const worker of anomalousWorkers) {
         process.stdout.write(`  ${worker.anomalous ? "!" : " "}${worker.name}｜${worker.state}${worker.status ? `/${worker.status}` : ""}｜运行 ${worker.duration_s ?? "?" }s｜距活动 ${worker.idle_s ?? "?"}s${worker.anomalous ? `｜${worker.anomaly_reason}` : ""}\n`);
       }
+      const normalWorkers = spec.workers.length - anomalousWorkers.length;
+      if (normalWorkers > 0) process.stdout.write(`  另有 ${normalWorkers} 个正常 Worker\n`);
     }
   }
 })();

@@ -28,8 +28,9 @@ tracker documentation instead.
                          spec_numbers, tickets[]}; specs[] {number, title, kind, state,
                          status landed|needs_tickets|ready|running|interrupted|shelved, map
                          (number or null), has_tickets, tickets[] {number, title, state,
-                         shelved}, tickets_total, tickets_closed, claim {state, branch,
-                         worktree} or null, depends_on, extra_blockers}; loose_specs[] (Specs
+                         shelved}, tickets_total, tickets_closed, claim {state
+                         active|reserved|interrupted|idle, branch, worktree, claimed_at}
+                         or null, depends_on, extra_blockers}; loose_specs[] (Specs
                          without a map); next_wave (same object as --order --json).
 
 PIPELINE_STATUS_NOW may set an ISO-8601 current time for deterministic stale-claim tests.
@@ -1480,6 +1481,20 @@ if (mode === 'order') {
     const needsTickets = new Set(pipeline.needsTickets.map((spec) => Number(spec.number)));
     const implementByNumber = new Map(pipeline.implement.map((spec) => [Number(spec.number), spec]));
 
+    function graphClaim(number, record = null) {
+      const claim = record?.claim || claimFor(number);
+      if (!claim && !record) return null;
+      let state = record ? record.state : 'idle';
+      if (handoffAlive(claim) && !exactIntegrationBranchExists(number)) state = 'reserved';
+      else if (state === 'running') state = 'active';
+      return {
+        state,
+        branch: record?.branch || String(claim?.branch || ''),
+        worktree: record?.worktree || String(claim?.worktree || ''),
+        claimed_at: claim?.claimed_at || null,
+      };
+    }
+
     // Ticket sets and map membership for every Spec, closed ones included.
     const specRecords = new Map();
     function closedTickets(spec) {
@@ -1499,11 +1514,7 @@ if (mode === 'order') {
       const open = spec.state === 'open';
       let tickets;
       if (open && implementByNumber.has(number)) {
-        tickets = implementByNumber.get(number).tickets.map((ticket) => ({
-          number: ticket.number, title: clean(ticket.title), state: ticket.state, shelved: ticket.shelved,
-        }));
-      } else if (open && shelvedOnly.has(number)) {
-        tickets = [];
+        tickets = implementByNumber.get(number).tickets.map(ticketOf);
       } else if (open) {
         tickets = [];
       } else {
@@ -1525,7 +1536,7 @@ if (mode === 'order') {
       else if (shelvedOnly.has(number)) status = 'shelved';
       else if (records.has(number)) {
         const record = records.get(number);
-        claim = {state: record.state, branch: record.branch, worktree: record.worktree || ''};
+        claim = graphClaim(number, record);
         status = record.state === 'idle' ? 'ready' : record.state;
       } else status = 'ready';
       const record = records.get(number);
@@ -1549,16 +1560,14 @@ if (mode === 'order') {
     for (const spec of pipeline.implement.filter((item) => item.kind === 'legacy')) {
       const number = Number(spec.number);
       const record = records.get(number);
-      const tickets = spec.tickets.map((ticket) => ({
-        number: ticket.number, title: clean(ticket.title), state: ticket.state, shelved: ticket.shelved,
-      }));
+      const tickets = spec.tickets.map(ticketOf);
       specRecords.set(number, {
         number, title: clean(spec.title), kind: 'legacy', state: 'open',
         status: record.state === 'idle' ? 'ready' : record.state,
         map: null, has_tickets: tickets.length > 0, tickets,
         tickets_total: tickets.length,
         tickets_closed: tickets.filter((ticket) => ticket.state === 'closed').length,
-        claim: {state: record.state, branch: record.branch, worktree: record.worktree || ''},
+        claim: graphClaim(number, record),
         depends_on: [...record.dependencies].sort((a, b) => a - b),
         extra_blockers: [...record.extraBlockers].sort((a, b) => a - b),
         map_refs: [],

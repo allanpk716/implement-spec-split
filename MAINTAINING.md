@@ -87,11 +87,13 @@
     - 落地方式不变：直接合入 main 并开下一波；走 PR 的仓库改为等 checks 后自动 `gh pr merge`，同样开下一波（只开 PR 等人审会让通宵只跑一波）。
     - 原先「问用户」的节点改为自动处理，有次数上限，超限就**停车**（规格 issue 下留停车报告、释放认领、结束会话，之后显示为「先恢复」），绝不挂着等人：测试红/CI 红派 fix 最多 2 轮；合 main 冲突由 merger 解决后，再由 REVIEW_MODEL 只审冲突解决部分；规格/ADR 已有答案的设计问题由主会话判断并写进落地报告，真取舍才停车；`transient` 等 10 分钟重试一次；`quota` 后台 sleep、每 30 分钟 preflight、最多 5 小时（sleep 不花 token）；`auth` 和 worker 第二次失败直接停车，不试第三次（两次都失败多半需要人）。
     - 落地成功也在规格 issue 下留落地报告，早上看 GitHub 即可，不回到过期会话。同一批里其他规格互不影响、照常落地。
-22. **2026-11-19：进度看板（Progress board，grilling 定稿，尚未实现）。** 一台机器上同时跑多个仓库的 find-next 和 Run，用户主要在手机上看，想不跑 find-next 就知道全局：有几张地图、关了哪些、哪些没转成规格，哪些规格没拆票，还剩多少规格和票，下一波从哪几份规格开始。决定：
+22. **2026-11-19：进度看板（Progress board，grilling 定稿，已实现；launchd 常驻服务在 `~/ops`，票 #14）。** 一台机器上同时跑多个仓库的 find-next 和 Run，用户主要在手机上看，想不跑 find-next 就知道全局：有几张地图、关了哪些、哪些没转成规格，哪些规格没拆票，还剩多少规格和票，下一波从哪几份规格开始。决定：
     - 只读、只看本机。停止、续跑、开下一波这些动作仍然回到会话里做；唯一的按钮是「立即刷新」。
     - 仓库清单直接用 `orca repo list`（Repo registry），只算有 GitHub 远端、用过这条管线的仓库，不再自己维护一份。仓库从 Orca 里移除后，它在本机的残留（Run 目录、Launch state、快照）就可以 Board pruning；仍在 Orca 里的仓库，已关闭超过 14 天的规格的 Run 目录也可以清。清理一律先 dry-run，加 `--yes` 才删，不放进定时任务；未关闭规格的 Run 目录不删，Recovery 要用。
     - 结构数据复用 `pipeline-status.sh` 已有的关系判断（地图 sub-issue、规格正文里的「地图: #n」、规格→票），新增完整关系图 JSON 输出，判断逻辑不另写一份。`gh` 查一个仓库约 6 秒，所以不现查：在 `~/ops/services/` 里放 launchd 服务，每 10 分钟刷新活跃仓库（7 天内有活动或有进行中的规格），其余仓库每小时刷新，页面显示快照时间。
     - 编排器在阶段切换时往规格级 Run 目录写 `run.json`（阶段、波次、票数），只供看板展示；Recovery 仍以 GitHub 和工作树为准，不出现第二个事实来源。已实现 `scripts/run-phase.sh`（票 #9）：SKILL.md 在各阶段节点调用，写入失败只警告并以 0 退出，Recovery 明文不读 `run.json`。
+    - 停车只从 `run.json` 的 `phase=parked` 判断，不读 GitHub 上的停车报告；`run.json` 写入失败时会漏报停车，这个风险可接受。
+    - 不带子命令的 `board.sh` 终端视图先按刷新节奏刷新（过期才调 `gh`）再显示；Orca 返回空列表时，prune 也跳过第 1 类（更保守）。
     - 网页优先，只监听虚拟局域网地址和 127.0.0.1，不暴露到公网，不做登录。首页按「需要你处理」→最近活动排序，默认只显示 7 天内有活动的仓库，但有进行中、中断、停车报告的仓库始终显示。页面先用 mockit 定稿再实现。汇总脚本放本仓库，常驻服务放 `~/ops`。
     - 不写 ADR：用 Orca 当仓库清单、用快照加定时刷新，这两条都容易改回去。
 
@@ -192,6 +194,8 @@
 - **批量发布**：`bash find-next/scripts/test-publish-batch.sh`。用假 `gh` 测校验、试运行、发布顺序、占位符回填、未决、交接留言、只拆票的已有规格组、发布后调用开发顺序脚本、发布后核对、`--only` 与中途失败后重跑，不访问网络。
 - **批量 Brief 生成**：`bash find-next/scripts/test-make-batch-briefs.sh`。用假 `gh` 测变量替换、上游技能版本选择与参数校验。
 - **流水线状态**：`bash scripts/test-pipeline-status.sh`。它用假 `gh` 和临时 git 仓库测独立规格、单票规格、原版父规格、旧父 issue 形状、缺规格分组、探索中的地图、分支接手、外部阻塞、`--order` 开发顺序（状态、排序、波次、`--apart`、循环依赖）和 gh 失败，不访问网络。
+- **进度看板**：`bash scripts/test-board.sh`。用假 orca、假 pipeline-status、临时 git 仓库和临时 Run/Worker 目录测仓库登记、刷新节奏、关系图快照、认领状态、Run 阶段、Worker 异常、终端/网页输出、EPIPE、Board pruning 和帮助文本，不访问网络。
+- **Run 阶段记录**：`bash scripts/test-run-phase.sh`。用临时 HOME/ISS_STATE_DIR 测各阶段写入、覆盖、省略字段、最新 Run 目录选择、状态目录覆盖、写失败只警告和参数校验。
 - **锁与领取记录**：`bash scripts/test-locks.sh`。测 `lock.sh` 的互斥、重入、等待超时、死持有者接管、槽位排队，`claim.sh` 的领取、并发领取、恢复与释放权限、交接预留与接手，worker 上限配置文件，以及两个 `codex-worker.sh` 在 `ISS_MAX_WORKERS=1` 下排队，不访问网络。
 - **自动启动第 1 波**：`bash find-next/scripts/test-launch-wave.sh`。用假 pipeline-status、claim、max-workers、orca 测试运行输出、不在 Orca 时的手动输出、预留后再启动、预留冲突跳过、启动失败撤销预留并删空分支、`--only` 过滤和恢复条目（含原 worktree 不在 Orca 时在主工作树开终端标签、路径带空格的转义）、`--apply` 写启动状态、`--next-wave` 读取状态/max-workers、跳过中断条目、无可启动、循环依赖和仓库锁占用，以及 `--impl agent --agent-model` 的命令后缀、状态写入/读回、旧状态回退 codex 与非法参数，不调用真实 orca。
 - **codex 后端**：`scripts/selftest-codex.sh [--only L1|V1|V2|V3]`。各级的内容见脚本开头的注释和 `docs/codex-backend.md` 第三节：

@@ -8,7 +8,8 @@ Usage: run-phase.sh <phase> (--run-dir DIR | --repo NAME --spec N) [--wave W] [-
 
 phase: split | implement | integrate | review | land | parked | done
 Run directory: DIR as given, or with --repo/--spec the newest
-  ~/.cache/implement-spec-split/runs/<repo>-<n>-*/ (created, stamped now, if none exists).
+  ${ISS_STATE_DIR:-~/.cache/implement-spec-split}/runs/<repo>-<n>-*/ (created,
+  stamped now, if none exists).
 Rewrites run.json atomically each call; omitted fields are written as null.
 A write failure prints a warning and exits 0; an invalid phase or usage error exits 2.
 USAGE
@@ -46,7 +47,7 @@ if [ -z "$dir" ]; then
   if [ -z "$repo" ] || [ -z "$spec" ]; then
     echo "run-phase: need --run-dir, or --repo and --spec" >&2; usage >&2; exit 2
   fi
-  base=$HOME/.cache/implement-spec-split/runs
+  base=${ISS_STATE_DIR:-$HOME/.cache/implement-spec-split}/runs
   dir=
   for c in "$base/$repo-$spec"-*/; do
     [ -d "$c" ] && dir=${c%/}   # glob sorts by name, so the last is the newest timestamp

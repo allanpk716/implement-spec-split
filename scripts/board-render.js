@@ -136,7 +136,7 @@ function metricLine(c) {
   const mapsOpen = c.maps.total - c.maps.closed;
   const specsOpen = c.specs.total - c.specs.landed;
   const tickOpen = c.tickets.total - c.tickets.closed;
-  return `<span class="metrics"><span>地图 <b>${mapsOpen} 开</b> / ${c.maps.closed} 关</span><span>Spec <b>${specsOpen} 开</b> / ${c.specs.landed} 关</span><span>Ticket <b>${tickOpen} 开</b> / ${c.tickets.closed} 关</span></span>`;
+  return `<span class="metrics"><span>地图 已关 ${c.maps.closed}/${c.maps.total}（开 ${mapsOpen}）</span><span>Spec 已落 ${c.specs.landed}/${c.specs.total}（开 ${specsOpen}）</span><span>Ticket 已关 ${c.tickets.closed}/${c.tickets.total}（开 ${tickOpen}）</span></span>`;
 }
 function meterRow(label, closed, total) {
   const p = pct(closed, total);
@@ -169,6 +169,7 @@ function repoCard(r, nowEpoch, hidden) {
 // sel = {attention: [], recent: [], hidden: [], unused: n}
 function renderHome(sel, ctx) {
   const {snapshotAt, nowEpoch} = ctx;
+  const css = ctx.homeCss ?? HOME_CSS;
   const stack = (list) => `<div class="stack">\n${list.map((r) => repoCard(r, nowEpoch)).join("\n")}\n    </div>`;
   const parts = [];
   if (sel.attention.length) parts.push(`    <p class="section-label">需要处理</p>\n    ${stack(sel.attention)}`);
@@ -195,7 +196,7 @@ function renderHome(sel, ctx) {
 ${parts.join("\n\n")}
     <footer>只读进度板 · 数据快照 ${esc(fmtAbs(snapshotAt))}${sel.unused ? ` · 另有未使用仓库 ${sel.unused} 个` : ""}</footer>
   </div>`;
-  return page({title: "管线进度 · 卡片", css: ctx.homeCss, body, snapshotAt});
+  return page({title: "管线进度 · 卡片", css, body, snapshotAt});
 }
 
 // ---------- repo ----------
@@ -230,12 +231,12 @@ function runCard(spec) {
   const t = run?.tickets;
   const total = t ? (t.merged || 0) + (t.in_progress || 0) + (t.todo || 0) : 0;
   const stages = run ? `<div class="stages">${PHASES.map((p, i) => `<span class="stage${i < idx ? " complete" : i === idx ? " current" : ""}"><i></i><em>${p}</em></span>`).join("")}</div>` : "";
-  const meter = t && total ? `<div class="ticket-meter" title="merged ${esc(t.merged)} / in progress ${esc(t.in_progress)} / todo ${esc(t.todo)}"><i style="flex:${Number(t.merged) || 0}"></i><i class="progress" style="flex:${Number(t.in_progress) || 0}"></i><i class="todo" style="flex:${Number(t.todo) || 0}"></i></div><div class="meter-note"><span>已合 ${esc(t.merged)}</span><span>进行 ${esc(t.in_progress)}</span><span>待做 ${esc(t.todo)}</span></div>` : "";
+  const meter = t && total ? `<div class="ticket-meter" title="merged ${esc(t.merged)} / in progress ${esc(t.in_progress)} / todo ${esc(t.todo)}"><i style="flex:${Number(t.merged) || 0}"></i><i class="progress" style="flex:${Number(t.in_progress) || 0}"></i><i class="todo" style="flex:${Number(t.todo) || 0}"></i></div><div class="meter-note"><span>Run：已合 ${esc(t.merged)} · 进行中 ${esc(t.in_progress)} · 待做 ${esc(t.todo)}</span></div>` : "";
   return `<div class="stage-card"><div class="stage-top"><span>Run 阶段 <b>${esc(run?.phase || "无 Run")}</b>${run?.wave ? ` · 第 ${esc(run.wave)} 波` : ""}</span><span>claim <b>${esc(claim?.state || "无")}</b></span></div>${stages}${meter}</div>`;
 }
 function specHtml(spec) {
   const run = spec.run, t = run?.tickets;
-  const merged = t ? `${t.merged ?? 0}/${(t.merged || 0) + (t.in_progress || 0) + (t.todo || 0)} 合入` : `${spec.tickets_closed}/${spec.tickets_total} Ticket`;
+  const merged = t ? `Run 已合 ${t.merged ?? 0}/${(t.merged || 0) + (t.in_progress || 0) + (t.todo || 0)}` : `Ticket 已关 ${spec.tickets_closed}/${spec.tickets_total}`;
   const sub = [spec.claim ? `claim ${spec.claim.state}` : (SPEC_LABEL[spec.status] || spec.status), run ? run.phase : null, run?.wave ? `wave ${run.wave}` : null, merged].filter(Boolean).join(" · ");
   const label = spec.claim?.state || spec.status;
   const pill = spec.claim?.state === "interrupted" ? "interrupted" : spec.claim ? "status s-active" : "needs";
@@ -266,6 +267,7 @@ function specGroup(specs) {
 
 function renderRepo(snap, ctx) {
   const {nowEpoch} = ctx;
+  const css = ctx.repoCss ?? REPO_CSS;
   const c = snap.counts;
   const back = `<a class="back" href="../../../index.html" aria-label="返回首页">‹</a>`;
   let counts;
@@ -351,7 +353,7 @@ function renderRepo(snap, ctx) {
 ${loose}
     <footer>只读进度板 · 数据快照 ${esc(fmtAbs(snap.snapshot_at))}</footer>
   </div>`;
-  return page({title: `${snap.repo} · 管线进度`, css: ctx.repoCss, body, snapshotAt: snap.snapshot_at});
+  return page({title: `${snap.repo} · 管线进度`, css, body, snapshotAt: snap.snapshot_at});
 }
 
 const HOME_CSS = `
@@ -660,4 +662,4 @@ const REPO_CSS = `
     @media (max-width:370px) { .cards { grid-template-columns: 1fr; } .stage em { font-size: 9px; } }
 `;
 
-module.exports = {renderHome: (s, c) => renderHome(s, {...c, homeCss: HOME_CSS}), renderRepo: (s, c) => renderRepo(s, {...c, repoCss: REPO_CSS}), repoSlug, esc, pct};
+module.exports = {renderHome, renderRepo, repoSlug, esc, pct};
