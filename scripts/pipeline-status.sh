@@ -5,7 +5,7 @@ set -u
 
 usage() {
   cat <<'EOF'
-Usage: pipeline-status.sh [--repo <owner/name>] [--all] [--order] [-h|--help]
+Usage: pipeline-status.sh [--repo <owner/name>] [--all] [--order] [--graph] [-h|--help]
 
 Scan GitHub issues and local git branches, then list unfinished pipeline work by
 stage. Without --repo, the repository is detected with `gh repo view`.
@@ -20,6 +20,17 @@ tracker documentation instead.
   --apart A:B            With --order, keep A and B out of the same wave. Repeatable.
   --cmd-suffix STR       With --order, append STR to each command (default: --impl codex).
   --json                 With --order, print the same plan as JSON instead of a text table.
+  --graph                Print the full relation graph as JSON for the Progress board (closed
+                         maps, Specs and Tickets included); takes the --order options.
+                         Top level: repo; counts {maps, specs, tickets}; maps[] {number, title,
+                         state, shelved, has_fog, status closed|shelved|empty|exploring|
+                         fog_pending|unconverted|converted, decisions_total, decisions_open,
+                         spec_numbers, tickets[]}; specs[] {number, title, kind, state,
+                         status landed|needs_tickets|ready|running|interrupted|shelved, map
+                         (number or null), has_tickets, tickets[] {number, title, state,
+                         shelved}, tickets_total, tickets_closed, claim {state, branch,
+                         worktree} or null, depends_on, extra_blockers}; loose_specs[] (Specs
+                         without a map); next_wave (same object as --order --json).
 
 PIPELINE_STATUS_NOW may set an ISO-8601 current time for deterministic stale-claim tests.
 EOF
@@ -40,6 +51,7 @@ PARALLEL=2
 WORKERS=
 CMD_SUFFIX='--impl codex'
 JSON=0
+GRAPH=0
 APART=()
 APART_COUNT=0
 while [ $# -gt 0 ]; do
@@ -91,6 +103,11 @@ while [ $# -gt 0 ]; do
       ;;
     --json)
       JSON=1
+      shift
+      ;;
+    --graph)
+      GRAPH=1
+      ORDER=1
       shift
       ;;
     -h|--help)
@@ -1440,6 +1457,201 @@ if (mode === 'order') {
     )].sort((a, b) => a - b),
   };
 
+  if (process.env.ISS_GRAPH === '1') {
+    // Full relation graph for the Progress board (--graph). Structure:
+    // {repo, counts:{maps,specs,tickets}, maps:[...], specs:[...],
+    //  loose_specs:[numbers], next_wave:<same object as --order --json>}
+    const stage = readJson(process.env.ISS_STAGE_FILE);
+    const endpointDir = process.env.ISS_ENDPOINT_DIR;
+    const uniq = (values) => [...new Set(values.map(Number))].sort((a, b) => a - b);
+    const ticketOf = (child) => ({
+      number: Number(child.number),
+      title: clean(child.title),
+      state: child.state,
+      shelved: isShelved(child),
+    });
+    const specIssue = (number) => {
+      const issue = issueByNumber.get(Number(number));
+      return issue && !issue.pull_request && hasProblemStatement(issue) ? issue : null;
+    };
+    const mapNumbers = new Set(stage.maps.map((map) => Number(map.number)));
+    const shelvedOnly = new Set((pipeline.hygiene || [])
+      .filter((item) => item.kind === 'shelved-only-spec').map((item) => Number(item.number)));
+    const needsTickets = new Set(pipeline.needsTickets.map((spec) => Number(spec.number)));
+    const implementByNumber = new Map(pipeline.implement.map((spec) => [Number(spec.number), spec]));
+
+    // Ticket sets and map membership for every Spec, closed ones included.
+    const specRecords = new Map();
+    function closedTickets(spec) {
+      if (spec.ownChildren) {
+        return readEndpoint(endpointDir, 'sub', spec.number).map(ticketOf);
+      }
+      const found = [];
+      for (const ref of spec.refs) {
+        const children = readEndpoint(endpointDir, 'sub', ref);
+        if (children.length > 0) found.push(...children.map(ticketOf));
+        else if (issueByNumber.has(Number(ref))) found.push(ticketOf(issueByNumber.get(Number(ref))));
+      }
+      return found;
+    }
+    for (const spec of stage.allProblemSpecs) {
+      const number = Number(spec.number);
+      const open = spec.state === 'open';
+      let tickets;
+      if (open && implementByNumber.has(number)) {
+        tickets = implementByNumber.get(number).tickets.map((ticket) => ({
+          number: ticket.number, title: clean(ticket.title), state: ticket.state, shelved: ticket.shelved,
+        }));
+      } else if (open && shelvedOnly.has(number)) {
+        tickets = [];
+      } else if (open) {
+        tickets = [];
+      } else {
+        tickets = closedTickets(spec);
+      }
+      const seen = new Set();
+      tickets = tickets.filter((ticket) => !seen.has(ticket.number) && seen.add(ticket.number))
+        .sort((a, b) => a.number - b.number);
+      if (open && shelvedOnly.has(number)) {
+        const shelvedSpec = (pipeline.hygiene || []).find((item) => (
+          item.kind === 'shelved-only-spec' && Number(item.number) === number));
+        const full = readEndpoint(endpointDir, 'sub', number);
+        tickets = full.length > 0 ? full.map(ticketOf) : (shelvedSpec ? shelvedSpec.tickets.map(ticketOf) : []);
+      }
+      let status;
+      let claim = null;
+      if (!open) status = 'landed';
+      else if (needsTickets.has(number)) status = 'needs_tickets';
+      else if (shelvedOnly.has(number)) status = 'shelved';
+      else if (records.has(number)) {
+        const record = records.get(number);
+        claim = {state: record.state, branch: record.branch, worktree: record.worktree || ''};
+        status = record.state === 'idle' ? 'ready' : record.state;
+      } else status = 'ready';
+      const record = records.get(number);
+      specRecords.set(number, {
+        number,
+        title: clean(spec.title),
+        kind: 'spec',
+        state: open ? 'open' : 'closed',
+        status,
+        map: null,
+        has_tickets: tickets.length > 0,
+        tickets,
+        tickets_total: tickets.length,
+        tickets_closed: tickets.filter((ticket) => ticket.state === 'closed').length,
+        claim,
+        depends_on: record ? [...record.dependencies].sort((a, b) => a - b) : [],
+        extra_blockers: record ? [...record.extraBlockers].sort((a, b) => a - b) : [],
+        map_refs: spec.mapRefs,
+      });
+    }
+    for (const spec of pipeline.implement.filter((item) => item.kind === 'legacy')) {
+      const number = Number(spec.number);
+      const record = records.get(number);
+      const tickets = spec.tickets.map((ticket) => ({
+        number: ticket.number, title: clean(ticket.title), state: ticket.state, shelved: ticket.shelved,
+      }));
+      specRecords.set(number, {
+        number, title: clean(spec.title), kind: 'legacy', state: 'open',
+        status: record.state === 'idle' ? 'ready' : record.state,
+        map: null, has_tickets: tickets.length > 0, tickets,
+        tickets_total: tickets.length,
+        tickets_closed: tickets.filter((ticket) => ticket.state === 'closed').length,
+        claim: {state: record.state, branch: record.branch, worktree: record.worktree || ''},
+        depends_on: [...record.dependencies].sort((a, b) => a - b),
+        extra_blockers: [...record.extraBlockers].sort((a, b) => a - b),
+        map_refs: [],
+      });
+    }
+
+    const mapTicketNumbers = new Set();
+    const mapRecords = stage.maps.map((map) => {
+      const children = readEndpoint(endpointDir, 'map', map.number);
+      const decisions = children.filter(hasWayfinderLabel);
+      const childSpecs = children.filter((child) => specRecords.has(Number(child.number)))
+        .map((child) => Number(child.number));
+      const tickets = children.filter((child) => (
+        !hasWayfinderLabel(child) && !specRecords.has(Number(child.number)) &&
+        Number(summary(child).total || 0) === 0
+      )).map(ticketOf).sort((a, b) => a.number - b.number);
+      for (const ticket of tickets) mapTicketNumbers.add(ticket.number);
+      const refSpecs = [...specRecords.values()]
+        .filter((spec) => spec.map_refs.includes(Number(map.number))).map((spec) => spec.number);
+      const specNumbers = uniq([...childSpecs, ...refSpecs]);
+      const unconverted = pipeline.mapSpecs.some((item) => Number(item.number) === Number(map.number));
+      let status;
+      if (!map.open) status = 'closed';
+      else if (map.shelved) status = 'shelved';
+      else if (Number(map.childCount) === 0) status = 'empty';
+      else if (map.openDecisionCount > 0) status = 'exploring';
+      else if (map.hasFog) status = 'fog_pending';
+      else if (unconverted) status = 'unconverted';
+      else status = 'converted';
+      return {
+        number: Number(map.number),
+        title: clean(map.title),
+        state: map.open ? 'open' : 'closed',
+        shelved: map.shelved,
+        has_fog: map.hasFog,
+        status,
+        decisions_total: decisions.length,
+        decisions_open: decisions.filter(isOpen).length,
+        spec_numbers: specNumbers,
+        tickets,
+      };
+    });
+    for (const spec of specRecords.values()) {
+      const owner = mapRecords.find((map) => map.spec_numbers.includes(spec.number));
+      spec.map = owner ? owner.number : null;
+      delete spec.map_refs;
+    }
+    const specList = [...specRecords.values()].sort((a, b) => a.number - b.number);
+    const allTicketNumbers = new Map();
+    for (const spec of specList) {
+      for (const ticket of spec.tickets) allTicketNumbers.set(ticket.number, ticket.state);
+    }
+    for (const map of mapRecords) {
+      for (const ticket of map.tickets) {
+        if (!allTicketNumbers.has(ticket.number)) allTicketNumbers.set(ticket.number, ticket.state);
+      }
+    }
+    const countBy = (items, field, value) => items.filter((item) => item[field] === value).length;
+    const graph = {
+      repo: process.env.ISS_REPO || '',
+      counts: {
+        maps: {
+          total: mapRecords.length,
+          closed: countBy(mapRecords, 'status', 'closed'),
+          shelved: countBy(mapRecords, 'status', 'shelved'),
+          empty: countBy(mapRecords, 'status', 'empty'),
+          exploring: countBy(mapRecords, 'status', 'exploring'),
+          fog_pending: countBy(mapRecords, 'status', 'fog_pending'),
+          unconverted: countBy(mapRecords, 'status', 'unconverted'),
+        },
+        specs: {
+          total: specList.length,
+          landed: countBy(specList, 'status', 'landed'),
+          needs_tickets: countBy(specList, 'status', 'needs_tickets'),
+          ready: countBy(specList, 'status', 'ready'),
+          running: countBy(specList, 'status', 'running'),
+          interrupted: countBy(specList, 'status', 'interrupted'),
+          shelved: countBy(specList, 'status', 'shelved'),
+        },
+        tickets: {
+          total: allTicketNumbers.size,
+          closed: [...allTicketNumbers.values()].filter((state) => state === 'closed').length,
+        },
+      },
+      maps: mapRecords.sort((a, b) => a.number - b.number),
+      specs: specList,
+      loose_specs: specList.filter((spec) => spec.map === null).map((spec) => spec.number),
+      next_wave: plan,
+    };
+    process.stdout.write(JSON.stringify(graph, null, 2) + '\n');
+    process.exit(0);
+  }
+
   if (jsonOutput) {
     process.stdout.write(JSON.stringify(plan, null, 2) + '\n');
     process.exit(0);
@@ -1513,7 +1725,11 @@ for number in $MAP_REQUESTS; do
   fi
 done
 
-if ! pipeline_node plan "$ISSUES_FILE" "$WORK/endpoints" "$ALL" > "$STAGE_FILE"; then
+# --graph needs the --all view (shelved-only Specs) and closed Specs' tickets.
+PLAN_ALL=$ALL
+[ "$GRAPH" -eq 0 ] || PLAN_ALL=1
+
+if ! pipeline_node plan "$ISSUES_FILE" "$WORK/endpoints" "$PLAN_ALL" > "$STAGE_FILE"; then
   die "could not analyze the first issue-graph stage"
 fi
 
@@ -1539,7 +1755,32 @@ if [ "$ALL" -eq 1 ]; then
   done
 fi
 
-if ! pipeline_node collect "$ISSUES_FILE" "$STAGE_FILE" "$WORK/endpoints" "$ALL" > "$PIPELINE_FILE"; then
+if [ "$GRAPH" -eq 1 ]; then
+  GRAPH_REQUESTS=$(node -e '
+    const fs = require("fs");
+    const stage = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const issues = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+    const byNumber = new Map(issues.map((issue) => [Number(issue.number), issue]));
+    const want = new Set();
+    for (const spec of stage.allProblemSpecs) {
+      if (spec.state === "open") continue;
+      if (spec.ownChildren) want.add(Number(spec.number));
+      else for (const ref of spec.refs) {
+        const issue = byNumber.get(Number(ref));
+        if (issue && issue.sub_issues_summary && Number(issue.sub_issues_summary.total) > 0) want.add(Number(ref));
+      }
+    }
+    process.stdout.write([...want].sort((a, b) => a - b).join("\n"));
+  ' "$STAGE_FILE" "$ISSUES_FILE") || die "could not determine closed-spec ticket requests"
+  for number in $GRAPH_REQUESTS; do
+    [ -e "$WORK/endpoints/sub-$number.json" ] && continue
+    if ! gh_api --paginate "repos/$REPO/issues/$number/sub_issues" > "$WORK/endpoints/sub-$number.json"; then
+      die "gh api failed while loading sub-issues for issue #$number"
+    fi
+  done
+fi
+
+if ! pipeline_node collect "$ISSUES_FILE" "$STAGE_FILE" "$WORK/endpoints" "$PLAN_ALL" > "$PIPELINE_FILE"; then
   die "could not analyze specs and tickets"
 fi
 
@@ -1570,7 +1811,8 @@ if [ "$ORDER" -eq 1 ]; then
       ORDER_ARGS+=("$pair")
     done
   fi
-  if ! pipeline_node order "${ORDER_ARGS[@]}"; then
+  if ! ISS_GRAPH=$GRAPH ISS_STAGE_FILE=$STAGE_FILE ISS_ENDPOINT_DIR=$WORK/endpoints ISS_REPO=$REPO \
+    pipeline_node order "${ORDER_ARGS[@]}"; then
     die "could not render development order"
   fi
 else
