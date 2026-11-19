@@ -21,7 +21,9 @@ a subcommand, the same refresh is followed by a Chinese terminal view.
   --all                  Show every non-unused repository
   prune [--yes]          Board pruning: list (dry-run, default) or delete (--yes)
                          leftovers; see the PRUNE section below
-  render                 Not implemented yet (ticket #13)
+  render                 Render the existing snapshots (no refresh) into static
+                         mobile pages under BOARD_DIR: index.html and
+                         r/<owner>/<name>/index.html.  Run snapshot first.
 
 BOARD_DIR overrides the board directory (default
 ${ISS_STATE_DIR:-~/.cache/implement-spec-split}/board). BOARD_NOW is an ISO time
@@ -53,10 +55,6 @@ case "${1:-}" in
   -h|--help)
     usage
     exit 0
-    ;;
-  render)
-    printf '%s\n' 'board: render 尚未实现（票 #13）' >&2
-    exit 2
     ;;
 esac
 
@@ -120,9 +118,8 @@ function parseArgs(args) {
       if (value.command !== null || value.positional !== null) fail(`unexpected argument: ${arg}`);
       if (arg === "snapshot") value.command = "snapshot";
       else if (arg === "prune") value.command = "prune";
-      else if (arg === "render") {
-        fail("render 尚未实现（票 #13）", 2);
-      } else value.positional = arg;
+      else if (arg === "render") value.command = "render";
+      else value.positional = arg;
     } else {
       usage();
       fail(`unknown argument: ${arg}`);
@@ -131,6 +128,9 @@ function parseArgs(args) {
   if (value.yes && value.command !== "prune") fail("--yes only applies to prune");
   if (value.command === "prune" && (value.force || value.repo !== null || value.since !== null || value.all)) {
     fail("prune only accepts --yes");
+  }
+  if (value.command === "render" && (value.force || value.repo !== null || value.since !== null || value.all)) {
+    fail("render takes no options; it only renders the existing snapshots");
   }
   if (value.command === "snapshot" && value.positional !== null) {
     fail("snapshot does not take a repository positional argument; use --repo");
@@ -270,6 +270,84 @@ function epochFromIso(value) {
   const time = Date.parse(value);
   return Number.isFinite(time) ? Math.floor(time / 1000) : null;
 }
+
+// Home-page selection shared by the terminal view and `render`: unused repos
+// are excluded; visible = needs attention, has Claims, or recent activity;
+// order = needs attention first, then latest activity.
+function selectHomeRepos(snapshots, days) {
+  const eligible = snapshots.filter((value) => !value.unused);
+  const visible = eligible.filter((value) => (
+    value.needs_attention ||
+    value.claims.active + value.claims.reserved + value.claims.interrupted > 0 ||
+    days === Infinity ||
+    (value.last_activity !== null && nowEpoch - epochFromIso(value.last_activity) <= days * 86400)
+  ));
+  const order = (list) => [...list].sort((a, b) => {
+    if (a.needs_attention !== b.needs_attention) return a.needs_attention ? -1 : 1;
+    const aa = a.last_activity ? epochFromIso(a.last_activity) : -Infinity;
+    const bb = b.last_activity ? epochFromIso(b.last_activity) : -Infinity;
+    return bb - aa || a.repo.localeCompare(b.repo);
+  });
+  const hiddenList = eligible.filter((value) => !visible.includes(value));
+  return {
+    visible: order(visible), hidden: order(hiddenList),
+    unusedCount: snapshots.length - eligible.length,
+  };
+}
+
+function runRender() {
+  const machine = readJson(path.join(boardDir, "snapshot.json"));
+  if (!machine || !Array.isArray(machine.repos)) fail("没有可用的快照：先运行 board.sh snapshot", 1);
+  const renderer = require(path.join(scriptDir, "board-render.js"));
+  // snapshot.json is slim; the home cards also need next_wave from the repo file.
+  const repoFile = (name) => path.join(boardDir, "repos", `${name.replace("/", "__")}.json`);
+  const full = machine.repos.map((entry) => ({...entry, next_wave: readJson(repoFile(entry.repo))?.next_wave ?? null}));
+  const sel = selectHomeRepos(full, 7);
+  const snapshotAt = machine.snapshot_at || nowIso;
+  const writeAtomic = (file, text) => {
+    fs.mkdirSync(path.dirname(file), {recursive: true});
+    const temporary = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.tmp`);
+    fs.writeFileSync(temporary, text);
+    fs.renameSync(temporary, file);
+  };
+  const ctx = {snapshotAt, nowEpoch};
+  const keep = new Set();
+  let pages = 0;
+  for (const entry of machine.repos) {
+    if (entry.unused) continue;
+    const slug = renderer.repoSlug(entry.repo);
+    if (!slug) { warn(`跳过无法生成页面路径的仓库：${entry.repo}`); continue; }
+    const snap = readJson(repoFile(entry.repo));
+    if (!snap) { warn(`缺少 ${entry.repo} 的仓库快照，跳过其页面`); continue; }
+    const dir = path.join(boardDir, "r", slug[0], slug[1]);
+    writeAtomic(path.join(dir, "index.html"), renderer.renderRepo(snap, ctx));
+    keep.add(path.join(slug[0], slug[1]));
+    pages += 1;
+  }
+  const attention = sel.visible.filter((value) => value.needs_attention);
+  const recent = sel.visible.filter((value) => !value.needs_attention);
+  writeAtomic(path.join(boardDir, "index.html"), renderer.renderHome(
+    {attention, recent, hidden: sel.hidden, unused: sel.unusedCount}, ctx));
+  // Drop pages of repos no longer in the snapshot; only ever under <board>/r/.
+  const root = path.join(boardDir, "r");
+  let owners = [];
+  try { owners = fs.readdirSync(root, {withFileTypes: true}); } catch {}
+  for (const owner of owners) {
+    if (!owner.isDirectory()) continue;
+    let names = [];
+    try { names = fs.readdirSync(path.join(root, owner.name), {withFileTypes: true}); } catch {}
+    for (const name of names) {
+      if (!name.isDirectory() || keep.has(path.join(owner.name, name.name))) continue;
+      const page = path.join(root, owner.name, name.name, "index.html");
+      try { fs.unlinkSync(page); } catch {}
+      try { fs.rmdirSync(path.join(root, owner.name, name.name)); } catch {}
+    }
+    try { fs.rmdirSync(path.join(root, owner.name)); } catch {}
+  }
+  process.stdout.write(`已生成首页和 ${pages} 个仓库页：${path.join(boardDir, "index.html")}\n`);
+  process.exit(0);
+}
+if (args.command === "render") runRender();
 
 function readClaims(repo) {
   const common = resolveGitCommon(repo.path);
@@ -835,22 +913,11 @@ function refreshGraph(job) {
   }
 
   if (!selectedRepo) {
-    const eligible = snapshots.filter((value) => !value.unused);
     const days = args.all ? Infinity : (args.since || 7);
-    const visible = eligible.filter((value) => (
-      value.needs_attention ||
-      value.claims.active + value.claims.reserved + value.claims.interrupted > 0 ||
-      days === Infinity ||
-      (value.last_activity !== null && nowEpoch - epochFromIso(value.last_activity) <= days * 86400)
-    ));
-    const sorted = [...visible].sort((a, b) => {
-      if (a.needs_attention !== b.needs_attention) return a.needs_attention ? -1 : 1;
-      const aa = a.last_activity ? epochFromIso(a.last_activity) : -Infinity;
-      const bb = b.last_activity ? epochFromIso(b.last_activity) : -Infinity;
-      return bb - aa || a.repo.localeCompare(b.repo);
-    });
-    const hidden = eligible.length - visible.length;
-    const unusedCount = snapshots.length - eligible.length;
+    const selection = selectHomeRepos(snapshots, days);
+    const sorted = selection.visible;
+    const hidden = selection.hidden.length;
+    const unusedCount = selection.unusedCount;
     process.stdout.write(`Progress board｜显示 ${sorted.length} 个仓库，隐藏 ${hidden} 个（另有未使用 ${unusedCount} 个）\n\n`);
     for (const value of sorted) {
       process.stdout.write(`${value.needs_attention ? "!" : " "}${value.repo}｜最近活动 ${relativeTime(value.last_activity)}｜实现中 ${value.claims.active + value.claims.reserved}｜中断 ${value.claims.interrupted}\n`);

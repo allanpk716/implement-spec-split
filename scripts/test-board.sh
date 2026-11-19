@@ -515,10 +515,136 @@ run_board "$WORK/repo-ambiguous.out" alpha
 expect_exit 64 "ambiguous directory selector exits sixty-four"
 expect_has '歧义' "ambiguous selector explains matches" "$WORK/repo-ambiguous.out.err"
 
-# Future subcommands are explicit placeholders.
-run_board "$WORK/render.out" render
-expect_exit 2 "render exits two"
-expect_has '尚未实现（票 #13）' "render names ticket thirteen" "$WORK/render.out.err"
+# ---- render (static mobile pages from fixed snapshots) ----
+RB=$WORK/render-board
+mkdir -p "$RB/repos" "$RB/r/gone/stale"
+printf 'old\n' > "$RB/r/gone/stale/index.html"
+RB_NOW=2026-11-19T02:20:00.000Z
+RB_SNAP=2026-11-19T02:17:58.527Z
+RB_BOARD=$RB RB_SNAP=$RB_SNAP node -e '
+  const fs = require("fs"), dir = process.env.RB_BOARD, at = process.env.RB_SNAP;
+  const c = (mt, mc, st, sl, tt, tc) => ({
+    maps: {total: mt, closed: mc, shelved: 0, empty: 0, exploring: 1, fog_pending: 0, unconverted: 0},
+    specs: {total: st, landed: sl, needs_tickets: 0, ready: 0, running: 1, interrupted: 0, shelved: 0},
+    tickets: {total: tt, closed: tc}});
+  const base = (repo, o) => Object.assign({repo, path: "/x/" + repo, dir: repo.split("/")[1],
+    snapshot_at: at, github_fetched_at: at, github_error: null, error: null, unused: false,
+    needs_attention: false, attention: [], last_activity: null, next_wave: null,
+    claims: {active: 0, reserved: 0, interrupted: 0}, maps: [], specs: [], loose_specs: []}, o);
+  const t = (n, title, state) => ({number: n, title, state, shelved: false});
+  const run = spec => ({dir: "/r", phase: "integrate", wave: 2, tickets: {merged: 3, in_progress: 1, todo: 2}, updated: at});
+  const spec65 = {number: 65, title: "<b>Evil</b> & \"quote\"", kind: "spec", state: "open", status: "running",
+    claim: {state: "active", branch: "spec-65", worktree: "/w", claimed_at: at}, depends_on: [],
+    tickets_total: 3, tickets_closed: 1,
+    tickets: [t(66, "已做票CLOSEDTICKET", "closed"), t(67, "进行中票<script>alert(1)</script>", "open"), t(68, "待做票OPENTICKET", "open")],
+    run: run(), workers: [
+      {name: "impl-67", role: "impl", ticket: 67, state: "finished", status: "error", started_at: 1, duration_s: 4000, idle_s: 3800, anomalous: true, anomaly_reason: "worker 结束状态为 error"},
+      {name: "impl-68", role: "impl", ticket: 68, state: "running", status: null, started_at: 1, duration_s: 100, idle_s: 5, anomalous: false, anomaly_reason: null}]};
+  const spec11 = {number: 11, title: "老规格", kind: "spec", state: "closed", status: "landed", claim: null, depends_on: [],
+    tickets_total: 2, tickets_closed: 2, tickets: [t(12, "老票", "closed"), t(13, "老票二", "closed")], run: null, workers: []};
+  const loose = {number: 80, title: "散规格LOOSESPEC", kind: "spec", state: "open", status: "needs_tickets", claim: null, depends_on: [], tickets_total: 0, tickets_closed: 0, tickets: [], run: null, workers: []};
+  const alpha = base("owner/alpha", {
+    needs_attention: true, attention: [{kind: "worker", spec: 65, detail: "impl-67: worker 结束状态为 error"}],
+    last_activity: "2026-11-19T01:20:00.000Z", counts: c(3, 1, 4, 2, 10, 4),
+    claims: {active: 1, reserved: 0, interrupted: 0},
+    next_wave: {parallel_specs: 2, resume: [], active: [{spec: 65, title: "<b>Evil</b> & \"quote\"", branch: "spec-65"}], wave1: [], later: [], cycles: [], standalone: []},
+    maps: [
+      {number: 1, title: "老地图OLDMAP", state: "closed", status: "closed", shelved: false, decisions_total: 1, decisions_open: 0, specs: [spec11], tickets: []},
+      {number: 58, title: "新地图NEWMAP", state: "open", status: "converted", shelved: false, decisions_total: 1, decisions_open: 0, specs: [spec65], tickets: []}],
+    specs: [spec11, spec65, loose], loose_specs: [loose]});
+  const beta = base("owner/beta", {last_activity: "2026-11-17T02:20:00.000Z", counts: c(0, 0, 1, 1, 4, 4),
+    next_wave: {resume: [], active: [], wave1: [{spec: 3, title: "待启动规格WAVEONE"}], later: []}});
+  const gamma = base("owner/gamma", {last_activity: "2026-10-01T00:00:00.000Z", counts: c(1, 1, 1, 1, 2, 2),
+    next_wave: {resume: [], active: [], wave1: [], later: []}});
+  const delta = base("owner/delta", {unused: true, counts: c(0, 0, 0, 0, 0, 0)});
+  const all = [alpha, beta, gamma, delta];
+  for (const r of all) fs.writeFileSync(`${dir}/repos/${r.repo.replace("/", "__")}.json`, JSON.stringify(r));
+  const slim = r => ({repo: r.repo, path: r.path, dir: r.dir, unused: r.unused, needs_attention: r.needs_attention,
+    attention: r.attention, last_activity: r.last_activity, github_fetched_at: r.github_fetched_at, counts: r.counts, claims: r.claims, error: r.error});
+  fs.writeFileSync(`${dir}/snapshot.json`, JSON.stringify({snapshot_at: at, registry: {source: "orca", fetched_at: at}, repos: [gamma, delta, beta, alpha].map(slim)}));
+'
+render_board() {
+  output=$1; shift
+  env HOME="$HOME_DIR" ISS_STATE_DIR="$STATE" BOARD_DIR="$RB" BOARD_NOW="$RB_NOW" TZ=UTC \
+    PATH="$BIN:$PATH" bash "$SCRIPT" "$@" > "$output" 2> "$output.err"
+  RUN_EXIT=$?
+}
+render_board "$WORK/render.out" render
+expect_exit 0 "render exits zero"
+HOME_HTML=$RB/index.html
+ALPHA_HTML=$RB/r/owner/alpha/index.html
+for f in "$HOME_HTML" "$ALPHA_HTML" "$RB/r/owner/beta/index.html" "$RB/r/owner/gamma/index.html"; do
+  [ -s "$f" ] && ok "page written $(basename "$(dirname "$f")")" || bad "page written $f" "missing"
+done
+[ ! -e "$RB/r/owner/delta" ] && ok "unused repo has no page" || bad "unused repo has no page" "exists"
+[ ! -e "$RB/r/gone/stale" ] && [ ! -e "$RB/r/gone" ] && ok "stale repo page removed" || bad "stale repo page removed" "still there"
+ls -A "$RB" "$RB/r/owner/alpha" | grep -q '\.tmp' && bad "no temp files left" "tmp present" || ok "no temp files left"
+expect_has 'data-snapshot-at="2026-11-19T02:17:58.527Z"' "home carries snapshot time" "$HOME_HTML"
+expect_has '更新于 2026-11-19 02:17' "home shows absolute time without js" "$HOME_HTML"
+expect_has 'id="refresh"' "home has refresh button" "$HOME_HTML"
+expect_has "fetch('/refresh', {method: 'POST'})" "refresh posts to /refresh" "$HOME_HTML"
+expect_has '已触发刷新' "refresh success message" "$HOME_HTML"
+expect_has '刷新服务不可用' "refresh failure message" "$HOME_HTML"
+expect_has 'href="r/owner/alpha/index.html"' "home links to repo page relatively" "$HOME_HTML"
+expect_has 'href="../../../index.html"' "repo page links back relatively" "$ALPHA_HTML"
+expect_has '显示全部（另有 1 个）' "home show-all counts hidden repos" "$HOME_HTML"
+expect_has '<details class="more">' "show-all works without js" "$HOME_HTML"
+# order: alpha (attention) before beta (recent) before gamma (hidden)
+ORDER=$(grep -o 'aria-label="查看 owner/[a-z]*"' "$HOME_HTML" | sed 's/.*owner\///; s/"//' | tr '\n' ' ')
+[ "$ORDER" = "alpha beta gamma " ] && ok "home order matches terminal rule" || bad "home order" "[$ORDER]"
+HIDDEN_AT=$(grep -n 'class="more"' "$HOME_HTML" | head -1 | cut -d: -f1)
+GAMMA_AT=$(grep -n '查看 owner/gamma' "$HOME_HTML" | head -1 | cut -d: -f1)
+[ -n "$HIDDEN_AT" ] && [ "$GAMMA_AT" -gt "$HIDDEN_AT" ] && ok "quiet repo is inside show-all" || bad "quiet repo hidden" "at=$GAMMA_AT more=$HIDDEN_AT"
+expect_without 'owner/delta' "unused repo not on home" "$HOME_HTML"
+expect_has '需处理' "attention badge" "$HOME_HTML"
+expect_has 'impl-67: worker 结束状态为 error' "attention reason on home" "$HOME_HTML"
+expect_has '地图完成比例</span><b>33%</b>' "home map percent" "$HOME_HTML"
+expect_has 'Spec完成比例</span><b>50%</b>' "home spec percent" "$HOME_HTML"
+expect_has 'Ticket完成比例</span><b>40%</b>' "home ticket percent" "$HOME_HTML"
+expect_has '地图完成比例</span><b>—</b>' "home zero total shows dash" "$HOME_HTML"
+expect_has '待启动规格WAVEONE' "home next-step start point" "$HOME_HTML"
+expect_has '下一步' "home next label" "$HOME_HTML"
+# repo page
+expect_has '<h2>地图</h2><strong>3<small> 张</small>' "repo map count" "$ALPHA_HTML"
+expect_has '<h2>Spec</h2><strong>4<small> 份</small>' "repo spec count" "$ALPHA_HTML"
+expect_has '<h2>Ticket</h2><strong>10<small> 张</small>' "repo ticket count" "$ALPHA_HTML"
+expect_has '<b class="pct">33%</b>' "repo map percent" "$ALPHA_HTML"
+expect_has '<b class="pct">50%</b>' "repo spec percent" "$ALPHA_HTML"
+expect_has '<b class="pct">40%</b>' "repo ticket percent" "$ALPHA_HTML"
+expect_has '下一波起点' "repo next wave section" "$ALPHA_HTML"
+expect_has '#65 &lt;b&gt;Evil&lt;/b&gt; &amp; &quot;quote&quot;' "repo next wave start point" "$ALPHA_HTML"
+expect_has '地图 #58 · 新地图NEWMAP' "repo open map node" "$ALPHA_HTML"
+expect_has '已关闭 · 1 Spec · 2 Ticket' "closed map collapsed to counts" "$ALPHA_HTML"
+expect_without '老票二' "closed map hides children" "$ALPHA_HTML"
+expect_has '待做票OPENTICKET' "open ticket listed" "$ALPHA_HTML"
+expect_without '已做票CLOSEDTICKET' "closed ticket collapsed" "$ALPHA_HTML"
+expect_has '已关 Ticket 1 张' "closed tickets show count" "$ALPHA_HTML"
+expect_has 'Run 阶段 <b>integrate</b> · 第 2 波' "run phase and wave" "$ALPHA_HTML"
+expect_has '已合 3' "run merged count" "$ALPHA_HTML"
+expect_has 'claim <b>active</b>' "claim state" "$ALPHA_HTML"
+expect_has '散 Spec（不属于地图）' "loose spec group" "$ALPHA_HTML"
+expect_has '散规格LOOSESPEC' "loose spec listed" "$ALPHA_HTML"
+expect_has '<details class="worker worker-error" open>' "anomalous worker expanded" "$ALPHA_HTML"
+if grep -Eq '<details class="worker ?"[^>]*open' "$ALPHA_HTML"; then bad "normal worker collapsed" "open"; else ok "normal worker collapsed"; fi
+expect_has 'data-snapshot-at="2026-11-19T02:17:58.527Z"' "repo carries snapshot time" "$ALPHA_HTML"
+expect_has 'id="refresh"' "repo has refresh button" "$ALPHA_HTML"
+# escaping and no external resources
+for f in "$HOME_HTML" "$ALPHA_HTML"; do
+  expect_without '<script>alert(1)' "no raw script injection $(basename "$(dirname "$f")")" "$f"
+  expect_without '<b>Evil</b>' "titles escaped $(basename "$(dirname "$f")")" "$f"
+  if grep -Eq 'https?://|src=|@import|<link' "$f"; then bad "no external resources $f" "$(grep -Eo 'https?://[^" ]*' "$f" | head -3)"; else ok "no external resources $(basename "$(dirname "$f")")"; fi
+done
+expect_has '&lt;script&gt;alert(1)&lt;/script&gt;' "script text escaped" "$ALPHA_HTML"
+# render is idempotent and does not refresh
+cp "$HOME_HTML" "$WORK/home.first"
+render_board "$WORK/render2.out" render
+cmp -s "$HOME_HTML" "$WORK/home.first" && ok "render is deterministic" || bad "render is deterministic" "differs"
+render_board "$WORK/render-bad.out" render --force
+expect_exit 1 "render rejects refresh options"
+RB_SAVE=$RB; RB=$WORK/nonexistent-board
+render_board "$WORK/render-none.out" render
+expect_exit 1 "render without snapshot fails"
+RB=$RB_SAVE
 
 # ---- prune (Board pruning) ----
 norm() { node -e 'process.stdout.write(require("path").normalize(process.argv[1]))' "$1"; }
