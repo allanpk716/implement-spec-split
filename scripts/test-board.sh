@@ -516,12 +516,105 @@ expect_exit 64 "ambiguous directory selector exits sixty-four"
 expect_has '歧义' "ambiguous selector explains matches" "$WORK/repo-ambiguous.out.err"
 
 # Future subcommands are explicit placeholders.
-run_board "$WORK/prune.out" prune
-expect_exit 2 "prune exits two"
-expect_has '尚未实现（票 #11）' "prune names ticket eleven" "$WORK/prune.out.err"
 run_board "$WORK/render.out" render
 expect_exit 2 "render exits two"
 expect_has '尚未实现（票 #13）' "render names ticket thirteen" "$WORK/render.out.err"
+
+# ---- prune (Board pruning) ----
+norm() { node -e 'process.stdout.write(require("path").normalize(process.argv[1]))' "$1"; }
+# Restore an unambiguous registry (an earlier test added a same-named repo).
+node - "$REGISTRY" <<'NODE'
+const fs = require('fs'), f = process.argv[2];
+const v = JSON.parse(fs.readFileSync(f, 'utf8'));
+v.result.repos = v.result.repos.filter(r => r.gitRemoteIdentity.canonicalKey !== 'github.com/other/alpha');
+fs.writeFileSync(f, JSON.stringify(v));
+NODE
+GH_LOG=$WORK/gh.log
+GH_STATE=$WORK/gh-state
+export GH_LOG GH_STATE
+mkdir -p "$GH_STATE"
+cat > "$BIN/gh" <<'GHEOF'
+#!/usr/bin/env bash
+set -u
+printf '%s\n' "$*" >> "$GH_LOG"
+case "${1:-} ${2:-}" in
+  "issue view") ;;
+  *) echo "fake gh: write/unknown call refused: $*" >&2; exit 99 ;;
+esac
+number=$3
+[ -f "$GH_STATE/$number" ] || { echo "fake gh: no such issue" >&2; exit 1; }
+read -r state closed < "$GH_STATE/$number"
+printf '{"state":"%s","closedAt":"%s"}\n' "$state" "${closed:-}"
+GHEOF
+chmod +x "$BIN/gh"
+printf 'OPEN\n' > "$GH_STATE/101"
+printf 'CLOSED %s\n' "$(iso_ago 2592000)" > "$GH_STATE/105"
+printf 'CLOSED %s\n' "$(iso_ago 259200)" > "$GH_STATE/106"
+printf 'CLOSED %s\n' "$(iso_ago 2592000)" > "$GH_STATE/108"
+# 107: no state file, so gh fails.
+PR105=$(run_json pr105 review 1 0 0 0 2600000 105 alpha)
+PR106=$(run_json pr106 review 1 0 0 0 3600 106 alpha)
+PR107=$(run_json pr107 review 1 0 0 0 2600000 107 alpha)
+PR108=$(run_json pr108 review 1 0 0 0 2600000 108 alpha)
+GHOST_RUN=$(run_json ghost review 1 0 0 0 3600 9 ghost)
+GHOST_RUN2=$(run_json ghost2 review 1 0 0 0 3600 9 ghost)
+LAUNCH=$HOME_DIR/.cache/implement-spec-split/launch
+mkdir -p "$LAUNCH" "$BOARD/repos" "$BOARD/graphs"
+printf '{}\n' > "$LAUNCH/gone__ghost.json"
+printf '{}\n' > "$LAUNCH/owner__alpha.json"
+printf '{}\n' > "$BOARD/repos/gone__ghost.json"
+printf '{}\n' > "$BOARD/repos/owner__alpha.json"
+printf '{}\n' > "$BOARD/graphs/gone__ghost.json"
+CL=$ALPHA_COMMON/implement-spec-split/claims
+for n in 105 106; do
+  printf '{"spec":%s,"pid":123,"pid_start":"old","claimed_at":"%s"}\n' "$n" "$(iso_ago 99)" > "$CL/spec-$n.json"
+done
+printf '{"spec":108,"pid":null,"pid_start":"","handoff":"fresh","handoff_until_epoch":9999999999}\n' > "$CL/spec-108.json"
+printf '{"spec":107,"pid":123,"pid_start":"old"}\n' > "$CL/spec-107.json"
+
+run_board "$WORK/prune-dry.out" prune
+expect_exit 0 "prune dry-run exits zero"
+expect_has "dry-run" "prune dry-run says so" "$WORK/prune-dry.out"
+expect_has "$(norm "$PR105")" "dry-run lists old closed run" "$WORK/prune-dry.out"
+expect_has "$(norm "$GHOST_RUN")" "dry-run lists removed-repo run" "$WORK/prune-dry.out"
+expect_has "gone__ghost.json" "dry-run lists removed-repo files" "$WORK/prune-dry.out"
+expect_has "spec-105.json" "dry-run lists dead claim for closed spec" "$WORK/prune-dry.out"
+for f in "$PR105" "$PR106" "$PR107" "$PR108" "$GHOST_RUN" "$GHOST_RUN2" "$LAUNCH/gone__ghost.json" \
+  "$BOARD/repos/gone__ghost.json" "$BOARD/graphs/gone__ghost.json" "$CL/spec-105.json" "$CL/spec-106.json"; do
+  [ -e "$f" ] && ok "dry-run keeps $(basename "$f")" || bad "dry-run keeps $(basename "$f")" "deleted"
+done
+
+run_board "$WORK/prune-refresh.out" snapshot --force  # refresh the cached registry
+BOARD_ORCA_FAIL=1 run_board "$WORK/prune-orca-fail.out" prune --yes
+expect_exit 0 "prune with orca down exits zero"
+expect_has "orca repo list 失败" "orca failure reason printed" "$WORK/prune-orca-fail.out"
+[ -e "$GHOST_RUN" ] && [ -e "$LAUNCH/gone__ghost.json" ] && [ -e "$BOARD/repos/gone__ghost.json" ] \
+  && ok "orca failure skips class 1" || bad "orca failure skips class 1" "removed-repo leftovers deleted"
+[ ! -e "$PR105" ] && ok "orca failure still runs class 2 from cached registry" || bad "orca failure still runs class 2" "still there"
+printf 'CLOSED %s\n' "$(iso_ago 2592000)" > "$GH_STATE/105"
+PR105=$(run_json pr105 review 1 0 0 0 2600000 105 alpha)
+printf '{"spec":105,"pid":123,"pid_start":"old"}\n' > "$CL/spec-105.json"
+
+run_board "$WORK/prune-yes.out" prune --yes
+expect_exit 0 "prune --yes exits zero"
+for f in "$PR105" "$PR108" "$GHOST_RUN" "$GHOST_RUN2" "$LAUNCH/gone__ghost.json" "$BOARD/repos/gone__ghost.json" \
+  "$BOARD/graphs/gone__ghost.json" "$CL/spec-105.json" "$CL/spec-106.json"; do
+  [ ! -e "$f" ] && ok "--yes deleted $(basename "$f")" || bad "--yes deleted $(basename "$f")" "still exists"
+done
+for f in "$PR106" "$PR107" "$RUN101" "$RUN104" "$LAUNCH/owner__alpha.json" "$BOARD/repos/owner__alpha.json" \
+  "$CL/spec-101.json" "$CL/spec-107.json" "$CL/spec-108.json"; do
+  [ -e "$f" ] && ok "--yes kept $(basename "$f")" || bad "--yes kept $(basename "$f")" "deleted"
+done
+expect_has "状态查不到" "gh failure keep reason printed" "$WORK/prune-yes.out"
+if grep -Eq '^(issue (create|edit|close|comment)|api)' "$GH_LOG" || ! grep -q '^issue view' "$GH_LOG"; then
+  bad "prune only reads from gh" "$(cat "$GH_LOG")"
+else
+  ok "prune only reads from gh"
+fi
+run_board "$WORK/prune-help.out" --help
+expect_has "Do NOT put prune in a scheduled job" "help warns against scheduling" "$WORK/prune-help.out"
+run_board "$WORK/prune-bad.out" --yes
+expect_exit 1 "--yes without prune is rejected"
 
 run_board "$WORK/help.out" --help
 expect_exit 0 "help succeeds"
