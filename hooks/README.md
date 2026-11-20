@@ -42,7 +42,7 @@ matcher 必须包含 `Bash`，flash 模式才能识别 `sed -i`、heredoc、`>` 
 
 ## flash 模式
 
-设置 `FLASH_ORCHESTRATOR=1` 表示当前会话是 flash Orchestrator。此时源码文件（沿用上面的文档 / 配置扩展名白名单判定）的 `Edit`、`Write`、`NotebookEdit` 一律拦截，行数阈值等效为 0；常见的 Bash 源码写入也会拦截，包括 `sed -i`、heredoc 加重定向、`>` / `>>` 重定向和 `tee`。拒绝提示为「flash 会话不写源码：派 glm-5.3 子代理（或 codex worker）」。
+设置 `FLASH_ORCHESTRATOR=1` 表示当前会话是 flash Orchestrator。此时源码文件（按常见源码扩展名判定；无扩展名和文档、配置、日志等非源码扩展名放行）的 `Edit`、`Write`、`NotebookEdit` 一律拦截，行数阈值等效为 0；常见的 Bash 源码写入也会拦截，包括 `sed -i`、`perl -i`、heredoc 加重定向、`>` / `>>` 重定向和 `tee`。Bash 只拦截目标是源码文件的写入；fd 重定向（如 `2>&1`）和 heredoc 正文里的 `>` 不当成写入目标。拒绝提示为「flash 会话不写源码：派 glm-5.3 子代理（或 codex worker）」。
 
 flash 模式优先于 `DELEGATE_GUARD_DISABLE=1`、项目配置和 `allow-direct-edit` 例外开关；两者同时设置时仍会拦截源码。文档、配置、记忆等非源码文件照常放行。没有 `FLASH_ORCHESTRATOR=1` 时，阈值、例外开关和 Bash 放行行为都与原模式一致。
 
@@ -75,4 +75,4 @@ flash 模式不使用这个例外开关：flash 会话一行源码都不写（�
 node hooks/test-delegate-guard.js
 ```
 
-测试会逐项打印 PASS/FAIL，最后输出汇总和 20 次运行的中位耗时；有任何失败时退出码为非 0。当前共 46 项。
+测试会逐项打印 PASS/FAIL，最后输出汇总和 20 次运行的中位耗时；有任何失败时退出码为非 0。当前共 52 项。

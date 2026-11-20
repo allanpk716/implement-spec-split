@@ -17,8 +17,8 @@
 # to opus. --kind draft reviews a draft spec/ticket/research result.
 # --kind diagnose diagnoses a failed worker/run and recommends 续跑, 改 Brief, or
 # 停车. Every kind must mark items that need a human tradeoff under
-# “需要人取舍”. --cwd defaults to the current directory and --timeout defaults
-# to 900 seconds.
+# “需要人取舍”. --cwd defaults to the current directory. --timeout defaults to
+# 3600 seconds for code and 1200 seconds for draft and diagnose.
 #
 # This wrapper removes GLM/proxy Anthropic environment mappings before invoking
 # claude, then runs `claude -p --model opus` with read-only tools. Claude's final
@@ -28,6 +28,7 @@
 #   0  success; findings are in --out
 #   2  authentication failed
 #   3  quota exhausted or rate limited
+#   4  transient service or network unavailability
 #   5  timed out
 #   6  other claude or findings-write error
 #  64  bad usage
@@ -40,7 +41,7 @@ KIND=""
 INPUT=""
 OUT=""
 CWD="$ORIG_PWD"
-TIMEOUT=900
+TIMEOUT=""
 POLL_INTERVAL=0.2
 CLAUDE_PID=""
 OUTPUT_TMP=""
@@ -97,6 +98,13 @@ case "$KIND" in
   "") die "--kind is required (code, draft, or diagnose)" ;;
   *) die "--kind must be code, draft, or diagnose (got $KIND)" ;;
 esac
+if [ -z "$TIMEOUT" ]; then
+  if [ "$KIND" = code ]; then
+    TIMEOUT=3600
+  else
+    TIMEOUT=1200
+  fi
+fi
 [ -n "$INPUT" ] || die "--input is required"
 [ -n "$OUT" ] || die "--out is required"
 [[ "$TIMEOUT" =~ ^[0-9]+$ ]] || die "--timeout must be a positive integer (got $TIMEOUT)"
@@ -143,7 +151,6 @@ DISALLOWED_TOOLS=(
 CLAUDE_ARGS=(
   -p
   --model opus
-  --permission-mode plan
   --allowedTools "${ALLOWED_TOOLS[@]}"
   --disallowedTools "${DISALLOWED_TOOLS[@]}"
   --permission-prompts none
@@ -215,7 +222,8 @@ command -v claude >/dev/null 2>&1 || {
 
 run_claude() {
   (
-    unset ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_MODEL CLAUDE_CODE_SUBAGENT_MODEL
+    unset ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_MODEL \
+      CLAUDE_CODE_SUBAGENT_MODEL CLAUDE_CODE_SUBAGENT_MODEL_FORCE FLASH_ORCHESTRATOR
     local name rest
     while IFS='=' read -r name rest; do
       if [[ "$name" =~ ^ANTHROPIC_DEFAULT_[A-Za-z0-9_]+_MODEL$ ]]; then
@@ -298,7 +306,11 @@ show_claude_error() {
 }
 
 if [ "$CLAUDE_EXIT" -ne 0 ]; then
-  if grep -Eqi '(^|[^[:alnum:]])(429|402)([^[:alnum:]]|$)|usage limit|quota|rate limit|too many requests|overloaded' \
+  if grep -Eqi '(^|[^[:alnum:]])(529|503)([^[:alnum:]]|$)|overloaded|connection (error|refused|reset)|network error|ENOTFOUND|ECONNREFUSED|ETIMEDOUT' \
+      "$OUTPUT_TMP" "$ERROR_TMP" 2>/dev/null; then
+    show_claude_error "transient service or network unavailable"
+    exit 4
+  elif grep -Eqi '(^|[^[:alnum:]])(429|402)([^[:alnum:]]|$)|usage limit|quota|rate limit|too many requests' \
       "$OUTPUT_TMP" "$ERROR_TMP" 2>/dev/null; then
     show_claude_error "quota exhausted or rate limited"
     exit 3
@@ -310,6 +322,11 @@ if [ "$CLAUDE_EXIT" -ne 0 ]; then
     show_claude_error "claude failed"
     exit 6
   fi
+fi
+
+if ! grep -Eq '[^[:space:]]' "$OUTPUT_TMP" 2>/dev/null; then
+  echo "opus-review: claude produced empty findings" >&2
+  exit 6
 fi
 
 if ! mv -f "$OUTPUT_TMP" "$OUT"; then

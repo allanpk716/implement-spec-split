@@ -71,7 +71,7 @@ ln -s ~/.claude/skills/implement-spec-split/grill-feature ~/.claude/skills/grill
 ln -s ~/.claude/skills/implement-spec-split/grill-map ~/.claude/skills/grill-map
 ```
 
-`/grill-feature <idea>` opens an official-Opus session for a small feature; `/grill-map <map or idea>` does the same for a large-module wayfinder map. Each wrapper blocks until `scripts/design-session.sh` receives `handoff.md`.
+`/grill-feature <idea>` opens a Design session for a small feature; `/grill-map <map or idea>` does the same for a large-module wayfinder map. Each wrapper blocks until `scripts/design-session.sh` receives `handoff.md`.
 
 ## Keeping up with upstream
 
