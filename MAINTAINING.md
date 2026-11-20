@@ -97,6 +97,7 @@
     - 网页优先，只监听虚拟局域网地址和 127.0.0.1，不暴露到公网，不做登录。首页按「需要你处理」→最近活动排序，默认只显示 7 天内有活动的仓库，但有进行中、中断、停车报告的仓库始终显示。页面先用 mockit 定稿再实现。汇总脚本放本仓库，常驻服务放 `~/ops`。
     - 不写 ADR：用 Orca 当仓库清单、用快照加定时刷新，这两条都容易改回去。
 23. **2026-11-19：默认后端按会话自动选（`IMPLEMENT_BACKEND = auto`）。** 自 10-11 起默认是 `sonnet`。find-next 生成的命令自带 `--impl codex`，所以平时不出问题；但手敲 `/implement-spec-split <n>` 不带 `--impl` 时，官方订阅会话会把实现角色全开成 Sonnet 子代理，花的是 Claude 额度，违背「判断以外交给 codex worker」的分工（Spec #7 的 Run 就是这样跑的）。同一套技能还要在 GLM 驱动的 Claude Code（`claude-glm` / Orca 的 OpenClaude 槽位）里用，那里的子代理本身就是 GLM，不该派 worker。决定：不带 `--impl` 时看环境里的 `DELEGATE_GUARD_DISABLE=1`（`claude-glm` 启动器设置的标记）：有就用 `agent`，没有就用 `codex`。只带 `--agent-model` 时也用 `agent`。显式 `--impl` 照旧优先；find-next 生成的命令不变。
+24. **2026-11-20：Flash 模式的审核必须出会话。** 在 GLM 驱动的会话里，Agent 工具传 `opus` 只是把名字映射到 glm-5.3；同会话里开 Standards/Spec「opus」子代理仍是 GLM 审 GLM，等于假审核。因此 `FLASH_ORCHESTRATOR=1` 的代码审核、设计级意见、冲突复审和连续失败诊断都只能调用 `scripts/opus-review.sh`：它会清掉 GLM/Anthropic 代理映射，出会话用官方订阅的 `claude -p --model opus` 执行。脚本失败就停车，不降级到 GLM，也不由会话自审。
 
 ## find-next 设计要点（2026-11-01 grilling 定稿）
 
@@ -198,7 +199,8 @@
 - **进度看板**：`bash scripts/test-board.sh`。用假 orca、假 pipeline-status、临时 git 仓库和临时 Run/Worker 目录测仓库登记、刷新节奏、关系图快照、认领状态、Run 阶段、Worker 异常、终端/网页输出、EPIPE、Board pruning 和帮助文本，不访问网络。
 - **Run 阶段记录**：`bash scripts/test-run-phase.sh`。用临时 HOME/ISS_STATE_DIR 测各阶段写入、覆盖、省略字段、最新 Run 目录选择、状态目录覆盖、写失败只警告和参数校验。
 - **锁与领取记录**：`bash scripts/test-locks.sh`。测 `lock.sh` 的互斥、重入、等待超时、死持有者接管、槽位排队，`claim.sh` 的领取、并发领取、恢复与释放权限、交接预留与接手，worker 上限配置文件，以及两个 `codex-worker.sh` 在 `ISS_MAX_WORKERS=1` 下排队，不访问网络。
-- **自动启动第 1 波**：`bash find-next/scripts/test-launch-wave.sh`。用假 pipeline-status、claim、max-workers、orca 测试运行输出、不在 Orca 时的手动输出、预留后再启动、预留冲突跳过、启动失败撤销预留并删空分支、`--only` 过滤和恢复条目（含原 worktree 不在 Orca 时在主工作树开终端标签、路径带空格的转义）、`--apply` 写启动状态、`--next-wave` 读取状态/max-workers、跳过中断条目、无可启动、循环依赖和仓库锁占用，以及 `--impl agent --agent-model` 的命令后缀、状态写入/读回、旧状态回退 codex 与非法参数，不调用真实 orca。
+- **Design session**：`bash scripts/test-design-session.sh`。用假 orca 测 feature/map prompt、`--agent claude`、`orchestration check --wait` 超时、会话退出、launch/check 失败、handoff 缺失和两个薄技能文本，不调用真实 Orca。
+- **自动启动第 1 波**：`bash find-next/scripts/test-launch-wave.sh`。用假 pipeline-status、claim、max-workers、orca 测试运行输出、不在 Orca 时的手动输出、预留后再启动、预留冲突跳过、启动失败撤销预留并删空分支、`--only` 过滤和恢复条目（含原 worktree 不在 Orca 时在主工作树开终端标签、路径带空格的转义）、`--apply` 写启动状态、`--next-wave` 读取状态/max-workers、跳过中断条目、无可启动、循环依赖和仓库锁占用，以及 `--impl agent --agent-model` 的命令后缀、状态写入/读回、旧状态回退 codex 与非法参数，不调用真实 orca。另测 `FLASH_ORCHESTRATOR=1` 的首波/恢复路径用 `openclaude`、终端用 `claude-flash`、默认 agent 后端写入状态，以及无标记的下一波从状态读回 flash 选择。
 - **codex 后端**：`scripts/selftest-codex.sh [--only L1|V1|V2|V3]`。各级的内容见脚本开头的注释和 `docs/codex-backend.md` 第三节：
   - V1：假 codex，确定性，不花 GLM；
   - V2：真 codex 连假服务器（`scripts/testing/mock-responses.js`），不花 GLM，要跑 6–7 分钟；
@@ -206,6 +208,7 @@
 
   改了 `codex-worker.sh` 或 `progress.sh`，或者升级了 codex，都要把 V1、V2、V3 全部重跑一遍。用 `--impl codex` 跑技能时，第 0 步会跑 L1。
 - **codex worker home 生成**：`bash scripts/test-setup-worker-home.sh`。用临时目录里的假源 home 测配置键/表过滤、`model_catalog_json` 改写、文件复制、权限、幂等备份和输出不泄漏配置值，不访问网络、不碰真实 `~/.codex`。
+- **Opus review 入口**：`bash scripts/test-opus-review.sh`。用临时 HOME/PATH 里的假 `claude` 测三类 prompt、GLM 代理环境变量清理、`--model opus`、只读工具白名单、findings 原子写入、认证/额度/超时/其他错误的不同退出码和超时进程树回收，不访问网络、不花 Opus 额度。
 - **L1 连通性（pi）**：`scripts/selftest.sh --only L1`。用 `--impl pi` 跑技能时，第 0 步也会执行这个检查。
 - **L2 wrapper（pi）**：`scripts/selftest.sh`。它会在 `~/.cache/implement-spec-split-selftest/` 下建一个临时仓库和 worktree，让 pi 用 tdd 技能实现一个很小的 ticket，然后检查这几件事：
   - 有新 commit，工作区是干净的，测试我们自己重跑能通过；

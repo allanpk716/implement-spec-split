@@ -138,6 +138,13 @@ spec 是一个 GitHub 父 issue，它的子 issue 就是 ticket，ticket 之间�
 ln -s ~/.claude/skills/implement-spec-split/find-next ~/.claude/skills/find-next
 ```
 
+再软链两个 Design session 薄包装技能（Windows 同样用 `mklink /J` 或复制）：
+
+```bash
+ln -s ~/.claude/skills/implement-spec-split/grill-feature ~/.claude/skills/grill-feature
+ln -s ~/.claude/skills/implement-spec-split/grill-map ~/.claude/skills/grill-map
+```
+
 **用法**：`/find-next [--worker codex|pi|self]`，也可以直接问「下一步做什么」。想看全貌时用 `/find-next --list`，或者直接问「还有什么没做完」：列出全部待办（正在实现、未拆票、缺规格、待讨论的决策票、状态没收尾、散票），不派 worker。决定接下来开发什么时用 `/find-next --batch --workers 4`（`--workers` 是全机 GLM worker 总数，`--specs` 是同时开几份规格，默认 2）：缺规格的票和有规格未拆票的规格，每组由一个 codex worker 起草，你确认一轮后统一发布；最后总是给出全仓库可以开发的规格的编号顺序和每个会话要跑的命令，你确认后它在 Orca 里自动开 worktree 并启动会话（不在 Orca 里时把命令复制到各个 worktree 运行）。一波合入后再跑一次开下一波。同一仓库同一时间只在一个会话里跑 `--batch`。
 
 - 默认 `codex`：机械扫描交给脚本（本地 markdown 跟踪器用 `find-next/scripts/scan.py`，GitHub 用 `scripts/pipeline-status.sh`），判断交给一个只读的 codex worker，会话里只读它不超过 15 行的结论。需要先完成阶段 2。
@@ -227,7 +234,7 @@ scripts/selftest-codex.sh --only L1   # 真连一次 GLM，花极少 token；失
 
    ```json
    {
-     "matcher": "Edit|Write|NotebookEdit",
+     "matcher": "Edit|Write|NotebookEdit|Bash",
      "hooks": [
        {
          "type": "command",
@@ -244,10 +251,11 @@ scripts/selftest-codex.sh --only L1   # 真连一次 GLM，花极少 token；失
 
 **hook 的判定规则**
 
-- 只管 `Edit`、`Write`、`NotebookEdit`，不管 Bash（Bash 写文件靠规则约束）。
-- 放行：扩展名为 `.md .txt .json .jsonc .yaml .yml .toml .ini .cfg .csv` 的文件，以及 `.gitignore`、`.gitattributes`；改动不超过 10 行的源码修改。
-- 拒绝：超过 10 行的源码修改（Edit 取 old/new 中较多的行数；Write 取全文行数）。
-- 例外开关：`~/.claude/state/allow-direct-edit`，内容是过期时间（ISO 8601 或 epoch 秒），过期前全部放行。规则要求只有用户明确授权时才由 Claude 创建。你也可以自己创建：
+- **普通会话**只按行数拦截 `Edit`、`Write`、`NotebookEdit`；Bash 输入直接放行。
+- `FLASH_ORCHESTRATOR=1` 的 flash 会话中，源码 `Edit` / `Write` / `NotebookEdit` 阈值为 0，并拦截 `sed -i`、heredoc 重定向、`>` / `>>`、`tee` 等常见 Bash 源码写入。
+- 普通会话放行：扩展名为 `.md .txt .json .jsonc .yaml .yml .toml .ini .cfg .csv` 的文件，以及 `.gitignore`、`.gitattributes`；改动不超过 10 行的源码修改。flash 会话同样放行这些非源码文件。
+- 普通会话拒绝：超过 10 行的源码修改（Edit 取 old/new 中较多的行数；Write 取全文行数）。
+- 例外开关：`~/.claude/state/allow-direct-edit`，内容是过期时间（ISO 8601 或 epoch 秒），普通会话过期前全部放行；flash 会话不使用它。规则要求只有用户明确授权时才由 Claude 创建。你也可以自己创建：
 
   ```bash
   mkdir -p ~/.claude/state && date -d '+60 min' -Iseconds > ~/.claude/state/allow-direct-edit
@@ -266,7 +274,7 @@ scripts/selftest-codex.sh --only L1   # 真连一次 GLM，花极少 token；失
 **验证**
 
 ```bash
-# 1. hook 单元测试：应输出 Summary: 35 passed, 0 failed
+# 1. hook 单元测试：应输出 Summary: 46 passed, 0 failed
 node ~/.claude/skills/implement-spec-split/hooks/test-delegate-guard.js
 
 # 2. 冒烟：应输出一段 permissionDecision 为 deny 的 JSON

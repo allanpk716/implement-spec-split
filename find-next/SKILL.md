@@ -39,6 +39,8 @@ description: 默认进入推进模式：循环扫描当前 GitHub 仓库的 wayf
    - 不在任何地图里的散票：正文带「时机：」的标「等待时机：<条件>」，不推荐为 Next step，也不代判断条件是否满足；其他散票推荐 `/find-next <票号>` 推进模式分流（开地图 / 单个决策 / 关票），`/grill-with-docs <票>` 保留为手动选项
    - research 票同样推荐 `/wayfinder`；按用户的全局规则，调研交给 codex worker
 
+   flash 模式下，本阶段的 `/wayfinder`、`/grill-with-docs` 推荐按「flash 模式」一节替换。
+
 4. **地图迷雾待毕业**：地图决策票全关但 `## Not yet specified` 还有实质内容（GitHub 的 `fogMaps` 段，本地 `scan.py` 的 `fog_maps` 候选）。→ `/find-next --batch <地图号>`
 
 跳过：Notes、标题或状态行里标了「搁置」的地图和票；搁置执行票不算待实现，只剩搁置执行票的规格也不算可以实现。
@@ -71,6 +73,8 @@ description: 默认进入推进模式：循环扫描当前 GitHub 仓库的 wayf
    - worker 出错时按全局 CLAUDE.md 的处理表：`auth` / `quota` / `transient` → 告诉用户，问他们是等一会儿、换 `pi`，还是 `--worker self`，**不自动降级**；`stalled` / `error` → 把失败原因补进 Brief，换新运行目录重跑一次；`violation` → 报告作废，把 `changed_paths` 交给用户。`agent` 子代理没有 `status.json`：返回为空或明确报错时，把失败原因补进 Brief、换新运行目录重派一次，再失败就停下报告；不自动改用 codex 或 self。
 4. **交接**：结论是 to-spec 或 to-tickets 时，那两个技能只能综合当前对话，所以要先把材料放进上下文。`self` 模式读地图和已关闭票的 Resolution；worker 模式读 `digest.md`。然后用几句话讲清要点，提示用户敲命令。结论是决策票或地图迷雾待毕业时，只报名字和命令；迷雾地图的命令是 `/find-next --batch <地图号>`。其他散票提示推进模式会分流；时机票只提示条件，用户明确说「开 #N」才继续。
 
+   flash 模式下，本步要推荐的讨论入口按「flash 模式」一节替换。
+
 ## 清单模式（`--list`）
 
 用户要「全貌」而不是「下一步」时用。对跟踪器同样只读。
@@ -102,11 +106,15 @@ I. 散票（bug / needs-triage 等；含等待时机、疑似重复和推进模�
 ```
 
    称呼票时写「#编号 标题」。清单最后给出单个 Next step 的结论，口径与建议模式一致。
+
+   flash 模式下，本模板里的 `/wayfinder` 推荐按「flash 模式」一节替换。
 4. 仓库里另有自由格式的 backlog 文档（如 `docs/backlog.md`）时，不机械解析，只在末尾提醒一句「另有 backlog 文档未纳入，建议把仍有效的条目迁成 issue」。
 
 ## 推进模式（默认；`--batch` 是别名）
 
 用途：把用户从「逐张判断、逐个技能、逐轮确认」里解放出来。主会话只保留必须跨全批做的判断：分组、审稿、把关 Resolution、判断 `--apart`；读长材料和写长文都交给 worker——默认（不给 `--worker` 或给 `codex`/`pi`）是新的 codex worker；`--worker agent` 时是主会话开的 Agent 子代理（`model` 显式传 `--agent-model`，默认 `sonnet`）。每一轮尽可能自动推进，只有真正的取舍题才问用户，而且所有问题合成一轮。
+
+flash 模式下，本节所有原本由主会话审读或复核的结论都按「flash 模式」一节交给 Opus review。
 
 `--worker agent` 时的同构做法（适用于本节所有原本派 codex-worker.sh 的步骤）：照旧建运行目录和子目录、照旧写 `brief.md`，然后开一个 Agent 子代理，`model` 显式传 `--agent-model` 的值，prompt 固定为：「读 <该子目录>/brief.md 并照做，把最终报告写到 <该子目录>/result.md，同时作为你的最终回复」。Brief 里「wrapper 会把最终回复存成 result.md，不要自己写」这类话是对 codex worker 说的，agent 模式下以 prompt 为准：子代理自己写 `result.md`。没有 `status.json`，主会话以子代理的返回和 `result.md` 为准；失败时把原因补进 Brief、换新运行目录重派一次，再失败就停下报告，不自动改用 codex 或 self。
 
@@ -131,12 +139,16 @@ I. 散票（bug / needs-triage 等；含等待时机、疑似重复和推进模�
 
    我审读 `result.md` 和 `resolution.md`：事实有出处、没有把推断写成决定、Resolution 和地图索引行符合 wayfinder 格式。通过后按 tracker 文档写票：在票下发 Resolution 评论、关票、把一行 gist 追加到地图 `## Decisions so far`（保留其他段落和已有顺序）。小语病我直接改；材料不足就换新运行目录重派一次。**结论里出现需要取舍的问题时不关票**，把它改写成一条决策题，并入本轮第 6 步；已有的调研事实仍留在草稿里供用户参考。
 
+   flash 模式下，本段审读和后续写票动作按「flash 模式」一节并入当轮 Opus review。
+
 3. **决策、迷雾、task 与 prototype 票（worker 准备，一轮问用户）**：research 票全部处置完后重新运行 `pipeline-status.sh --all`，看最新前沿、`fogMaps`、`emptyMaps` 和 `staleClaims`。
    - **决策票**：open、阻塞全关、无 Assignee、标签为 `wayfinder:grilling` 的票每张派一个只读 worker，子目录 `decision-<票号>/`，用 [templates/brief-decision.md](templates/brief-decision.md)。worker 读票、地图、相关 ADR、规格和代码，产出问题陈述、2–4 个选项及代价、推荐答案和理由，写在 `decision.md`；不写票、不关票、不改地图。命令同上（含 `--mcp all`）；`--worker agent` 时同样按本节开头的同构做法开子代理，prompt 指向 `<运行目录>/decision-<票号>/brief.md` 与 `result.md`。worker 判断「无需用户决策」（已有 ADR/地图决定）时，我复核依据，仍把它作为一条「建议直接关：<依据>」放进第 6 步那一轮，用户同意后再写 Resolution、关票：grilling 是 HITL，wayfinder 规定代理不能替人回答。
    - **地图迷雾**：扫描到 `fogMaps` 时，每张地图派一个只读 worker，子目录 `fog-<地图号>/`，用 [templates/brief-fog.md](templates/brief-fog.md)。worker 读地图、`Decisions so far` 和相关 Resolution，写 `fog.md`：建议新建的票（问题、`wayfinder:` 类型、阻塞对象）、应从 `Not yet specified` 移除的段落、建议判出范围或作废的票（附理由）、毕业后仍剩下的迷雾。这些变成第 6 步的「建议新建 / 建议判出范围」条目；未获用户同意前，主会话不改地图边界。
      地图迷雾的 codex 命令同决策票（含 `--mcp all`）。
    - **task 票**：前沿里 open、阻塞全关、无 Assignee、标签为 `wayfinder:task` 的票每张派一个 worker，子目录 `task-<票号>/`，用 [templates/brief-task.md](templates/brief-task.md)。这个 worker **不是只读**，但只能改 Brief 明确写出的范围。能独自完成（AFK）的做掉并写 Resolution 草稿；需要人做的写精确清单。我复核结果同 research：事实有出处、没有越界，清晰 AFK 结果直接写 Resolution、关票、更新地图；人工清单放进第 6 步那一轮。
    - **prototype 票**：前沿里 open、阻塞全关、无 Assignee、标签为 `wayfinder:prototype` 的票，单次运行最多处理 2 张；每张一个 worker，子目录 `prototype-<票号>/`，用 [templates/brief-prototype.md](templates/brief-prototype.md)。UI 原型按 mockit 技能做独立页面，由我复核后提交 mockit；非 UI 原型放在 `prototype/<票号>` 临时分支上，worker 本地提交但不得 push，我复核后 push 该分支，不开 PR、永不合并，推进模式下不单独确认。随后把可访问链接 / 分支链接和一句要反应的问题放进第 6 步那一轮，用户表态后再写 Resolution。第 3 张及以后的 prototype 票留到第 11 步收尾列出。
+
+   flash 模式下，本步骤决策选项、迷雾/task/prototype 建议和「我复核」依据都按「flash 模式」一节并入当轮 Opus review。
 
    writable worker 的命令去掉 `--read-only`：
 
@@ -160,7 +172,11 @@ I. 散票（bug / needs-triage 等；含等待时机、疑似重复和推进模�
      `--worker agent` 时同样按本节开头的同构做法开只读 Agent 子代理，prompt 指向 `<运行目录>/loose-<票号>/brief.md` 与 `result.md`。
    - 我复核 `triage.md` 及分类附件：依据必须指向真实 issue/评论/提交/文件；地图草案符合 wayfinder 格式且不扩大原票边界；决策题仍是 HITL。worker 判定的「等待时机」只汇报不提问。
 
+   flash 模式下，本段复核和分类建议按「flash 模式」一节并入当轮 Opus review。
+
 5. **起草规格/执行票**：沿用下面 5.1–5.4（对应原批量模式第 2–4 步）。此轮没有可起草组就跳过。
+
+   flash 模式下，地图组能否进入起草先按「flash 模式」一节检查 Resolution 门槛。
    1. **分组（我做）**：取「缺规格」「地图缺规格」和「有规格、未拆票」三段；所在地图仍在探索、且决策票会影响这张实现票的，不进起草，在输出里说明还差哪张决策票。「地图迷雾待毕业」和「空地图」不进起草。看标题，必要时 `gh issue view` 实现票正文，把同一地图里紧密相关的实现票合成一份规格，其余一张一份；每份已有规格单独成组（`S<k>=spec:<规格号>`，只拆票）；每张已收口且无迷雾的地图单独成组（`S<k>=map:<地图号>`）。一份规格是一个可独立交付、可独立验收的竖切；明显串行依赖的单独成组，靠阻塞关系衔接。
    2. **生成 Brief**：运行目录下每组 `S<k>/`，不手写，用脚本生成：
 
@@ -179,9 +195,15 @@ I. 散票（bug / needs-triage 等；含等待时机、疑似重复和推进模�
       `--worker agent` 时不运行上面的命令：照旧用脚本生成各组的 `S<k>/brief.md`，改按本节开头的同构做法开 Agent 子代理（`model` = `--agent-model`），prompt 指向 `<运行目录>/S<k>/brief.md` 与 `result.md`；同样最多 3 个同时，组更多分批。
 
       草稿只在运行目录，不在仓库内。不能调用 `/to-spec`、`/to-tickets` 本身；worker 直接读最新上游技能规则。
+
+      flash 模式下，起草结果出现未决地图条目时按「flash 模式」一节改推荐 `/grill-map`。
    4. **审稿（我做）**：读 `result.md`、`manifest.json`、`spec.md` 和执行票正文，检查实现决定都有出处且出处确实这么定了；`实现票：`、`地图：`两行正确；执行票是竖切、阻塞合理、跨组阻塞对得上；`blocked_by` 不挂还没有规格的实现票，该交接的写进 `handoffs`；`unresolved` 只留真正要用户拍板的事，每条带推荐答案；标题格式与仓库一致。用 `publish-batch.sh <全部 manifest.json>` 试运行核对计划。小问题直接改；大问题换新 Brief 重派那一组。
 
+      flash 模式下，本段审稿按「flash 模式」一节并入当轮 Opus review。
+
 6. **一轮问用户（没有问题就跳过）**：把第 3 步决策题、迷雾毕业建议、task 人工清单、prototype 反应题、`staleClaims` 处理题、第 2 步转来的取舍题、第 4 步散票分流建议、第 5 步每组 `unresolved`、缺少的全机 worker 上限，以及无人值守落地授权，合成一条手机友好的消息。编号全批连续（a、b、c…），每组只给一两行摘要和必要上下文，选项各占一行；最后一个问题可以是「全机 GLM worker 总数用 N 吗？」。**无人值守落地**（GLOSSARY.md）：本次会启动规格、且调用时没带 `--auto-land` 时，加一问「本批规格（含之后自动开的波次）无人值守落地吗？——合入 main/合 PR、CI 红自动修、出问题在规格 issue 留停车报告，不停下等你」；只剩这一问时也要问，它是唯一的授权入口。调用时带了 `--auto-land` 即视为已同意，不再问。**单次运行累计最多问用户 3 轮**；第 3 轮结束后不再发起第 4 轮，剩余待拍板事项留到收尾，下次 `/find-next --batch` 接着推。结尾写：
+
+   flash 模式下，本步只直接转述选择题；「展开」处理见「flash 模式」一节。
 
    ```
    推进器 · <仓库名> · 需要拍板 <N> 条
@@ -215,13 +237,19 @@ I. 散票（bug / needs-triage 等；含等待时机、疑似重复和推进模�
 
    用户对某条回「展开」时，当前会话就地对那张票调用 grilling 和 domain-modeling 技能，写完 Resolution 后继续推进，不要求另开 `/wayfinder`；单个决策类散票同样可「展开」。没有任何要问的，直接做第 8 步的复查扫描。
 
+   flash 模式下，「展开」条目改开 Design session，见「flash 模式」一节。
+
 7. **应用答案、迷雾毕业与散票分流**：用户同意的决策票/取舍题，把答案写进 Resolution 评论、关票、更新地图 Decisions so far；「展开」条目按第 6 步的 grilling + domain-modeling 结果同样收票。task 票按用户完成的人工步骤或确认过的 AFK 结果写 Resolution、关票、更新地图；prototype 按用户反应写 Resolution、关票并链接原型资产。`staleClaims` 只有用户同意才取消认领；取消后它按前沿规则进入后续扫描，不自动视为已处理。草稿未决按原批量规则处理：对应草稿去掉「（待确认）」，出处写「（owner <日期> 推进器确认）」，清空该组 `unresolved`；小改动我直接改草稿，大改动重派该组；用户说「再想想」的那张票或那组草稿不发布、不再追问，保留给 `/wayfinder` 或后续推进。用户给出的 worker 数在启动时传给 `launch-wave.sh`，由脚本写入全机 worker 上限文件。
+
+   flash 模式下，用户「再想想」后的地图入口按「flash 模式」一节改推荐 `/grill-map`。
 
    用户同意迷雾毕业建议后，按 wayfinder 规则**先建新票**（每张票正文一个精确 Question、带正确的 `wayfinder:<type>` 标签、挂到地图下），**第二遍**再接阻塞并写真实编号的交叉引用；然后改地图：毕业的段落从 `Not yet specified` 删除，只留在新票里；建议判出范围的票关掉，并在 `Out of scope` 写一行原因和链接；建议作废的票按 wayfinder 规则关闭或改正，说明依据。未获同意的雾留在原段，不代删。用户回「先到这」时立即进入收尾，不再应用未确认事项。
 
    用户同意为散票建地图后，我按 wayfinder 地图格式建 `wayfinder:map` 票（正文含 `Destination`、`Decisions so far`、`Not yet specified`，并写「来源散票：#N」），按草案建子票、接 sub-issue 与阻塞。默认在原散票下评论指向新地图后关闭它；若草案明确说明「把原散票挂为子票并改成该地图首张 decision/research 票」更好，才采用该方案。单个决策同意后写 Resolution、关票；重复或过时同意后评论依据并关票。用户对等待时机票回「开 #N」时，视为它进入第 4 步的 worker 分流，下一轮呈现结果；回「再想想」则不动、不再追问。
 
 8. **再扫描**：第 7 步关票可能解锁新的 research/决策/task/prototype 票，或让某张地图决策票全关；此时若 Map fog 仍非空，它会出现在 `fogMaps` 而不是 `mapSpecs`。新建的散票地图也进入同一轮扫描，按地图规则继续推进（research 自动、决策出题、迷雾毕业）。重新运行 `pipeline-status.sh --all`：有新可自动处理的对象就回到第 2 步；新 `fogMaps` 按第 3 步派迷雾 worker；新对象带来新取舍时，只把新增问题问一轮，并继续遵守单次 3 轮上限；扫描不再出现新对象就往下走。若某张票反复生成同一未决问题、或用户明确说再想想，终止这条分支并在收尾说明阻塞点，不循环追问。
+
+   flash 模式下，本步新产生的审读材料按「flash 模式」一节重新合成一轮 Opus review。
 
 9. **发布**：没有 `unresolved` 的组直接发布，**不再确认**（owner 2026-11-14 定）。有问题但用户已答的组在应用答案后发布；用户说再想想的组不发布。发布用：
 
@@ -245,7 +273,11 @@ I. 散票（bug / needs-triage 等；含等待时机、疑似重复和推进模�
 
    **原样转述试运行输出，不加解释**，不问用户，紧接着用同样参数加 `--apply` 再运行一次。唯一例外：出现「循环依赖」时不加 `--apply`，问用户怎么定。另需单独提醒一行：表里写「另需 #N」的规格要另开会话处理那张票。脚本会写全机 worker 上限、预留规格、在 Orca 里建 worktree 并启动 `/implement-spec-split <n> --impl codex --parallel <P>`（`--worker agent` 时为 `--impl agent --agent-model <model> --parallel <P>`）；「需手动」条目按脚本输出提醒。合入后的自动下一波见 implement-spec-split 根技能第 9 步。
 
+   flash 模式下，规格会话与默认实现后端的选择由 launch-wave.sh 处理，见「flash 模式」一节。
+
 11. **收尾**：原样转述启动结果，列出已启动、跳过、失败和需手动的规格。列出 `emptyMaps`（若有），逐张提示「用 `/wayfinder <地图号>` 画图」，不代画、不建第一批票。单列「等待时机」（#号、标题、条件、要现在开就回「开 #N」）与未结案的散票分流建议。列出因单次 2 张上限未处理的 prototype 票、因 3 轮问询上限或「先到这」留下的待拍板事项，提示下次运行 `/find-next --batch` 接着推。提醒用户：之后每份规格合入 main 时，implement-spec-split 会在第 9 步末尾只运行一条 `launch-wave.sh --next-wave --apply` 开新会话；本推进器会话可以 `/clear`。各规格会话仍会在 push 前确认、GLM 额度/auth/transient 出错、worker 连续失败时停下等人；无人值守落地时不确认、不等人，落地或停车都在规格 issue 下留报告，早上看 GitHub 即可。
+
+   flash 模式下，空地图提示按「flash 模式」一节改推荐 `/grill-map`。
 
 ## 推进模式出错处理与终止
 
@@ -257,6 +289,33 @@ I. 散票（bug / needs-triage 等；含等待时机、疑似重复和推进模�
 - 一轮扫描没有任何 research、决策、迷雾毕业、task、prototype、散票分流、起草、发布或启动可做：输出当前最接近的阻塞点（含空地图、已认领不动的票、等待时机的散票）并结束。
 - 已问满 3 轮或用户回「先到这」：不再发下一轮问题，按第 11 步收尾并列出剩余待拍板事项。
 - 用户要求停止：不再发任何写请求；已在后台的 worker 等它结束后只读结果，不应用自动写操作。
+
+flash 模式下，Opus review 与 Design session 的失败处理见「flash 模式」一节。
+
+## flash 模式（`FLASH_ORCHESTRATOR=1`）
+
+本节只在 `FLASH_ORCHESTRATOR=1` 时生效；未设置或值不是 `1` 时，上文行为不变。flash 主会话只调度 worker、运行脚本、转述已备好的问题和机械执行明确指令；所有审读结论交给 Opus review，需要展开讨论的问题交给 Design session。
+
+- **按轮合成 Opus review**：一个推进轮次里出现多类材料时，等本轮 worker 全部结束，把所有原本由主会话「我审读 / 我复核」的材料合成一个输入文件，再进入会写跟踪器或发布答案的步骤。输入文件开头写明仓库、运行目录、轮次、每份材料的票号或组号，以及它在原有流程中对应的步骤；然后按材料分节原样附上 research 的 `result.md` 与 `resolution.md`、决策选项及「无需用户决策」依据、迷雾/task/prototype/散票分流建议与 Resolution 草稿、规格草稿、执行票草稿和 `manifest.json`。本轮没有可审材料时不调用。只要调用，就只调用一次：
+
+  ```bash
+  ~/.claude/skills/implement-spec-split/scripts/opus-review.sh --kind draft \
+    --input <运行目录>/flash-review-input-<轮次>.md \
+    --out <运行目录>/opus-draft-review-<轮次>.md --cwd <仓库>
+  ```
+
+  Flash 只照 findings 执行：通过或给出可照抄修改时，才写 Resolution、关票、更新地图、改草稿或发布；findings 要求重派时，把其指出的缺陷补进新 Brief 并重派对应 worker；findings 标为「需要人取舍」的条目原样进入第 6 步问题轮。不得在 findings 之外自行判断「小问题」、补充推荐理由或放宽审读标准。向用户汇报结论时注明对应 findings 文件路径。
+- **地图起草门槛**：`S<k>=map:<地图号>` 组只有在地图已收口、Map fog 为空、且它依赖的每张 Decision ticket 都能在该票 Resolution 中读到完整决定时，才派 worker 起草；地图摘要不能替代票 Resolution。无法机械确认、仍有开着的 Decision ticket、或起草/审稿结果出现未决条目时，这一组不发布、不改成选择题，改推荐 `/grill-map <地图号或话题>`，等 Design session 交接后再进入后续轮次。
+- **问题轮与「展开」**：本轮全部问题都是已备好选项的选择题时，flash 直接按原有格式合并和转述，不新增判断、不改写选项和推荐。用户对某条回「展开」时，不在当前会话讨论，直接开对应的 Design session（等价于 `/grill-map` 或 `/grill-feature`）：
+
+  ```bash
+  bash ~/.claude/skills/implement-spec-split/scripts/design-session.sh map|feature "<条目上下文>"
+  ```
+
+  `map` 用于地图、迷雾、空地图、地图内 decision/research 票和大模块话题；`feature` 用于小功能或单个决策类散票。flash 提示用户切换、阻塞等待 handoff，成功后只读 `handoff.md` 并执行其中交给 Orchestrator 的待办，脚本非 0 时转述 stderr 并停止。
+- **推荐入口替换**：flash 模式下，上文推荐 `/wayfinder` 的地方改推荐 `/grill-map`；推荐 `/grill-with-docs` 的地方，小功能或单个决策改 `/grill-feature`，画图、推进地图或大模块讨论改 `/grill-map`。`/find-next` 自身入口和 `/to-spec`、`/to-tickets`、`/implement-spec-split` 的推荐不变。
+- **第 1 波启动**：仍按第 10 步的原有命令试运行并 `--apply`；flash 环境下 `launch-wave.sh` 自己选择 OpenClaude 规格会话，并在未显式指定实现后端时默认 agent 后端，技能层不重复实现该规则。
+- **Opus review 不可用**：任何非 0 退出码都停车并说明（退出码含义见 scripts/opus-review.sh 头注释）；不自动重试、不降级到 GLM、不改由 flash 自己审读。Design session 脚本失败同样停下并转述错误。
 
 ## 建议模式输出（适合手机阅读）
 
