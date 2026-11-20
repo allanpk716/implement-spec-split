@@ -227,7 +227,7 @@ scripts/selftest-codex.sh --only L1   # 真连一次 GLM，花极少 token；失
 
    ```json
    {
-     "matcher": "Edit|Write|NotebookEdit",
+     "matcher": "Edit|Write|NotebookEdit|Bash",
      "hooks": [
        {
          "type": "command",
@@ -244,10 +244,11 @@ scripts/selftest-codex.sh --only L1   # 真连一次 GLM，花极少 token；失
 
 **hook 的判定规则**
 
-- 只管 `Edit`、`Write`、`NotebookEdit`，不管 Bash（Bash 写文件靠规则约束）。
-- 放行：扩展名为 `.md .txt .json .jsonc .yaml .yml .toml .ini .cfg .csv` 的文件，以及 `.gitignore`、`.gitattributes`；改动不超过 10 行的源码修改。
-- 拒绝：超过 10 行的源码修改（Edit 取 old/new 中较多的行数；Write 取全文行数）。
-- 例外开关：`~/.claude/state/allow-direct-edit`，内容是过期时间（ISO 8601 或 epoch 秒），过期前全部放行。规则要求只有用户明确授权时才由 Claude 创建。你也可以自己创建：
+- **普通会话**只按行数拦截 `Edit`、`Write`、`NotebookEdit`；Bash 输入直接放行。
+- `FLASH_ORCHESTRATOR=1` 的 flash 会话中，源码 `Edit` / `Write` / `NotebookEdit` 阈值为 0，并拦截 `sed -i`、heredoc 重定向、`>` / `>>`、`tee` 等常见 Bash 源码写入。
+- 普通会话放行：扩展名为 `.md .txt .json .jsonc .yaml .yml .toml .ini .cfg .csv` 的文件，以及 `.gitignore`、`.gitattributes`；改动不超过 10 行的源码修改。flash 会话同样放行这些非源码文件。
+- 普通会话拒绝：超过 10 行的源码修改（Edit 取 old/new 中较多的行数；Write 取全文行数）。
+- 例外开关：`~/.claude/state/allow-direct-edit`，内容是过期时间（ISO 8601 或 epoch 秒），普通会话过期前全部放行；flash 会话不使用它。规则要求只有用户明确授权时才由 Claude 创建。你也可以自己创建：
 
   ```bash
   mkdir -p ~/.claude/state && date -d '+60 min' -Iseconds > ~/.claude/state/allow-direct-edit
@@ -266,7 +267,7 @@ scripts/selftest-codex.sh --only L1   # 真连一次 GLM，花极少 token；失
 **验证**
 
 ```bash
-# 1. hook 单元测试：应输出 Summary: 35 passed, 0 failed
+# 1. hook 单元测试：应输出 Summary: 46 passed, 0 failed
 node ~/.claude/skills/implement-spec-split/hooks/test-delegate-guard.js
 
 # 2. 冒烟：应输出一段 permissionDecision 为 deny 的 JSON
