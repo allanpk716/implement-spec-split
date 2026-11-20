@@ -2,7 +2,8 @@
 # Open an official-Opus Design session and wait for its handoff report.
 #
 # Usage:
-#   scripts/design-session.sh feature|map <topic> [--timeout <seconds>]
+#   scripts/design-session.sh feature|map (<topic> | --topic-file <path>)
+#                   [--timeout <seconds>]
 #
 # The run directory is created under DESIGN_SESSION_ROOT (default:
 # ~/.cache/implement-spec-split/design) as <repo>-<YYYYmmdd-HHMM>-<kind>.
@@ -20,7 +21,8 @@ set -u
 
 usage() {
   cat <<'USAGE'
-Usage: design-session.sh feature|map <topic> [--timeout <seconds>]
+Usage: design-session.sh feature|map (<topic> | --topic-file <path>)
+                   [--timeout <seconds>]
 
 feature calls mattpocock-skills:grill-with-docs.
 map calls mattpocock-skills:wayfinder and accepts an early "先到这" handoff.
@@ -51,20 +53,30 @@ for argument in "$@"; do
 done
 
 KIND=${1:-}
-TOPIC=${2:-}
 [ -n "$KIND" ] || die_usage 'kind is required'
-[ -n "$TOPIC" ] || die_usage 'topic is required'
 case "$KIND" in
   feature|map) ;;
   *) die_usage "kind must be feature or map, not '$KIND'" ;;
 esac
-shift 2
+shift
 
 TIMEOUT_SECONDS=7200
+TOPIC=
+TOPIC_FILE=
+TOPIC_GIVEN=0
+TOPIC_FILE_GIVEN=0
 while [ $# -gt 0 ]; do
   case $1 in
+    --topic-file)
+      [ $# -ge 2 ] || die_usage '--topic-file needs a value'
+      case $2 in -*) die_usage '--topic-file needs a value' ;; esac
+      TOPIC_FILE=$2
+      TOPIC_FILE_GIVEN=1
+      shift 2
+      ;;
     --timeout)
       [ $# -ge 2 ] || die_usage '--timeout needs a value'
+      case $2 in -*) die_usage '--timeout needs a value' ;; esac
       TIMEOUT_SECONDS=${2:-}
       shift 2
       ;;
@@ -73,10 +85,29 @@ while [ $# -gt 0 ]; do
       exit 0
       ;;
     *)
-      die_usage "unknown argument: $1"
+      if [ "$TOPIC_GIVEN" -eq 1 ]; then
+        die_usage "unexpected topic: $1"
+      fi
+      TOPIC=$1
+      TOPIC_GIVEN=1
+      shift
       ;;
   esac
 done
+if [ "$TOPIC_GIVEN" -eq 1 ] && [ "$TOPIC_FILE_GIVEN" -eq 1 ]; then
+  die_usage 'pass either a topic or --topic-file, not both'
+fi
+if [ "$TOPIC_FILE_GIVEN" -eq 1 ]; then
+  [ -f "$TOPIC_FILE" ] ||
+    die_usage "--topic-file must be an existing file: $TOPIC_FILE"
+  [ -r "$TOPIC_FILE" ] ||
+    die_usage "--topic-file is not readable: $TOPIC_FILE"
+  TOPIC=$(cat < "$TOPIC_FILE" && printf x) || die_usage "could not read topic file: $TOPIC_FILE"
+  TOPIC=${TOPIC%x}
+  [ -n "$TOPIC" ] || die_usage '--topic-file must not be empty'
+elif [ "$TOPIC_GIVEN" -eq 0 ]; then
+  die_usage 'topic is required'
+fi
 case "$TIMEOUT_SECONDS" in
   ''|*[!0-9]*) die_usage '--timeout must be a positive integer number of seconds' ;;
 esac

@@ -14,6 +14,8 @@ CHECK_LOG=$WORK/check.log
 CHECK_ATTEMPTS=$WORK/check-attempts
 REPORT=$WORK/reported-handoff.md
 REPORT_LOG=$WORK/reported-path.txt
+TOPIC_FILE=$WORK/topic-with-shell-characters.md
+EMPTY_TOPIC_FILE=$WORK/empty-topic.md
 PASSED=0
 FAILED=0
 RUN_EXIT=
@@ -253,10 +255,35 @@ else
   record FAIL 'feature run creates a stamped run directory' 'no matching directory'
 fi
 
+cat > "$TOPIC_FILE" <<'TOPIC'
+Topic with "quotes", `backticks`, and $(pwd)
+second line
+TOPIC
+: > "$ORCA_LOG"
+: > "$PROMPT_LOG"
+run_design_session "$WORK/topic-file.out" feature --topic-file "$TOPIC_FILE" \
+  --timeout 1
+expect_exit 0 'topic file design session succeeds'
+expect_file_has 'Topic with "quotes", `backticks`, and $(pwd)' \
+  'topic file preserves shell characters' "$PROMPT_LOG"
+expect_file_has 'second line' 'topic file preserves newlines' "$PROMPT_LOG"
+
+run_design_session "$WORK/missing-topic-file-value.out" feature --topic-file \
+  --timeout 1
+expect_exit 64 'missing topic-file value is a usage error'
+expect_file_has '--topic-file needs a value' \
+  'missing topic-file value names the option' "$RUN_STDERR"
+
+: > "$EMPTY_TOPIC_FILE"
+run_design_session "$WORK/empty-topic-file.out" feature \
+  --topic-file "$EMPTY_TOPIC_FILE" --timeout 1
+expect_exit 64 'empty topic file is a usage error'
+
 bash "$SCRIPT" --help > "$WORK/help.out" 2> "$WORK/help.err"
 RUN_EXIT=$?
 expect_exit 0 'help succeeds without a kind and topic'
 expect_file_has 'Usage: design-session.sh' 'help prints the usage' "$WORK/help.out"
+expect_file_has '--topic-file <path>' 'help documents topic files' "$WORK/help.out"
 
 DESIGN_SESSION_ROOT=$WORK/runs ISS_ORCA=$BIN/orca \
   ISS_DESIGN_SESSION_POLL=0.01 ORCA_LOG=$ORCA_LOG PROMPT_LOG=$PROMPT_LOG \
