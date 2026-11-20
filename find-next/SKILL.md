@@ -315,7 +315,7 @@ flash 模式下，Opus review 与 Design session 的失败处理见「flash 模�
   `map` 用于地图、迷雾、空地图、地图内 decision/research 票和大模块话题；`feature` 用于小功能或单个决策类散票。flash 提示用户切换、阻塞等待 handoff，成功后只读 `handoff.md` 并执行其中交给 Orchestrator 的待办，脚本非 0 时转述 stderr 并停止。
 - **推荐入口替换**：flash 模式下，上文推荐 `/wayfinder` 的地方改推荐 `/grill-map`；推荐 `/grill-with-docs` 的地方，小功能或单个决策改 `/grill-feature`，画图、推进地图或大模块讨论改 `/grill-map`。`/find-next` 自身入口和 `/to-spec`、`/to-tickets`、`/implement-spec-split` 的推荐不变。
 - **第 1 波启动**：仍按第 10 步的原有命令试运行并 `--apply`；flash 环境下 `launch-wave.sh` 自己选择 OpenClaude 规格会话，并在未显式指定实现后端时默认 agent 后端，技能层不重复实现该规则。
-- **Opus review 不可用**：`opus-review.sh` 返回认证失败（2）、额度或限流（3）、超时（5）、其他 Claude/写 findings 错误（6）、用法错误（64）或任何其他非 0 退出码时，当前推进立即停止，向用户转述命令、退出码和 stderr；不自动重试、不降级到 GLM、不改由 flash 自己审读。Design session 脚本失败同样停下并转述错误。
+- **Opus review 不可用**：任何非 0 退出码都停车并说明（退出码含义见 scripts/opus-review.sh 头注释）；不自动重试、不降级到 GLM、不改由 flash 自己审读。Design session 脚本失败同样停下并转述错误。
 
 ## 建议模式输出（适合手机阅读）
 

@@ -278,6 +278,16 @@ expect_rc "missing input is a usage error" 64 "$RUN_RC"
 run_review --kind code --input main --out "$WORK/bad-timeout.md" --cwd "$REPO" --timeout zero
 expect_rc "invalid timeout is a usage error" 64 "$RUN_RC"
 
+EXIT_CODE_SENTENCE='任何非 0 退出码都停车并说明（退出码含义见 scripts/opus-review.sh 头注释）'
+check "SKILL delegates exit codes to the wrapper header" \
+  grep -Fq "$EXIT_CODE_SENTENCE" "$HERE/../SKILL.md"
+check "find-next delegates exit codes to the wrapper header" \
+  grep -Fq "$EXIT_CODE_SENTENCE" "$HERE/../find-next/SKILL.md"
+check "SKILL does not duplicate the exit-code table" \
+  bash -c "! grep -Fq 'authentication failed' '$HERE/../SKILL.md'"
+check "find-next does not duplicate the exit-code table" \
+  bash -c "! grep -Fq '认证失败（2）' '$HERE/../find-next/SKILL.md'"
+
 echo
 echo "passed=$PASS failed=$FAIL artifacts=$WORK"
 [ "$FAIL" -eq 0 ]
