@@ -34,6 +34,88 @@ const TEXT_EXTENSIONS = new Set([
   '.csv',
 ]);
 const TEXT_FILENAMES = new Set(['.gitignore', '.gitattributes']);
+const SOURCE_EXTENSIONS = new Set([
+  '.ada',
+  '.adb',
+  '.asm',
+  '.astro',
+  '.bash',
+  '.bat',
+  '.bb',
+  '.bazel',
+  '.c',
+  '.cc',
+  '.clj',
+  '.cljs',
+  '.cmd',
+  '.coffee',
+  '.cpp',
+  '.cs',
+  '.css',
+  '.cts',
+  '.cu',
+  '.cxx',
+  '.dart',
+  '.dockerfile',
+  '.elixir',
+  '.erl',
+  '.ex',
+  '.exs',
+  '.fish',
+  '.f90',
+  '.for',
+  '.go',
+  '.groovy',
+  '.gs',
+  '.gsql',
+  '.h',
+  '.ha',
+  '.hbs',
+  '.hpp',
+  '.hs',
+  '.htm',
+  '.html',
+  '.hxx',
+  '.ipynb',
+  '.java',
+  '.jl',
+  '.js',
+  '.jsonl',
+  '.jsx',
+  '.kt',
+  '.kts',
+  '.lua',
+  '.m',
+  '.mm',
+  '.mts',
+  '.nix',
+  '.pas',
+  '.php',
+  '.pl',
+  '.pm',
+  '.ps1',
+  '.py',
+  '.r',
+  '.rb',
+  '.rs',
+  '.sass',
+  '.scala',
+  '.scm',
+  '.scss',
+  '.sh',
+  '.sql',
+  '.svelte',
+  '.swift',
+  '.tf',
+  '.ts',
+  '.tsx',
+  '.vue',
+  '.wxl',
+  '.wxi',
+  '.xml',
+  '.xsl',
+  '.zsh',
+]);
 const MAX_PROJECT_CONFIG_LEVELS = 20;
 const LOG_MAX_BYTES = 1024 * 1024;
 
@@ -126,8 +208,34 @@ function tokenizeShell(command) {
   return tokens;
 }
 
+function withoutHeredocBody(tokens) {
+  const heredocIndex = tokens.findIndex(token => token.text === '<<');
+  if (heredocIndex === -1) return tokens;
+
+  const marker = tokens[heredocIndex + 1];
+  if (!marker) return tokens;
+
+  const bodyStart = tokens.findIndex(
+    (token, index) =>
+      index > heredocIndex + 1 &&
+      token.text === '\n'
+  );
+  if (bodyStart === -1) return tokens;
+
+  const bodyEnd = tokens.findIndex(
+    (token, index) =>
+      index > bodyStart &&
+      token.text === marker.text &&
+      tokens[index - 1].text === '\n'
+  );
+  return [
+    ...tokens.slice(0, bodyStart + 1),
+    ...(bodyEnd === -1 ? [] : tokens.slice(bodyEnd)),
+  ];
+}
+
 function isSourceBashWrite(command) {
-  const tokens = tokenizeShell(command);
+  const tokens = withoutHeredocBody(tokenizeShell(command));
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index];
     if (
@@ -135,7 +243,7 @@ function isSourceBashWrite(command) {
       !token.quoted &&
       index + 1 < tokens.length &&
       !tokens[index + 1].text.startsWith('&') &&
-      !isAllowedFileName(tokens[index + 1].text)
+      isSourceFileName(tokens[index + 1].text)
     ) {
       return true;
     }
@@ -146,11 +254,44 @@ function isSourceBashWrite(command) {
         if ('|;&()\n'.includes(argument.text[0])) break;
         if (
           !argument.text.startsWith('-') &&
-          !isAllowedFileName(argument.text)
+          isSourceFileName(argument.text)
         ) {
           return true;
         }
       }
+    }
+
+    if (token.text === 'perl') {
+      let hasInPlaceOption = false;
+      let sawScriptOperand = false;
+      let optionTakesValue = false;
+      for (let next = index + 1; next < tokens.length; next += 1) {
+        const argument = tokens[next];
+        if ('|;&()<>\n'.includes(argument.text[0])) break;
+        if (optionTakesValue) {
+          optionTakesValue = false;
+          sawScriptOperand = true;
+          continue;
+        }
+        if (argument.text === '--') break;
+        if (argument.text.startsWith('--')) {
+          const [name] = argument.text.split('=', 2);
+          if (name === '--in-place') hasInPlaceOption = true;
+          continue;
+        }
+        if (argument.text.startsWith('-') && argument.text !== '-') {
+          const optionCharacters = argument.text.slice(1).split(/[=:]/)[0];
+          if (optionCharacters.includes('i')) hasInPlaceOption = true;
+          if (/[en]/.test(optionCharacters)) optionTakesValue = true;
+          continue;
+        }
+        if (!sawScriptOperand) {
+          sawScriptOperand = true;
+          continue;
+        }
+        if (hasInPlaceOption && isSourceFileName(argument.text)) return true;
+      }
+      continue;
     }
 
     if (token.text !== 'sed') continue;
@@ -192,7 +333,7 @@ function isSourceBashWrite(command) {
         continue;
       }
       sawFileOperand = true;
-      if (hasInPlaceOption && !isAllowedFileName(argument.text)) {
+      if (hasInPlaceOption && isSourceFileName(argument.text)) {
         return true;
       }
     }
@@ -201,13 +342,16 @@ function isSourceBashWrite(command) {
   return false;
 }
 
-function isAllowedFileName(filePath) {
+function isSourceFileName(filePath) {
   const fileName = fileNameOf(filePath);
-  if (TEXT_FILENAMES.has(fileName)) return true;
-
+  if (TEXT_FILENAMES.has(fileName)) return false;
   const dot = fileName.lastIndexOf('.');
   if (dot <= 0) return false;
-  return TEXT_EXTENSIONS.has(fileName.slice(dot).toLowerCase());
+  return SOURCE_EXTENSIONS.has(fileName.slice(dot).toLowerCase());
+}
+
+function isAllowedFileName(filePath) {
+  return !isSourceFileName(filePath);
 }
 
 function hasValidOverride(homeDir) {

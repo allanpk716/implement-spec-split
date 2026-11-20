@@ -407,6 +407,9 @@ testCase('flash mode Bash non-source writes allow', home => {
     "sed -i 's/old/new/' docs/a.md",
     'printf line >> docs/a.md',
     "printf line | tee config/a.json",
+    'ls 2>/dev/null',
+    'echo hi > /tmp/out.log',
+    'scripts/x.sh > run/out',
   ];
   for (const command of commands) {
     assertAllow(
@@ -415,6 +418,69 @@ testCase('flash mode Bash non-source writes allow', home => {
       })
     );
   }
+});
+
+testCase('flash mode ignores redirections inside heredoc bodies', home => {
+  assertAllow(
+    runHook(
+      hookPayload('Bash', {
+        command: "cat <<'EOF' > docs/notes.md\nif a > b then write it\nEOF",
+      }),
+      home,
+      { FLASH_ORCHESTRATOR: '1' }
+    )
+  );
+});
+
+testCase('flash mode allows Edit and Write files without source extensions', home => {
+  assertAllow(
+    runHook(
+      hookPayload('Write', {
+        file_path: 'C:/WorkSpace/x/run/output',
+        content: lines(50),
+      }),
+      home,
+      { FLASH_ORCHESTRATOR: '1' }
+    )
+  );
+  assertAllow(
+    runHook(
+      hookPayload('Write', {
+        file_path: 'C:/WorkSpace/x/run/output.log',
+        content: lines(50),
+      }),
+      home
+    )
+  );
+});
+
+testCase('flash mode Bash perl source write denies', home => {
+  const commands = [
+    "perl -pi -e 's/old/new/' src/a.js",
+    "perl -i -pe 's/old/new/' src/a.js",
+  ];
+  for (const command of commands) {
+    assert.match(
+      parseDeny(
+        runHook(hookPayload('Bash', { command }), home, {
+          FLASH_ORCHESTRATOR: '1',
+        })
+      ),
+      /flash 会话不写源码/
+    );
+  }
+});
+
+testCase('flash mode Bash perl non-source write allows', home => {
+  assertAllow(
+    runHook(
+      hookPayload('Bash', {
+        command: "perl -pi -e 's/old/new/' docs/a.md",
+      }),
+      home,
+      { FLASH_ORCHESTRATOR: '1' }
+    )
+  );
 });
 
 testCase('flash mode Bash non-writing redirect syntax allows', home => {
