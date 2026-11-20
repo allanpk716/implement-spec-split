@@ -333,7 +333,7 @@ fi
 : > "$CHECK_LOG"
 rm -f "$CHECK_ATTEMPTS"
 DESIGN_TEST_UNRELATED_FIRST=1
-run_design_session "$WORK/unrelated-message.out" feature 'Noisy feature' --timeout 1
+run_design_session "$WORK/unrelated-message.out" feature 'Noisy feature' --timeout 2
 expect_exit 0 'unrelated message is ignored while waiting'
 if [ "$(cat "$CHECK_ATTEMPTS" 2>/dev/null)" -ge 2 ]; then
   record PASS 'unrelated message was consumed by check'
@@ -344,7 +344,7 @@ unset DESIGN_TEST_UNRELATED_FIRST
 
 rm -f "$CHECK_ATTEMPTS"
 DESIGN_TEST_WRONG_REPORT_THEN_TIMEOUT=1
-run_design_session "$WORK/wrong-report-timeout.out" feature 'Wrong report' --timeout 1
+run_design_session "$WORK/wrong-report-timeout.out" feature 'Wrong report' --timeout 2
 expect_exit 5 'wrong reportPath waits until timeout'
 if grep -Fq '超时' "$RUN_STDERR"; then
   record PASS 'wrong reportPath timeout is reported as timeout'
@@ -435,18 +435,38 @@ expect_file_has 'name: grill-feature' 'feature skill has its name' "$FEATURE_SKI
 expect_file_has '小功能' 'feature description mentions small features' "$FEATURE_SKILL"
 expect_file_has 'grill 一下这个功能' 'feature description carries its trigger phrase' "$FEATURE_SKILL"
 expect_file_has 'design-session.sh feature' 'feature skill calls the feature wrapper' "$FEATURE_SKILL"
+expect_file_has 'Use the Write tool' 'feature skill writes topic files safely' "$FEATURE_SKILL"
+expect_file_has '--topic-file' 'feature skill passes topic files' "$FEATURE_SKILL"
+expect_file_has 'run_in_background: true' 'feature skill waits in the background' "$FEATURE_SKILL"
+expect_file_has 'timeout: 7500000ms' 'feature skill timeout exceeds the script cap' "$FEATURE_SKILL"
+expect_file_has '7200000ms' 'feature skill documents the script cap' "$FEATURE_SKILL"
+expect_file_has 'completion notification' 'feature skill waits for completion notification' "$FEATURE_SKILL"
 expect_file_has 'handoff.md' 'feature skill returns through the handoff' "$FEATURE_SKILL"
 expect_file_has 'name: grill-map' 'map skill has its name' "$MAP_SKILL"
 expect_file_has '大模块' 'map description mentions large modules' "$MAP_SKILL"
 expect_file_has 'wayfinder' 'map description carries wayfinder trigger' "$MAP_SKILL"
 expect_file_has '先到这' 'map description carries its early-stop trigger' "$MAP_SKILL"
 expect_file_has 'design-session.sh map' 'map skill calls the map wrapper' "$MAP_SKILL"
+expect_file_has 'Use the Write tool' 'map skill writes topic files safely' "$MAP_SKILL"
+expect_file_has '--topic-file' 'map skill passes topic files' "$MAP_SKILL"
+expect_file_has 'run_in_background: true' 'map skill waits in the background' "$MAP_SKILL"
+expect_file_has 'timeout: 7500000ms' 'map skill timeout exceeds the script cap' "$MAP_SKILL"
+expect_file_has '7200000ms' 'map skill documents the script cap' "$MAP_SKILL"
+expect_file_has 'completion notification' 'map skill waits for completion notification' "$MAP_SKILL"
 expect_file_has 'handoff.md' 'map skill returns through the handoff' "$MAP_SKILL"
 expect_file_has 'grill-feature' 'README documents the feature skill symlink' "$ROOT/README.md"
 expect_file_has 'grill-map' 'README documents the map skill symlink' "$ROOT/README.md"
 expect_file_has 'grill-feature' 'setup documents the feature skill symlink' "$ROOT/docs/setup.md"
 expect_file_has 'grill-map' 'setup documents the map skill symlink' "$ROOT/docs/setup.md"
 expect_file_has 'bash scripts/test-design-session.sh' 'MAINTAINING registers the new test' "$ROOT/MAINTAINING.md"
+expect_file_has 'opens a Design session' 'README uses the Design session term' "$ROOT/README.md"
+if grep -RInE 'official-Opus session|Opus session' \
+  "$ROOT/README.md" "$ROOT/grill-feature/SKILL.md" "$ROOT/grill-map/SKILL.md" \
+  "$ROOT/scripts/design-session.sh"; then
+  record FAIL 'Design session docs avoid the Opus session term'
+else
+  record PASS 'Design session docs avoid the Opus session term'
+fi
 
 printf 'Summary: %d passed, %d failed\n' "$PASSED" "$FAILED"
 [ "$FAILED" -eq 0 ]

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Open an official-Opus Design session and wait for its handoff report.
+# Open an official-subscription Design session and wait for its handoff report.
 #
 # Usage:
 #   scripts/design-session.sh feature|map (<topic> | --topic-file <path>)
