@@ -22,6 +22,16 @@ RUN_EXIT=
 RUN_STDOUT=$WORK/stdout.txt
 RUN_STDERR=$WORK/stderr.txt
 
+cleanup() {
+  rc=$?
+  trap - EXIT HUP INT TERM
+  if [ "$rc" -eq 0 ] && [ "$FAILED" -eq 0 ]; then
+    rm -r "$WORK"
+  fi
+  exit "$rc"
+}
+trap cleanup EXIT HUP INT TERM
+
 record() {
   status=$1
   name=$2
@@ -468,5 +478,8 @@ else
   record PASS 'Design session docs avoid the Opus session term'
 fi
 
+if [ "$FAILED" -gt 0 ]; then
+  printf 'Artifacts: %s\n' "$WORK"
+fi
 printf 'Summary: %d passed, %d failed\n' "$PASSED" "$FAILED"
 [ "$FAILED" -eq 0 ]
