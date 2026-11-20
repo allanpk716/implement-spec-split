@@ -207,6 +207,7 @@
 
   改了 `codex-worker.sh` 或 `progress.sh`，或者升级了 codex，都要把 V1、V2、V3 全部重跑一遍。用 `--impl codex` 跑技能时，第 0 步会跑 L1。
 - **codex worker home 生成**：`bash scripts/test-setup-worker-home.sh`。用临时目录里的假源 home 测配置键/表过滤、`model_catalog_json` 改写、文件复制、权限、幂等备份和输出不泄漏配置值，不访问网络、不碰真实 `~/.codex`。
+- **Opus review 入口**：`bash scripts/test-opus-review.sh`。用临时 HOME/PATH 里的假 `claude` 测三类 prompt、GLM 代理环境变量清理、`--model opus`、只读工具白名单、findings 原子写入、认证/额度/超时/其他错误的不同退出码和超时进程树回收，不访问网络、不花 Opus 额度。
 - **L1 连通性（pi）**：`scripts/selftest.sh --only L1`。用 `--impl pi` 跑技能时，第 0 步也会执行这个检查。
 - **L2 wrapper（pi）**：`scripts/selftest.sh`。它会在 `~/.cache/implement-spec-split-selftest/` 下建一个临时仓库和 worktree，让 pi 用 tdd 技能实现一个很小的 ticket，然后检查这几件事：
   - 有新 commit，工作区是干净的，测试我们自己重跑能通过；
