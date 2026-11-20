@@ -6,6 +6,7 @@ set -u
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 SCRIPT=$ROOT/find-next/scripts/launch-wave.sh
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/launch-wave-test.XXXXXX")
+OLD_SCRIPT=$WORK/old-launch-wave.sh
 BIN=$WORK/bin
 REPO=$WORK/git-repo
 ORIGIN=$WORK/test/repo.git  # path ends in the --repo slug the script checks
@@ -137,6 +138,17 @@ expect_sequence() {
 }
 
 mkdir -p "$BIN" "$REPO" "$WORKER_STATE_DIR" "$LAUNCH_STATE_DIR" || exit 1
+git show pre-flash-orchestrator:find-next/scripts/launch-wave.sh > "$OLD_SCRIPT"
+chmod +x "$OLD_SCRIPT"
+cat > "$BIN/date" <<'EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = -u ] && [ "${2:-}" = +%Y-%m-%dT%H:%M:%SZ ]; then
+  printf '%s\n' '2026-11-21T00:00:00Z'
+else
+  /bin/date "$@"
+fi
+EOF
+chmod +x "$BIN/date"
 mkdir -p "$WORK/test" && git init --quiet --bare --initial-branch=master "$ORIGIN"
 git -C "$REPO" init --quiet --initial-branch=master
 git -C "$REPO" config user.name 'Launch Wave Test'
@@ -484,11 +496,12 @@ run_launch() {
       ISS_PIPELINE_STATUS="${ISS_PIPELINE_STATUS_OVERRIDE:-$BIN/fake-pipeline}" \
       ISS_CLAIM="$BIN/fake-claim" \
       ISS_MAX_WORKERS_CMD="$BIN/fake-max-workers" ISS_ORCA="$BIN/fake-orca" \
+      ISS_LOCK="$ROOT/scripts/lock.sh" \
       ISS_LAUNCH_STATE_DIR="${LAUNCH_STATE_DIR_OVERRIDE:-$LAUNCH_STATE_DIR}" \
       ISS_STATE_DIR="${LAUNCH_WORKER_STATE_DIR_OVERRIDE:-$WORKER_STATE_DIR}" \
       ISS_LAUNCH_WAVE_LOCK_WAIT="${ISS_LAUNCH_WAVE_LOCK_WAIT_OVERRIDE:-0}" \
       PATH="$BIN:$PATH" \
-      bash "$SCRIPT" --repo "${LAUNCH_REPO_OVERRIDE:-test/repo}" "$@"
+      bash "${LAUNCH_SCRIPT_OVERRIDE:-$SCRIPT}" --repo "${LAUNCH_REPO_OVERRIDE:-test/repo}" "$@"
   ) > "$output" 2> "${output}.err"
   RUN_EXIT=$?
 }
@@ -660,6 +673,27 @@ expect_without '"impl"' 'default apply state keeps the old shape' "$LAUNCH_STATE
 expect_without '"agent_model"' 'default apply state has no model field' "$LAUNCH_STATE_FILE"
 expect_has '/implement-spec-split 222 --impl codex --parallel 2' \
   'default apply command stays codex' "$ORCA_LOG"
+cp "$LAUNCH_STATE_FILE" "$WORK/current-default-state.json"
+OLD_LAUNCH_STATE_DIR=$WORK/old-launch-state
+OLD_WORKER_STATE_DIR=$WORK/old-worker-state
+mkdir -p "$OLD_LAUNCH_STATE_DIR" "$OLD_WORKER_STATE_DIR"
+LAUNCH_SCRIPT_OVERRIDE=$OLD_SCRIPT
+LAUNCH_STATE_DIR_OVERRIDE=$OLD_LAUNCH_STATE_DIR
+LAUNCH_WORKER_STATE_DIR_OVERRIDE=$OLD_WORKER_STATE_DIR
+export LAUNCH_SCRIPT_OVERRIDE LAUNCH_STATE_DIR_OVERRIDE LAUNCH_WORKER_STATE_DIR_OVERRIDE
+run_launch "$WORK/old-default-apply.out" --apply --apart 237:239 \
+  --only 222,237,999
+unset LAUNCH_SCRIPT_OVERRIDE LAUNCH_STATE_DIR_OVERRIDE LAUNCH_WORKER_STATE_DIR_OVERRIDE
+expect_exit 0 "pre-flash launch apply succeeds"
+if cmp -s "$WORK/current-default-state.json" \
+  "$OLD_LAUNCH_STATE_DIR/test__repo.json"; then
+  record PASS 'default apply state is byte-for-byte pre-flash'
+else
+  record FAIL 'default apply state is byte-for-byte pre-flash' \
+    "$(diff -u "$OLD_LAUNCH_STATE_DIR/test__repo.json" "$WORK/current-default-state.json" | tail -n 8)"
+fi
+expect_without '"flash"' 'default apply state omits flash fields' "$LAUNCH_STATE_FILE"
+expect_without '"launch_agent"' 'default apply state omits session agent field' "$LAUNCH_STATE_FILE"
 
 # Agent backend flags (b).
 rm -f "$LAUNCH_STATE_FILE"
@@ -724,6 +758,25 @@ if node -e '
   record PASS 'flash apply records the session and backend choices'
 else
   record FAIL 'flash apply records the session and backend choices'
+fi
+
+: > "$PIPELINE_LOG"; : > "$ORCA_LOG"
+rm -f "$LAUNCH_STATE_FILE"
+run_launch "$WORK/flash-model-apply.out" --apply --only 237 --agent-model opus
+expect_exit 0 "flash agent-model apply succeeds"
+expect_has '--impl agent --agent-model opus' \
+  'flash agent-model keeps the requested model' "$PIPELINE_LOG"
+expect_arg_after --agent openclaude \
+  'flash agent-model still uses OpenClaude' "$ORCA_LOG"
+if node -e '
+  const fs = require("fs");
+  const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  if (value.flash !== true || value.launch_agent !== "openclaude" ||
+      value.impl !== "agent" || value.agent_model !== "opus") process.exit(1);
+' "$LAUNCH_STATE_FILE"; then
+  record PASS 'flash agent-model records the requested backend'
+else
+  record FAIL 'flash agent-model records the requested backend'
 fi
 
 : > "$CLAIM_LOG"; : > "$ORCA_LOG"; : > "$SEQUENCE_LOG"
@@ -880,7 +933,9 @@ expect_has '--agent-model requires --impl agent' \
   'model conflict explains the fix' "$WORK/agent-model-conflict.out.err"
 
 run_launch "$WORK/agent-model-alone.out" --agent-model opus
-expect_exit 1 "agent model without backend is rejected"
+expect_exit 0 "agent model without backend selects agent"
+expect_has '--impl agent --agent-model opus' \
+  'agent model without backend names the model' "$PIPELINE_LOG"
 
 run_launch "$WORK/impl-unknown.out" --impl sonnet
 expect_exit 1 "unknown backend is rejected"

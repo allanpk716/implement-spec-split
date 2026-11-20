@@ -26,9 +26,10 @@ valid together with --impl agent. --auto-land appends the authorization to
 every generated command; --apply records it for the current batch only and
 --next-wave reuses it. --next-wave cannot accept --auto-land itself.
 With FLASH_ORCHESTRATOR=1, spec sessions use Orca's openclaude agent (and the
-manual launcher claude-flash); without an explicit --impl, implementation
-defaults to the agent backend with the sonnet model. --apply records these
-session choices for --next-wave.
+manual launcher claude-flash). When neither --impl nor --agent-model is given,
+implementation defaults to the agent backend with the sonnet model; explicit
+backend/model precedence is unchanged. --apply records these session choices
+for --next-wave.
 EOF
 }
 
@@ -150,10 +151,14 @@ if [ "${FLASH_ORCHESTRATOR:-}" = 1 ]; then
   FLASH=1
   LAUNCH_AGENT=openclaude
   MANUAL_AGENT=claude-flash
-  if [ "$IMPL_GIVEN" -eq 0 ]; then
+  if [ "$IMPL_GIVEN" -eq 0 ] && [ "$AGENT_MODEL_GIVEN" -eq 0 ]; then
     IMPL=agent
     AGENT_MODEL=sonnet
   fi
+fi
+
+if [ "$AGENT_MODEL_GIVEN" -eq 1 ] && [ "$IMPL_GIVEN" -eq 0 ]; then
+  IMPL=agent
 fi
 
 [ "$AUTO_LAND" -eq 0 ] || [ "$NEXT_WAVE" -eq 0 ] ||
@@ -369,10 +374,9 @@ write_launch_state() {
       ? {impl: "agent", agent_model: process.env.STATE_AGENT_MODEL}
       : {};
     const authorization = process.env.STATE_AUTO_LAND === "1" ? {auto_land: true} : {};
-    const session = {
-      flash: process.env.STATE_FLASH === "1",
-      launch_agent: process.env.STATE_LAUNCH_AGENT,
-    };
+    const session = process.env.STATE_FLASH === "1"
+      ? {flash: true, launch_agent: process.env.STATE_LAUNCH_AGENT}
+      : {};
     const value = JSON.stringify({
       workers: +process.env.STATE_WORKERS,
       specs: +process.env.STATE_SPECS,
