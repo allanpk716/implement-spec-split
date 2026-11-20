@@ -5,7 +5,7 @@ A skill that implements a spec's tickets with a cheap model doing the coding and
 ## Roles and where they run
 
 **Orchestrator**:
-The main agent running in the user's Claude Code session; it owns the task graph, verification and all judgment calls.
+The main agent running in the user's Claude Code session; it owns the task graph and verification. On a cheap model it executes and relays only, and hands every judgment call to a stronger model (Opus review, a Design session, or the user).
 _Avoid_: coordinator, lead
 
 **In-session subagent**:
@@ -37,6 +37,14 @@ The exploration, implementer, merger and fix roles; everything except review.
 
 **Review roles**:
 The Standards and Spec reviewers of `mattpocock-skills:code-review`; always In-session subagents on a strong model.
+
+**Design session**:
+A separate Claude Code session on the official subscription (Opus) that the Orchestrator opens through Orca for a design discussion (grill-with-docs, a wayfinder grilling ticket); the user talks to it directly, and it carries the discussion through to-spec before handing control back.
+_Avoid_: Opus session, grill session, hop
+
+**Opus review**:
+A non-interactive judgment pass run on the official subscription's Opus, outside the Orchestrator's session, that reads a diff or draft and returns findings for the Orchestrator to act on.
+_Avoid_: strong-model review (ambiguous in a GLM session, where "opus" maps to GLM)
 
 ## Work
 
