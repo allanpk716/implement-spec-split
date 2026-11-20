@@ -20,9 +20,10 @@ When the main worktree is Orca-managed, resumed worktrees outside Orca use a ter
 --impl picks the backend named in the generated commands: codex (default) or
 agent. With agent, --agent-model names the model (default sonnet) and every
 command gets "--impl agent --agent-model <model>" instead of "--impl codex".
---apply records the backend in the launch state and --next-wave reuses it;
-state files without the field keep the codex backend. --agent-model is only
-valid together with --impl agent. --auto-land appends the authorization to
+Given without --impl, --agent-model selects the agent backend; combined with an
+explicit non-agent --impl it is an argument conflict. --apply records the
+backend in the launch state and --next-wave reuses it; state files without the
+field keep the codex backend. --auto-land appends the authorization to
 every generated command; --apply records it for the current batch only and
 --next-wave reuses it. --next-wave cannot accept --auto-land itself.
 With FLASH_ORCHESTRATOR=1, spec sessions use Orca's openclaude agent (and the
