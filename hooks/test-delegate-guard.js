@@ -306,6 +306,175 @@ testCase('Bash tool allows with no output', home => {
   assertAllow(runHook(hookPayload('Bash', { command: 'node -v' }), home));
 });
 
+testCase('flash mode Write one source line denies', home => {
+  const reason = parseDeny(
+    runHook(
+      hookPayload('Write', {
+        file_path: 'C:/WorkSpace/x/src/a.ts',
+        content: lines(1),
+      }),
+      home,
+      { FLASH_ORCHESTRATOR: '1' }
+    )
+  );
+  assert.match(
+    reason,
+    /flash 会话不写源码：派 glm-5\.3 子代理（或 codex worker）/
+  );
+});
+
+testCase('flash mode Edit one source line denies but documents allow', home => {
+  const reason = parseDeny(
+    runHook(
+      hookPayload('Edit', {
+        file_path: 'C:/WorkSpace/x/src/a.py',
+        old_string: 'old',
+        new_string: 'new',
+      }),
+      home,
+      { FLASH_ORCHESTRATOR: '1' }
+    )
+  );
+  assert.match(reason, /flash 会话不写源码/);
+  assertAllow(
+    runHook(
+      hookPayload('Write', {
+        file_path: 'C:/WorkSpace/x/docs/a.md',
+        content: lines(500),
+      }),
+      home,
+      { FLASH_ORCHESTRATOR: '1' }
+    )
+  );
+});
+
+testCase('flash mode Bash sed source write denies', home => {
+  const commands = [
+    "sed -i 's/old/new/' src/a.ts",
+    "'sed' -i 's/old/new/' src/a.ts",
+  ];
+  for (const command of commands) {
+    assert.match(
+      parseDeny(
+        runHook(hookPayload('Bash', { command }), home, {
+          FLASH_ORCHESTRATOR: '1',
+        })
+      ),
+      /flash 会话不写源码/
+    );
+  }
+});
+
+testCase('flash mode Bash sed through xargs denies', home => {
+  const result = runHook(
+    hookPayload('Bash', {
+      command: "find src -name '*.ts' -print0 | xargs -0 sed -i 's/old/new/'",
+    }),
+    home,
+    { FLASH_ORCHESTRATOR: '1' }
+  );
+  assert.match(parseDeny(result), /flash 会话不写源码/);
+});
+
+testCase('flash mode Bash redirect source write denies', home => {
+  const reason = parseDeny(
+    runHook(
+      hookPayload('Bash', {
+        command: 'printf line > src/a.ts',
+      }),
+      home,
+      { FLASH_ORCHESTRATOR: '1' }
+    )
+  );
+  assert.match(reason, /flash 会话不写源码/);
+});
+
+testCase('flash mode Bash tee source write denies', home => {
+  const reason = parseDeny(
+    runHook(
+      hookPayload('Bash', {
+        command: "printf line | tee -a src/a.py",
+      }),
+      home,
+      { FLASH_ORCHESTRATOR: '1' }
+    )
+  );
+  assert.match(reason, /flash 会话不写源码/);
+});
+
+testCase('flash mode Bash non-source writes allow', home => {
+  const commands = [
+    "sed -i 's/old/new/' docs/a.md",
+    'printf line >> docs/a.md',
+    "printf line | tee config/a.json",
+  ];
+  for (const command of commands) {
+    assertAllow(
+      runHook(hookPayload('Bash', { command }), home, {
+        FLASH_ORCHESTRATOR: '1',
+      })
+    );
+  }
+});
+
+testCase('flash mode Bash non-writing redirect syntax allows', home => {
+  const commands = [
+    "echo '>' src/a.ts",
+    'node scripts/check.js >&2',
+    'printf line | tee docs/a.md\nnode src/a.ts',
+  ];
+  for (const command of commands) {
+    assertAllow(
+      runHook(hookPayload('Bash', { command }), home, {
+        FLASH_ORCHESTRATOR: '1',
+      })
+    );
+  }
+});
+
+testCase('flash mode Bash heredoc and append source writes deny', home => {
+  const commands = [
+    "cat <<'EOF' > src/a.ts\nconst value = 1;\nEOF",
+    'printf line >> src/a.ts',
+  ];
+  for (const command of commands) {
+    assert.match(
+      parseDeny(
+        runHook(hookPayload('Bash', { command }), home, {
+          FLASH_ORCHESTRATOR: '1',
+        })
+      ),
+      /flash 会话不写源码/
+    );
+  }
+});
+
+testCase('flash mode wins over disable and direct-edit override', home => {
+  setOverride(home, new Date(Date.now() + 3600_000).toISOString());
+  const result = runHook(
+    hookPayload('Write', {
+      file_path: 'C:/WorkSpace/x/src/a.ts',
+      content: lines(1),
+    }),
+    home,
+    { FLASH_ORCHESTRATOR: '1', DELEGATE_GUARD_DISABLE: '1' }
+  );
+  assert.match(parseDeny(result), /flash 会话不写源码/);
+});
+
+testCase('DELEGATE_GUARD_DISABLE without flash still allows', home => {
+  assertAllow(
+    runHook(
+      hookPayload('Write', {
+        file_path: 'C:/WorkSpace/x/src/a.ts',
+        content: lines(50),
+      }),
+      home,
+      { DELEGATE_GUARD_DISABLE: '1' }
+    )
+  );
+});
+
 testCase('NotebookEdit 20 lines denies', home => {
   const reason = parseDeny(
     runHook(

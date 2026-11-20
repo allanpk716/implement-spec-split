@@ -228,7 +228,7 @@ This makes everyday sessions in **all projects** follow this division: Opus hand
 
    ```json
    {
-     "matcher": "Edit|Write|NotebookEdit",
+     "matcher": "Edit|Write|NotebookEdit|Bash",
      "hooks": [
        {
          "type": "command",
@@ -245,10 +245,11 @@ This makes everyday sessions in **all projects** follow this division: Opus hand
 
 **Hook decision rules**
 
-- Only `Edit`, `Write`, and `NotebookEdit` are handled; Bash is not (writing files through Bash relies on the rules).
-- Allowed: files with extensions `.md .txt .json .jsonc .yaml .yml .toml .ini .cfg .csv`, plus `.gitignore` and `.gitattributes`; and source edits of no more than 10 lines.
-- Denied: source edits over 10 lines (for Edit, the larger of the old/new line counts; for Write, the whole file's line count).
-- Exception switch: `~/.claude/state/allow-direct-edit`, whose content is an expiry time (ISO 8601 or epoch seconds); everything is allowed before it expires. The rules require Claude to create it only after explicit user authorization. You can also create it yourself:
+- Ordinary sessions apply the line limit only to `Edit`, `Write`, and `NotebookEdit`; Bash input is allowed.
+- In a flash session (`FLASH_ORCHESTRATOR=1`), the source-edit threshold is 0, and common Bash source writes such as `sed -i`, heredoc redirection, `>` / `>>`, and `tee` are denied.
+- Ordinary sessions allow files with extensions `.md .txt .json .jsonc .yaml .yml .toml .ini .cfg .csv`, plus `.gitignore` and `.gitattributes`, and source edits of no more than 10 lines. Flash sessions also allow those non-source files.
+- Ordinary sessions deny source edits over 10 lines (for Edit, the larger of the old/new line counts; for Write, the whole file's line count).
+- Exception switch: `~/.claude/state/allow-direct-edit`, whose content is an expiry time (ISO 8601 or epoch seconds); ordinary sessions allow everything before it expires, while flash sessions do not use it. The rules require Claude to create it only after explicit user authorization. You can also create it yourself:
 
   ```bash
   mkdir -p ~/.claude/state && date -d '+60 min' -Iseconds > ~/.claude/state/allow-direct-edit
@@ -267,7 +268,7 @@ This makes everyday sessions in **all projects** follow this division: Opus hand
 **Verify**
 
 ```bash
-# 1. Hook unit tests: should print Summary: 35 passed, 0 failed
+# 1. Hook unit tests: should print Summary: 46 passed, 0 failed
 node ~/.claude/skills/implement-spec-split/hooks/test-delegate-guard.js
 
 # 2. Smoke test: should print a JSON object whose permissionDecision is deny

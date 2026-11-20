@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 
-// Claude Code PreToolUse hook for Edit, Write, and NotebookEdit. It denies
-// source-code changes larger than the configured limit (default: 10), while
-// allowing invalid/failing input, configured file types, small edits, disabled
-// projects, and a temporary override stored at
-// <home>/.claude/state/allow-direct-edit. The limit comes from the nearest
-// .claude/delegate-guard.json above payload.cwd, DELEGATE_GUARD_LIMIT, or the
-// default. Invalid input fails open; internal failures fail open and append an
-// error to <home>/.claude/state/delegate-guard.log when that log is writable.
+// Claude Code PreToolUse hook for Edit, Write, NotebookEdit, and Bash. In
+// ordinary sessions it denies source-code changes larger than the configured
+// limit (default: 10), while allowing invalid/failing input, configured file
+// types, small edits, disabled projects, and a temporary override stored at
+// <home>/.claude/state/allow-direct-edit. Flash sessions (FLASH_ORCHESTRATOR=1)
+// instead deny every source-code write, including common Bash writes. The
+// ordinary limit comes from the nearest .claude/delegate-guard.json above
+// payload.cwd, DELEGATE_GUARD_LIMIT, or the default. Invalid input fails open;
+// internal failures fail open and append an error to
+// <home>/.claude/state/delegate-guard.log when that log is writable.
 
 'use strict';
 
@@ -16,7 +18,9 @@ const os = require('os');
 const path = require('path');
 
 const LIMIT = 10;
-const TOOLS = new Set(['Edit', 'Write', 'NotebookEdit']);
+const TOOLS = new Set(['Edit', 'Write', 'NotebookEdit', 'Bash']);
+const FLASH_REASON =
+  'flash 会话不写源码：派 glm-5.3 子代理（或 codex worker）。';
 const TEXT_EXTENSIONS = new Set([
   '.md',
   '.txt',
@@ -42,10 +46,159 @@ function countLines(value) {
   return parts.length;
 }
 
+function deny(reason) {
+  process.stdout.write(
+    JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: reason,
+      },
+    }) + '\n'
+  );
+}
+
 function fileNameOf(filePath) {
   const normalized = String(filePath).replace(/\\/g, '/');
   const parts = normalized.split('/');
   return parts[parts.length - 1] || '';
+}
+
+function tokenizeShell(command) {
+  const tokens = [];
+  let current = '';
+  let quoted = false;
+
+  const flushWord = () => {
+    if (current !== '') tokens.push({ text: current, quoted });
+    current = '';
+    quoted = false;
+  };
+
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index];
+    if (character === '\'' || character === '"') {
+      quoted = true;
+      const closingQuote = command.indexOf(character, index + 1);
+      if (closingQuote === -1) {
+        current += command.slice(index + 1);
+        break;
+      }
+      current += command.slice(index + 1, closingQuote);
+      index = closingQuote;
+      continue;
+    }
+
+    if (character === '\n' || character === '\r') {
+      flushWord();
+      tokens.push({ text: '\n', quoted: false });
+      if (character === '\r' && command[index + 1] === '\n') {
+        index += 1;
+      }
+      continue;
+    }
+
+    if (/\s/.test(character)) {
+      flushWord();
+      continue;
+    }
+
+    if ('<>|;&()'.includes(character)) {
+      flushWord();
+      const next = command[index + 1];
+      if (
+        (character === '>' && next === '>') ||
+        (character === '<' && next === '<') ||
+        (character === '&' && next === '&') ||
+        (character === '|' && next === '|')
+      ) {
+        tokens.push({ text: character + next, quoted: false });
+        index += 1;
+      } else {
+        tokens.push({ text: character, quoted: false });
+      }
+      continue;
+    }
+
+    current += character;
+  }
+  flushWord();
+  return tokens;
+}
+
+function isSourceBashWrite(command) {
+  const tokens = tokenizeShell(command);
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (
+      (token.text === '>' || token.text === '>>') &&
+      !token.quoted &&
+      index + 1 < tokens.length &&
+      !tokens[index + 1].text.startsWith('&') &&
+      !isAllowedFileName(tokens[index + 1].text)
+    ) {
+      return true;
+    }
+
+    if (token.text === 'tee') {
+      for (let next = index + 1; next < tokens.length; next += 1) {
+        const argument = tokens[next];
+        if ('|;&()\n'.includes(argument.text[0])) break;
+        if (
+          !argument.text.startsWith('-') &&
+          !isAllowedFileName(argument.text)
+        ) {
+          return true;
+        }
+      }
+    }
+
+    if (token.text !== 'sed') continue;
+
+    let hasInPlaceOption = false;
+    let sawScriptOperand = false;
+    let sawFileOperand = false;
+    let optionTakesValue = false;
+    for (let next = index + 1; next < tokens.length; next += 1) {
+      const argument = tokens[next];
+      if ('|;&()<>\n'.includes(argument.text[0])) break;
+      if (optionTakesValue) {
+        optionTakesValue = false;
+        continue;
+      }
+      if (argument.text === '--') break;
+      if (argument.text.startsWith('--')) {
+        const [name] = argument.text.split('=', 2);
+        if (name === '--in-place') hasInPlaceOption = true;
+        if (
+          (name === '--expression' || name === '--file') &&
+          !argument.text.includes('=')
+        ) {
+          optionTakesValue = true;
+        }
+        continue;
+      }
+      if (
+        argument.text.startsWith('-') &&
+        argument.text !== '-'
+      ) {
+        const optionCharacters = argument.text.slice(1);
+        if (optionCharacters.includes('i')) hasInPlaceOption = true;
+        if (/[ef]$/.test(optionCharacters)) optionTakesValue = true;
+        continue;
+      }
+      if (!sawScriptOperand) {
+        sawScriptOperand = true;
+        continue;
+      }
+      sawFileOperand = true;
+      if (hasInPlaceOption && !isAllowedFileName(argument.text)) {
+        return true;
+      }
+    }
+    if (hasInPlaceOption && !sawFileOperand) return true;
+  }
+  return false;
 }
 
 function isAllowedFileName(filePath) {
@@ -163,11 +316,25 @@ function main() {
     const toolInput = payload.tool_input;
     if (!toolInput || typeof toolInput !== 'object') return;
 
+    const flashMode = process.env.FLASH_ORCHESTRATOR === '1';
+    if (payload.tool_name === 'Bash') {
+      if (!flashMode) return;
+      const command = toolInput.command;
+      if (typeof command !== 'string' || command === '') return;
+      if (isSourceBashWrite(command)) deny(FLASH_REASON);
+      return;
+    }
+
     const filePath =
       payload.tool_name === 'NotebookEdit'
         ? toolInput.notebook_path
         : toolInput.file_path;
     if (typeof filePath !== 'string' || filePath === '') return;
+
+    if (flashMode && !isAllowedFileName(filePath)) {
+      deny(FLASH_REASON);
+      return;
+    }
 
     const homeDir = process.env.DELEGATE_GUARD_HOME || os.homedir();
     const log = makeLogger(homeDir);
@@ -208,15 +375,7 @@ function main() {
         : `${payload.tool_name} 对源码文件 ${fileNameOf(filePath)} 的修改计算为 ${lineCount} 行，` +
           `超过阈值 ${limit} 行；超过 ${limit} 行的源码修改按规则应写 Brief 交给 codex worker` +
           `（见全局 CLAUDE.md 的 Opus / codex 分工）；只有用户明确授权时才可开例外。`;
-    process.stdout.write(
-      JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: 'PreToolUse',
-          permissionDecision: 'deny',
-          permissionDecisionReason: reason,
-        },
-      }) + '\n'
-    );
+    deny(reason);
   } catch (error) {
     // Fail open so the guard cannot block a Claude Code session.
     if (parsedInput) {
