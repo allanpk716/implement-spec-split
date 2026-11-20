@@ -64,6 +64,15 @@ Install it next to the main skill:
 ln -s ~/.claude/skills/implement-spec-split/find-next ~/.claude/skills/find-next   # Windows: mklink /J, or copy
 ```
 
+Install the two Design-session wrappers the same way:
+
+```bash
+ln -s ~/.claude/skills/implement-spec-split/grill-feature ~/.claude/skills/grill-feature
+ln -s ~/.claude/skills/implement-spec-split/grill-map ~/.claude/skills/grill-map
+```
+
+`/grill-feature <idea>` opens an official-Opus session for a small feature; `/grill-map <map or idea>` does the same for a large-module wayfinder map. Each wrapper blocks until `scripts/design-session.sh` receives `handoff.md`.
+
 ## Keeping up with upstream
 
 Read [MAINTAINING.md](MAINTAINING.md) (中文) before syncing or editing: it records the design decisions and pitfalls.
