@@ -32,9 +32,15 @@ expect_rc() {
 }
 
 cleanup() {
+  rc=$?
   if [ -n "$TIMEOUT_CHILD" ] && kill -0 "$TIMEOUT_CHILD" 2>/dev/null; then
     kill -KILL "$TIMEOUT_CHILD" 2>/dev/null || true
   fi
+  trap - EXIT HUP INT TERM
+  if [ "$rc" -eq 0 ] && [ "$FAIL" -eq 0 ]; then
+    rm -r "$WORK"
+  fi
+  exit "$rc"
 }
 trap cleanup EXIT HUP INT TERM
 
@@ -288,6 +294,8 @@ check "SKILL does not duplicate the exit-code table" \
 check "find-next does not duplicate the exit-code table" \
   bash -c "! grep -Fq '认证失败（2）' '$HERE/../find-next/SKILL.md'"
 
-echo
-echo "passed=$PASS failed=$FAIL artifacts=$WORK"
+if [ "$FAIL" -gt 0 ]; then
+  echo "Artifacts: $WORK"
+fi
+echo "Summary: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
