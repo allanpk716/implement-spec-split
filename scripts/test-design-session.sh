@@ -258,6 +258,35 @@ RUN_EXIT=$?
 expect_exit 0 'help succeeds without a kind and topic'
 expect_file_has 'Usage: design-session.sh' 'help prints the usage' "$WORK/help.out"
 
+DESIGN_SESSION_ROOT=$WORK/runs ISS_ORCA=$BIN/orca \
+  ISS_DESIGN_SESSION_POLL=0.01 ORCA_LOG=$ORCA_LOG PROMPT_LOG=$PROMPT_LOG \
+  CHECK_LOG=$CHECK_LOG DESIGN_TEST_TIMEOUT=0 DESIGN_TEST_SESSION_EXIT=0 \
+  DESIGN_TEST_LAUNCH_FAIL=0 DESIGN_TEST_CHECK_FAIL=0 \
+  DESIGN_TEST_MISSING_HANDOFF=0 DESIGN_TEST_CLOSED_AFTER_HANDOFF=0 \
+  DESIGN_TEST_TERMINAL=0 \
+  bash "$SCRIPT" feature x --timeout > "$WORK/missing-timeout-value.out" \
+  2> "$RUN_STDERR" &
+BOUNDED_PID=$!
+BOUNDED_EXITED=0
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  if ! kill -0 "$BOUNDED_PID" 2>/dev/null; then
+    BOUNDED_EXITED=1
+    break
+  fi
+  sleep 0.05
+done
+if [ "$BOUNDED_EXITED" = 1 ]; then
+  wait "$BOUNDED_PID"
+  RUN_EXIT=$?
+else
+  kill "$BOUNDED_PID" 2>/dev/null || true
+  wait "$BOUNDED_PID" 2>/dev/null || true
+  RUN_EXIT=124
+fi
+expect_exit 64 'missing timeout value is a usage error'
+expect_file_has '--timeout needs a value' \
+  'missing timeout value names the option' "$RUN_STDERR"
+
 : > "$ORCA_LOG"
 : > "$PROMPT_LOG"
 : > "$CHECK_LOG"
@@ -289,7 +318,7 @@ unset DESIGN_TEST_UNRELATED_FIRST
 rm -f "$CHECK_ATTEMPTS"
 DESIGN_TEST_WRONG_REPORT_THEN_TIMEOUT=1
 run_design_session "$WORK/wrong-report-timeout.out" feature 'Wrong report' --timeout 1
-expect_exit 3 'wrong reportPath waits until timeout'
+expect_exit 5 'wrong reportPath waits until timeout'
 if grep -Fq '超时' "$RUN_STDERR"; then
   record PASS 'wrong reportPath timeout is reported as timeout'
 else
@@ -299,7 +328,7 @@ unset DESIGN_TEST_WRONG_REPORT_THEN_TIMEOUT
 
 DESIGN_TEST_TIMEOUT=1
 run_design_session "$WORK/timeout.out" feature 'Slow feature' --timeout 1
-expect_exit 3 'wait timeout returns exit code three'
+expect_exit 5 'wait timeout returns exit code five'
 if grep -Fq '超时' "$RUN_STDERR"; then
   record PASS 'timeout message is reported'
 else
@@ -309,7 +338,7 @@ unset DESIGN_TEST_TIMEOUT
 
 DESIGN_TEST_SESSION_EXIT=1
 run_design_session "$WORK/session-exit.out" feature 'Closed session' --timeout 5
-expect_exit 4 'session exit returns exit code four'
+expect_exit 7 'session exit returns exit code seven'
 expect_file_has 'show' 'session exit is detected through agent show' "$ORCA_LOG"
 if grep -Fq 'Design session 已结束' "$RUN_STDERR"; then
   record PASS 'session exit message is reported'
@@ -335,7 +364,7 @@ expect_exit 0 'terminal-backed design session succeeds'
 
 DESIGN_TEST_SESSION_EXIT=1
 run_design_session "$WORK/terminal-exit.out" feature 'Closed terminal session' --timeout 5
-expect_exit 4 'terminal-backed session exit returns exit code four'
+expect_exit 7 'terminal-backed session exit returns exit code seven'
 if grep -Fq 'Design session 已结束' "$RUN_STDERR"; then
   record PASS 'terminal-backed session exit message is reported'
 else
@@ -345,7 +374,7 @@ unset DESIGN_TEST_SESSION_EXIT DESIGN_TEST_TERMINAL
 
 DESIGN_TEST_LAUNCH_FAIL=1
 run_design_session "$WORK/launch-fail.out" feature x --timeout 1
-expect_exit 5 'launch failure returns exit code five'
+expect_exit 6 'launch failure returns exit code six'
 if grep -Fq 'fake orca launch failed' "$RUN_STDERR"; then
   record PASS 'launch failure is surfaced'
 else
@@ -355,7 +384,7 @@ unset DESIGN_TEST_LAUNCH_FAIL
 
 DESIGN_TEST_CHECK_FAIL=1
 run_design_session "$WORK/check-fail.out" feature x --timeout 1
-expect_exit 5 'check failure returns exit code five'
+expect_exit 6 'check failure returns exit code six'
 if grep -Fq 'fake orca check failed' "$RUN_STDERR"; then
   record PASS 'check failure is surfaced'
 else

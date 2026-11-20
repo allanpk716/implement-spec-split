@@ -11,11 +11,10 @@
 #
 # Exit codes:
 #   0  handoff received and its report exists
-#   2  invalid usage or repository
-#   3  orchestration wait timed out
-#   4  Design session ended before handing off
-#   5  Orca launch or check failed
-#   6  message had no usable handoff report
+#  64  invalid usage or repository
+#   5  orchestration wait timed out
+#   6  Orca run creation/launch/check failed, or handoff was unusable
+#   7  Design session ended before handing off
 
 set -u
 
@@ -32,7 +31,7 @@ USAGE
 die_usage() {
   echo "design-session: $*" >&2
   usage >&2
-  exit 2
+  exit 64
 }
 
 die() {
@@ -65,6 +64,7 @@ TIMEOUT_SECONDS=7200
 while [ $# -gt 0 ]; do
   case $1 in
     --timeout)
+      [ $# -ge 2 ] || die_usage '--timeout needs a value'
       TIMEOUT_SECONDS=${2:-}
       shift 2
       ;;
@@ -82,10 +82,10 @@ case "$TIMEOUT_SECONDS" in
 esac
 [ "$TIMEOUT_SECONDS" -gt 0 ] || die_usage '--timeout must be greater than zero'
 
-command -v git >/dev/null 2>&1 || die 2 'git is required but was not found on PATH'
-command -v node >/dev/null 2>&1 || die 2 'node is required but was not found on PATH'
+command -v git >/dev/null 2>&1 || die 64 'git is required but was not found on PATH'
+command -v node >/dev/null 2>&1 || die 64 'node is required but was not found on PATH'
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) ||
-  die 2 'run this script from a git repository'
+  die 64 'run this script from a git repository'
 ORIGIN_URL=$(git -C "$REPO_ROOT" remote get-url origin 2>/dev/null || true)
 REPO_NAME=${ORIGIN_URL##*/}
 REPO_NAME=${REPO_NAME%.git}
@@ -99,14 +99,14 @@ while [ -e "$RUN_DIR" ]; do
   SUFFIX=$((SUFFIX + 1))
   RUN_DIR=$ROOT/$REPO_NAME-$STAMP-$SUFFIX-$KIND
 done
-mkdir -p "$RUN_DIR" || die 2 "could not create run directory: $RUN_DIR"
-RUN_DIR=$(cd "$RUN_DIR" && pwd) || die 2 "could not resolve run directory: $RUN_DIR"
+mkdir -p "$RUN_DIR" || die 64 "could not create run directory: $RUN_DIR"
+RUN_DIR=$(cd "$RUN_DIR" && pwd) || die 64 "could not resolve run directory: $RUN_DIR"
 
 ORCA=${ISS_ORCA:-orca}
 RUN_CREATE_JSON=$("$ORCA" orchestration run-create \
   --objective "Design session handoff for $REPO_NAME" --json \
   2>"$RUN_DIR/run-create.err") ||
-  die 5 "orca orchestration run-create failed: $(cat "$RUN_DIR/run-create.err")"
+  die 6 "orca orchestration run-create failed: $(cat "$RUN_DIR/run-create.err")"
 printf '%s\n' "$RUN_CREATE_JSON" > "$RUN_DIR/run-create.json"
 RUN_ID=$(printf '%s\n' "$RUN_CREATE_JSON" | node -e '
   const fs = require("fs");
@@ -115,7 +115,7 @@ RUN_ID=$(printf '%s\n' "$RUN_CREATE_JSON" | node -e '
   const id = outcome.id ?? outcome.runId ?? outcome.run?.id;
   if (typeof id !== "string" || !id) process.exit(1);
   process.stdout.write(id);
-') || die 5 'orca orchestration run-create returned no Run id'
+') || die 6 'orca orchestration run-create returned no Run id'
 
 case "$KIND" in
   feature)
@@ -149,7 +149,7 @@ ${EARLY_HANDOFF}
 EOF
 )
 LAUNCH_JSON=$("$ORCA" agent launch --agent claude --json --prompt "$PROMPT" 2>"$RUN_DIR/launch.err") ||
-  die 5 "orca agent launch failed: $(cat "$RUN_DIR/launch.err")"
+  die 6 "orca agent launch failed: $(cat "$RUN_DIR/launch.err")"
 printf '%s\n' "$LAUNCH_JSON" > "$RUN_DIR/launch.json"
 SESSION_INFO=$(printf '%s\n' "$LAUNCH_JSON" | node -e '
   const fs = require("fs");
@@ -195,7 +195,7 @@ if [ -n "$SESSION_ID" ]; then
       '; then
         cleanup_wait
         CHECK_PID=
-        die 4 'Design session 已结束且未交出 handoff.md'
+        die 7 'Design session 已结束且未交出 handoff.md'
       fi
     done
   }
@@ -215,7 +215,7 @@ elif [ "$SESSION_KIND" = terminal ] && [ -n "$SESSION_HANDLE" ]; then
         SESSION_WAIT_PID=
         if [ "$SESSION_WAIT_STATUS" -eq 0 ]; then
           cleanup_wait
-          die 4 'Design session 已结束且未交出 handoff.md'
+          die 7 'Design session 已结束且未交出 handoff.md'
         fi
       fi
     done
@@ -254,7 +254,7 @@ while :; do
   NOW=$(date +%s)
   REMAINING_MS=$(( (WAIT_DEADLINE - NOW) * 1000 ))
   if [ "$REMAINING_MS" -le 0 ]; then
-    die 3 "等待 handoff 超时（${TIMEOUT_SECONDS} 秒）"
+    die 5 "等待 handoff 超时（${TIMEOUT_SECONDS} 秒）"
   fi
   "$ORCA" orchestration check --run "$RUN_ID" --wait --json \
     --timeout-ms "$REMAINING_MS" > "$RUN_DIR/check.out" 2> "$RUN_DIR/check.err" &
@@ -266,14 +266,14 @@ while :; do
   CHECK_JSON=$(cat "$RUN_DIR/check.out" 2>/dev/null || true)
   printf '%s\n' "$CHECK_JSON" > "$RUN_DIR/check.json"
   if [ "$CHECK_STATUS" -ne 0 ]; then
-    die 5 "orca orchestration check failed: $(cat "$RUN_DIR/check.err")"
+    die 6 "orca orchestration check failed: $(cat "$RUN_DIR/check.err")"
   fi
   if printf '%s\n' "$CHECK_JSON" | node -e '
     const fs = require("fs");
     const root = JSON.parse(fs.readFileSync(0, "utf8"));
     process.exit(root.result?.timedOut === true ? 0 : 1);
   '; then
-    die 3 "等待 handoff 超时（${TIMEOUT_SECONDS} 秒）"
+    die 5 "等待 handoff 超时（${TIMEOUT_SECONDS} 秒）"
   fi
 
   HANDOFF=$(matching_report_path "$CHECK_JSON" "$RUN_DIR/handoff.md" || true)
