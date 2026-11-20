@@ -143,7 +143,6 @@ DISALLOWED_TOOLS=(
 CLAUDE_ARGS=(
   -p
   --model opus
-  --permission-mode plan
   --allowedTools "${ALLOWED_TOOLS[@]}"
   --disallowedTools "${DISALLOWED_TOOLS[@]}"
   --permission-prompts none
@@ -215,7 +214,8 @@ command -v claude >/dev/null 2>&1 || {
 
 run_claude() {
   (
-    unset ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_MODEL CLAUDE_CODE_SUBAGENT_MODEL
+    unset ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_MODEL \
+      CLAUDE_CODE_SUBAGENT_MODEL CLAUDE_CODE_SUBAGENT_MODEL_FORCE FLASH_ORCHESTRATOR
     local name rest
     while IFS='=' read -r name rest; do
       if [[ "$name" =~ ^ANTHROPIC_DEFAULT_[A-Za-z0-9_]+_MODEL$ ]]; then
@@ -298,7 +298,11 @@ show_claude_error() {
 }
 
 if [ "$CLAUDE_EXIT" -ne 0 ]; then
-  if grep -Eqi '(^|[^[:alnum:]])(429|402)([^[:alnum:]]|$)|usage limit|quota|rate limit|too many requests|overloaded' \
+  if grep -Eqi '(^|[^[:alnum:]])(529|503)([^[:alnum:]]|$)|overloaded|connection (error|refused|reset)|network error|ENOTFOUND|ECONNREFUSED|ETIMEDOUT' \
+      "$OUTPUT_TMP" "$ERROR_TMP" 2>/dev/null; then
+    show_claude_error "transient service or network unavailable"
+    exit 4
+  elif grep -Eqi '(^|[^[:alnum:]])(429|402)([^[:alnum:]]|$)|usage limit|quota|rate limit|too many requests' \
       "$OUTPUT_TMP" "$ERROR_TMP" 2>/dev/null; then
     show_claude_error "quota exhausted or rate limited"
     exit 3
@@ -310,6 +314,11 @@ if [ "$CLAUDE_EXIT" -ne 0 ]; then
     show_claude_error "claude failed"
     exit 6
   fi
+fi
+
+if ! grep -Eq '[^[:space:]]' "$OUTPUT_TMP" 2>/dev/null; then
+  echo "opus-review: claude produced empty findings" >&2
+  exit 6
 fi
 
 if ! mv -f "$OUTPUT_TMP" "$OUT"; then

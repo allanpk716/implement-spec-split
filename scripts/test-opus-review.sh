@@ -52,6 +52,12 @@ case "${FAKE_CLAUDE_SCENARIO:-ok}" in
   ok) printf 'fake Opus findings\n'; exit 0 ;;
   auth) echo 'Invalid API key: 401 Unauthorized'; exit 1 ;;
   quota) echo '429 Too Many Requests: usage limit reached'; exit 1 ;;
+  overloaded) echo 'The server is overloaded'; exit 1 ;;
+  service529) echo 'HTTP 529 server overloaded'; exit 1 ;;
+  service503) echo '503 Service Unavailable'; exit 1 ;;
+  connection) echo 'fetch failed: connection error'; exit 1 ;;
+  blank) exit 0 ;;
+  whitespace) printf ' \t\n'; exit 0 ;;
   other) echo 'claude exploded' >&2; exit 17 ;;
   sleep)
     sleep 30 &
@@ -73,6 +79,8 @@ export ANTHROPIC_DEFAULT_OPUS_MODEL="glm-5.3"
 export ANTHROPIC_DEFAULT_SONNET_MODEL="glm-5.3-flash"
 export ANTHROPIC_DEFAULT_AGENT_MODEL="glm-5.3"
 export CLAUDE_CODE_SUBAGENT_MODEL="glm-5.3"
+export CLAUDE_CODE_SUBAGENT_MODEL_FORCE="glm-5.3"
+export FLASH_ORCHESTRATOR=1
 
 export FAKE_CLAUDE_LOG="$WORK/code-env-args.log"
 export FAKE_CLAUDE_CWD="$WORK/code-cwd.log"
@@ -118,7 +126,7 @@ run_review --kind code --input main --out "$WORK/code-findings.md" --cwd "$REPO"
 expect_rc "code review succeeds" 0 "$RUN_RC"
 check "code findings contain claude final output" grep -Fqx 'fake Opus findings' "$WORK/code-findings.md"
 
-for variable in ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_MODEL CLAUDE_CODE_SUBAGENT_MODEL; do
+for variable in ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_MODEL CLAUDE_CODE_SUBAGENT_MODEL CLAUDE_CODE_SUBAGENT_MODEL_FORCE FLASH_ORCHESTRATOR; do
   check "$variable is unset for claude" bash -c "! grep -Eq '^$variable=' '$FAKE_CLAUDE_LOG'"
 done
 check "all ANTHROPIC_DEFAULT_*_MODEL variables are unset" \
@@ -132,9 +140,9 @@ check "claude model is opus" awk '
   END { for (i = 1; i < count; i++) if (args[i] == "--model" && args[i + 1] == "opus") exit 0; exit 1 }
 ' "$FAKE_CLAUDE_LOG"
 check "claude cwd is the reviewed repository" test "$(cat "$FAKE_CLAUDE_CWD")" = "$REPO"
-check "permission mode is plan" awk '
-  /^ARG\t/ { arg = substr($0, 5); args[++count] = arg }
-  END { for (i = 1; i < count; i++) if (args[i] == "--permission-mode" && args[i + 1] == "plan") exit 0; exit 1 }
+check "headless call omits permission mode" awk '
+  /^ARG\t/ { arg = substr($0, 5); if (arg == "--permission-mode") found = 1 }
+  END { exit !found ? 0 : 1 }
 ' "$FAKE_CLAUDE_LOG"
 check "unprompted permissions are denied" awk '
   /^ARG\t/ { arg = substr($0, 5); args[++count] = arg }
@@ -181,6 +189,20 @@ export FAKE_CLAUDE_LOG="$WORK/quota.log" FAKE_CLAUDE_SCENARIO=quota
 run_review --kind draft --input "$WORK/draft.md" --out "$WORK/quota-findings.md" --cwd "$REPO" --timeout 5
 expect_rc "quota or rate-limit failure exits 3" 3 "$RUN_RC"
 check "quota failure writes no findings" test ! -e "$WORK/quota-findings.md"
+
+for scenario in overloaded service529 service503 connection; do
+  export FAKE_CLAUDE_LOG="$WORK/$scenario.log" FAKE_CLAUDE_SCENARIO="$scenario"
+  run_review --kind draft --input "$WORK/draft.md" --out "$WORK/$scenario-findings.md" --cwd "$REPO" --timeout 5
+  expect_rc "$scenario failure exits 4" 4 "$RUN_RC"
+  check "$scenario writes no findings" test ! -e "$WORK/$scenario-findings.md"
+done
+
+for scenario in blank whitespace; do
+  export FAKE_CLAUDE_LOG="$WORK/$scenario.log" FAKE_CLAUDE_SCENARIO="$scenario"
+  run_review --kind draft --input "$WORK/draft.md" --out "$WORK/$scenario-findings.md" --cwd "$REPO" --timeout 5
+  expect_rc "$scenario claude output exits 6" 6 "$RUN_RC"
+  check "$scenario writes no findings" test ! -e "$WORK/$scenario-findings.md"
+done
 
 export FAKE_CLAUDE_LOG="$WORK/other.log" FAKE_CLAUDE_SCENARIO=other
 run_review --kind draft --input "$WORK/draft.md" --out "$WORK/other-findings.md" --cwd "$REPO" --timeout 5
