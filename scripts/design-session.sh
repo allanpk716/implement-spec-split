@@ -100,6 +100,22 @@ while [ -e "$RUN_DIR" ]; do
   RUN_DIR=$ROOT/$REPO_NAME-$STAMP-$SUFFIX-$KIND
 done
 mkdir -p "$RUN_DIR" || die 2 "could not create run directory: $RUN_DIR"
+RUN_DIR=$(cd "$RUN_DIR" && pwd) || die 2 "could not resolve run directory: $RUN_DIR"
+
+ORCA=${ISS_ORCA:-orca}
+RUN_CREATE_JSON=$("$ORCA" orchestration run-create \
+  --objective "Design session handoff for $REPO_NAME" --json \
+  2>"$RUN_DIR/run-create.err") ||
+  die 5 "orca orchestration run-create failed: $(cat "$RUN_DIR/run-create.err")"
+printf '%s\n' "$RUN_CREATE_JSON" > "$RUN_DIR/run-create.json"
+RUN_ID=$(printf '%s\n' "$RUN_CREATE_JSON" | node -e '
+  const fs = require("fs");
+  const root = JSON.parse(fs.readFileSync(0, "utf8"));
+  const outcome = root.result ?? root;
+  const id = outcome.id ?? outcome.runId ?? outcome.run?.id;
+  if (typeof id !== "string" || !id) process.exit(1);
+  process.stdout.write(id);
+') || die 5 'orca orchestration run-create returned no Run id'
 
 case "$KIND" in
   feature)
@@ -128,12 +144,10 @@ $KIND_INSTRUCTIONS
 2. 上下文过重、一次要产出多份规格，或 main 已经变化时，提示用户另开 Design session，不要硬塞进本次会话。
 3. GLOSSARY、ADR 等文档改动由你自己 commit 并 push。
 4. 写不超过 30 行的 $RUN_DIR/handoff.md，包含：规格号、票号、新增或改动的 ADR 与术语、给 Orchestrator 的待办。
-5. 最后运行 orca orchestration send --report-path $RUN_DIR/handoff.md 通知主会话。
+5. 最后运行 orca orchestration send --subject "Design session handoff" --to run:$RUN_ID --report-path "$RUN_DIR/handoff.md" 通知主会话。
 ${EARLY_HANDOFF}
 EOF
 )
-
-ORCA=${ISS_ORCA:-orca}
 LAUNCH_JSON=$("$ORCA" agent launch --agent claude --json --prompt "$PROMPT" 2>"$RUN_DIR/launch.err") ||
   die 5 "orca agent launch failed: $(cat "$RUN_DIR/launch.err")"
 printf '%s\n' "$LAUNCH_JSON" > "$RUN_DIR/launch.json"
@@ -150,6 +164,9 @@ EOF
 TIMEOUT_MS=$((TIMEOUT_SECONDS * 1000))
 CHECK_PID=
 SESSION_WAIT_PID=
+POLL_SECONDS=${ISS_DESIGN_SESSION_POLL:-2}
+WAIT_STARTED=$(date +%s)
+WAIT_DEADLINE=$((WAIT_STARTED + TIMEOUT_SECONDS))
 cleanup_wait() {
   for pid in "$CHECK_PID" "$SESSION_WAIT_PID"; do
     if [ -n "$pid" ]; then
@@ -161,82 +178,111 @@ cleanup_wait() {
   SESSION_WAIT_PID=
 }
 trap cleanup_wait INT TERM EXIT
-"$ORCA" orchestration check --wait --json --timeout-ms "$TIMEOUT_MS" \
-  > "$RUN_DIR/check.out" 2> "$RUN_DIR/check.err" &
-CHECK_PID=$!
-POLL_SECONDS=${ISS_DESIGN_SESSION_POLL:-2}
+
 if [ -n "$SESSION_ID" ]; then
-  while kill -0 "$CHECK_PID" 2>/dev/null; do
-    sleep "$POLL_SECONDS"
-    if [ -s "$RUN_DIR/check.out" ]; then
-      break
-    fi
-    SHOW_JSON=$("$ORCA" agent show --id "$SESSION_ID" --json 2>/dev/null || true)
-    if [ -n "$SHOW_JSON" ] && ! printf '%s\n' "$SHOW_JSON" | node -e '
-      const fs = require("fs");
-      const root = JSON.parse(fs.readFileSync(0, "utf8"));
-      const places = root.result?.places;
-      process.exit(Array.isArray(places) && places.length > 0 ? 0 : 1);
-    '; then
-      cleanup_wait
-      CHECK_PID=
-      die 4 'Design session 已结束且未交出 handoff.md'
-    fi
-  done
+  monitor_check() {
+    while kill -0 "$CHECK_PID" 2>/dev/null; do
+      sleep "$POLL_SECONDS"
+      if [ -s "$RUN_DIR/check.out" ]; then
+        return 0
+      fi
+      SHOW_JSON=$("$ORCA" agent show --id "$SESSION_ID" --json 2>/dev/null || true)
+      if [ -n "$SHOW_JSON" ] && ! printf '%s\n' "$SHOW_JSON" | node -e '
+        const fs = require("fs");
+        const root = JSON.parse(fs.readFileSync(0, "utf8"));
+        const places = root.result?.places;
+        process.exit(Array.isArray(places) && places.length > 0 ? 0 : 1);
+      '; then
+        cleanup_wait
+        CHECK_PID=
+        die 4 'Design session 已结束且未交出 handoff.md'
+      fi
+    done
+  }
 elif [ "$SESSION_KIND" = terminal ] && [ -n "$SESSION_HANDLE" ]; then
   "$ORCA" terminal wait --terminal "$SESSION_HANDLE" --for exit \
     --timeout-ms "$TIMEOUT_MS" > "$RUN_DIR/session-wait.out" 2> "$RUN_DIR/session-wait.err" &
   SESSION_WAIT_PID=$!
-  while kill -0 "$CHECK_PID" 2>/dev/null; do
-    sleep "$POLL_SECONDS"
-    if [ -s "$RUN_DIR/check.out" ]; then
-      break
-    fi
-    if ! kill -0 "$SESSION_WAIT_PID" 2>/dev/null; then
-      wait "$SESSION_WAIT_PID"
-      SESSION_WAIT_STATUS=$?
-      SESSION_WAIT_PID=
-      if [ "$SESSION_WAIT_STATUS" -eq 0 ]; then
-        cleanup_wait
-        die 4 'Design session 已结束且未交出 handoff.md'
+  monitor_check() {
+    while kill -0 "$CHECK_PID" 2>/dev/null; do
+      sleep "$POLL_SECONDS"
+      if [ -s "$RUN_DIR/check.out" ]; then
+        return 0
       fi
-    fi
-  done
-fi
-wait "$CHECK_PID"
-CHECK_STATUS=$?
-CHECK_PID=
-cleanup_wait
-CHECK_JSON=$(cat "$RUN_DIR/check.out" 2>/dev/null || true)
-printf '%s\n' "$CHECK_JSON" > "$RUN_DIR/check.json"
-if [ "$CHECK_STATUS" -ne 0 ]; then
-  die 5 "orca orchestration check failed: $(cat "$RUN_DIR/check.err")"
-fi
-if printf '%s\n' "$CHECK_JSON" | node -e '
-  const fs = require("fs");
-  const root = JSON.parse(fs.readFileSync(0, "utf8"));
-  process.exit(root.result?.timedOut === true ? 0 : 1);
-'; then
-  die 3 "等待 handoff 超时（${TIMEOUT_SECONDS} 秒）"
+      if ! kill -0 "$SESSION_WAIT_PID" 2>/dev/null; then
+        wait "$SESSION_WAIT_PID"
+        SESSION_WAIT_STATUS=$?
+        SESSION_WAIT_PID=
+        if [ "$SESSION_WAIT_STATUS" -eq 0 ]; then
+          cleanup_wait
+          die 4 'Design session 已结束且未交出 handoff.md'
+        fi
+      fi
+    done
+  }
+else
+  monitor_check() {
+    while kill -0 "$CHECK_PID" 2>/dev/null; do
+      if [ -s "$RUN_DIR/check.out" ]; then
+        return 0
+      fi
+      sleep "$POLL_SECONDS"
+    done
+  }
 fi
 
-HANDOFF=$(printf '%s\n' "$CHECK_JSON" | node -e '
-  const fs = require("fs");
-  const root = JSON.parse(fs.readFileSync(0, "utf8"));
-  const messages = root.result?.messages ?? root.messages ?? [];
-  for (const message of messages) {
-    let payload = message.payload;
-    if (typeof payload === "string") {
-      try { payload = JSON.parse(payload); } catch (_) { continue; }
+matching_report_path() {
+  printf '%s\n' "$1" | node -e '
+    const fs = require("fs");
+    const root = JSON.parse(fs.readFileSync(0, "utf8"));
+    const messages = root.result?.messages ?? root.messages ?? [];
+    for (const message of messages) {
+      let payload = message.payload;
+      if (typeof payload === "string") {
+        try { payload = JSON.parse(payload); } catch (_) { continue; }
+      }
+      const reportPath = payload?.reportPath ?? payload?.report_path;
+      if (reportPath === process.argv[1]) {
+        process.stdout.write(reportPath);
+        process.exit(0);
+      }
     }
-    const reportPath = payload?.reportPath ?? payload?.report_path;
-    if (typeof reportPath === "string" && reportPath) {
-      process.stdout.write(reportPath);
-      process.exit(0);
-    }
-  }
-') || die 6 'orchestration message had no reportPath'
-[ -n "$HANDOFF" ] || die 6 'orchestration message had no reportPath'
-[ -f "$HANDOFF" ] || die 6 "handoff report is missing: $HANDOFF"
-printf '%s\n' "$HANDOFF"
-exit 0
+  ' "$2"
+}
+
+while :; do
+  NOW=$(date +%s)
+  REMAINING_MS=$(( (WAIT_DEADLINE - NOW) * 1000 ))
+  if [ "$REMAINING_MS" -le 0 ]; then
+    die 3 "等待 handoff 超时（${TIMEOUT_SECONDS} 秒）"
+  fi
+  "$ORCA" orchestration check --run "$RUN_ID" --wait --json \
+    --timeout-ms "$REMAINING_MS" > "$RUN_DIR/check.out" 2> "$RUN_DIR/check.err" &
+  CHECK_PID=$!
+  monitor_check
+  wait "$CHECK_PID"
+  CHECK_STATUS=$?
+  CHECK_PID=
+  CHECK_JSON=$(cat "$RUN_DIR/check.out" 2>/dev/null || true)
+  printf '%s\n' "$CHECK_JSON" > "$RUN_DIR/check.json"
+  if [ "$CHECK_STATUS" -ne 0 ]; then
+    die 5 "orca orchestration check failed: $(cat "$RUN_DIR/check.err")"
+  fi
+  if printf '%s\n' "$CHECK_JSON" | node -e '
+    const fs = require("fs");
+    const root = JSON.parse(fs.readFileSync(0, "utf8"));
+    process.exit(root.result?.timedOut === true ? 0 : 1);
+  '; then
+    die 3 "等待 handoff 超时（${TIMEOUT_SECONDS} 秒）"
+  fi
+
+  HANDOFF=$(matching_report_path "$CHECK_JSON" "$RUN_DIR/handoff.md" || true)
+  if [ -n "$HANDOFF" ]; then
+    [ -f "$HANDOFF" ] ||
+      die 6 "handoff report is missing: $HANDOFF"
+    printf '%s\n' "$HANDOFF"
+    cleanup_wait
+    exit 0
+  fi
+  sleep "$POLL_SECONDS"
+done

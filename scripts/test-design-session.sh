@@ -6,11 +6,14 @@ set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SCRIPT=$ROOT/scripts/design-session.sh
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/design-session-test.XXXXXX")
+WORK=$(cd "$WORK" && pwd)
 BIN=$WORK/bin
 ORCA_LOG=$WORK/orca.log
 PROMPT_LOG=$WORK/prompt.txt
 CHECK_LOG=$WORK/check.log
+CHECK_ATTEMPTS=$WORK/check-attempts
 REPORT=$WORK/reported-handoff.md
+REPORT_LOG=$WORK/reported-path.txt
 PASSED=0
 FAILED=0
 RUN_EXIT=
@@ -107,6 +110,9 @@ case "\$command" in
     shift
     printf '%s\\n' "\$subcommand" >> "\$ORCA_LOG"
     case "\$subcommand" in
+      run-create)
+        printf '%s\\n' '{"ok":true,"result":{"id":"run_test_design"}}'
+        ;;
       check)
         if [ "\${DESIGN_TEST_SESSION_EXIT:-0}" = 1 ]; then
           sleep 2
@@ -122,16 +128,34 @@ case "\$command" in
           printf '%s\\n' 'fake orca check failed' >&2
           exit 70
         fi
+        attempts=0
+        if [ -f "\$CHECK_ATTEMPTS" ]; then
+          attempts=\$(cat "\$CHECK_ATTEMPTS")
+        fi
+        attempts=\$((attempts + 1))
+        printf '%s\\n' "\$attempts" > "\$CHECK_ATTEMPTS"
+        if [ "\${DESIGN_TEST_UNRELATED_FIRST:-0}" = 1 ] &&
+           [ "\$attempts" = 1 ]; then
+          printf '%s\\n' '{"ok":true,"result":{"messages":[{"id":"noise","payload":{"body":"not a handoff"}}]}}'
+          exit 0
+        fi
+        REPORT_DIR=\$(sed -n 's/^运行目录：//p' "\$PROMPT_LOG" | head -1)
+        REPORT_PATH="\$REPORT_DIR/handoff.md"
+        if [ "\${DESIGN_TEST_WRONG_REPORT_THEN_TIMEOUT:-0}" = 1 ]; then
+          if [ "\$attempts" = 1 ]; then
+            printf '%s\\n' '{"ok":true,"result":{"messages":[{"id":"wrong","payload":{"reportPath":"'$WORK'/wrong-handoff.md"}}]}}'
+          else
+            printf '%s\\n' '{"ok":true,"result":{"timedOut":true,"messages":[]}}'
+          fi
+          exit 0
+        fi
         if [ "\${DESIGN_TEST_MISSING_HANDOFF:-0}" = 1 ]; then
-          printf '%s\\n' '{"ok":true,"result":{"messages":[{"id":"msg-1","payload":{"reportPath":"$WORK/missing-handoff.md"}}]}}'
+          printf '%s\\n' "{\"ok\":true,\"result\":{\"messages\":[{\"id\":\"msg-1\",\"payload\":{\"reportPath\":\"\$REPORT_PATH\"}}]}}"
           exit 0
         fi
-        if [ "\${DESIGN_TEST_CLOSED_AFTER_HANDOFF:-0}" = 1 ]; then
-          printf '%s\\n' '{"ok":true,"result":{"messages":[{"id":"msg-1","payload":{"reportPath":"$REPORT"}}]}}'
-          sleep 0.2
-          exit 0
-        fi
-        printf '%s\\n' '{"ok":true,"result":{"messages":[{"id":"msg-1","payload":{"reportPath":"$REPORT"}}]}}'
+        printf 'Spec #15, tickets #18.\\n' > "\$REPORT_PATH"
+        printf '%s\\n' "\$REPORT_PATH" > "\$REPORT_LOG"
+        printf '%s\\n' "{\"ok\":true,\"result\":{\"messages\":[{\"id\":\"msg-1\",\"payload\":{\"reportPath\":\"\$REPORT_PATH\"}}]}}"
         ;;
       *)
         printf 'fake orca: unsupported orchestration subcommand %s\\n' "\$subcommand" >&2
@@ -177,6 +201,10 @@ run_design_session() {
   DESIGN_TEST_MISSING_HANDOFF=${DESIGN_TEST_MISSING_HANDOFF:-0} \
   DESIGN_TEST_CLOSED_AFTER_HANDOFF=${DESIGN_TEST_CLOSED_AFTER_HANDOFF:-0} \
   DESIGN_TEST_TERMINAL=${DESIGN_TEST_TERMINAL:-0} \
+  DESIGN_TEST_UNRELATED_FIRST=${DESIGN_TEST_UNRELATED_FIRST:-0} \
+  DESIGN_TEST_WRONG_REPORT_THEN_TIMEOUT=${DESIGN_TEST_WRONG_REPORT_THEN_TIMEOUT:-0} \
+  CHECK_ATTEMPTS=$CHECK_ATTEMPTS \
+  REPORT_LOG=$REPORT_LOG \
     bash "$SCRIPT" "$@" > "$output" 2> "$RUN_STDERR"
   RUN_EXIT=$?
 }
@@ -185,12 +213,15 @@ run_design_session() {
 : > "$CHECK_LOG"
 run_design_session "$RUN_STDOUT" feature 'Add export button' --timeout 1
 expect_exit 0 'feature design session succeeds'
-if [ "$(cat "$RUN_STDOUT")" = "$REPORT" ]; then
+if [ "$(cat "$RUN_STDOUT")" = "$(cat "$REPORT_LOG")" ]; then
   record PASS 'successful run prints the handoff path'
 else
   record FAIL 'successful run prints the handoff path' "stdout=$(cat "$RUN_STDOUT" 2>/dev/null)"
 fi
 expect_file_has 'claude' 'feature launch uses the official Claude agent' "$ORCA_LOG"
+expect_file_has 'run-create' 'design wait uses its own Run' "$ORCA_LOG"
+expect_file_has '--objective' 'Run creation has an objective' "$ORCA_LOG"
+expect_file_has '--json' 'Run creation emits JSON' "$ORCA_LOG"
 expect_file_has 'mattpocock-skills:grill-with-docs' 'feature prompt names its upstream skill' "$PROMPT_LOG"
 expect_file_has 'Add export button' 'feature prompt carries the user topic' "$PROMPT_LOG"
 expect_file_has 'to-spec' 'prompt continues to to-spec' "$PROMPT_LOG"
@@ -200,8 +231,11 @@ expect_file_has '另开 Design session' 'prompt handles oversized context' "$PRO
 expect_file_has 'commit 并 push' 'prompt commits and pushes document changes' "$PROMPT_LOG"
 expect_file_has 'handoff.md' 'prompt names the handoff file' "$PROMPT_LOG"
 expect_file_has '30 行' 'prompt limits handoff length' "$PROMPT_LOG"
-expect_file_has 'orca orchestration send --report-path' 'prompt names the notification command' "$PROMPT_LOG"
+expect_file_has 'orca orchestration send --subject "Design session handoff" --to run:run_test_design --report-path' \
+  'prompt names the complete notification command' "$PROMPT_LOG"
 expect_file_has --wait 'handoff wait uses Orca wait' "$CHECK_LOG"
+expect_file_has --run 'handoff wait targets the created Run' "$CHECK_LOG"
+expect_file_has 'run_test_design' 'handoff wait names the created Run id' "$CHECK_LOG"
 expect_file_has --timeout-ms 'handoff wait has a timeout' "$CHECK_LOG"
 expect_file_has '1000' 'timeout is converted to milliseconds' "$CHECK_LOG"
 
@@ -239,6 +273,30 @@ else
   record PASS 'map prompt does not use the feature skill'
 fi
 
+: > "$ORCA_LOG"
+: > "$CHECK_LOG"
+rm -f "$CHECK_ATTEMPTS"
+DESIGN_TEST_UNRELATED_FIRST=1
+run_design_session "$WORK/unrelated-message.out" feature 'Noisy feature' --timeout 1
+expect_exit 0 'unrelated message is ignored while waiting'
+if [ "$(cat "$CHECK_ATTEMPTS" 2>/dev/null)" -ge 2 ]; then
+  record PASS 'unrelated message was consumed by check'
+else
+  record FAIL 'unrelated message was consumed by check' "attempts=$(cat "$CHECK_ATTEMPTS" 2>/dev/null)"
+fi
+unset DESIGN_TEST_UNRELATED_FIRST
+
+rm -f "$CHECK_ATTEMPTS"
+DESIGN_TEST_WRONG_REPORT_THEN_TIMEOUT=1
+run_design_session "$WORK/wrong-report-timeout.out" feature 'Wrong report' --timeout 1
+expect_exit 3 'wrong reportPath waits until timeout'
+if grep -Fq '超时' "$RUN_STDERR"; then
+  record PASS 'wrong reportPath timeout is reported as timeout'
+else
+  record FAIL 'wrong reportPath timeout is reported as timeout' "stderr=$(cat "$RUN_STDERR")"
+fi
+unset DESIGN_TEST_WRONG_REPORT_THEN_TIMEOUT
+
 DESIGN_TEST_TIMEOUT=1
 run_design_session "$WORK/timeout.out" feature 'Slow feature' --timeout 1
 expect_exit 3 'wait timeout returns exit code three'
@@ -263,7 +321,7 @@ unset DESIGN_TEST_SESSION_EXIT
 DESIGN_TEST_CLOSED_AFTER_HANDOFF=1
 run_design_session "$WORK/closed-after-handoff.out" feature 'Closed after report' --timeout 5
 expect_exit 0 'handoff wins when the session closes immediately after sending'
-if [ "$(cat "$WORK/closed-after-handoff.out")" = "$REPORT" ]; then
+if [ "$(cat "$WORK/closed-after-handoff.out")" = "$(cat "$REPORT_LOG")" ]; then
   record PASS 'closed-after-handoff run still prints the report path'
 else
   record FAIL 'closed-after-handoff run still prints the report path' \
