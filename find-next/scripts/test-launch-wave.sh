@@ -20,6 +20,8 @@ SHELVED_ONLY_PLAN=$WORK/shelved-only-plan.json
 SHELVED_ONLY_PLAN_TEXT=$WORK/shelved-only-plan.txt
 ONLY_INVISIBLE_PLAN=$WORK/only-invisible-plan.json
 ONLY_INVISIBLE_PLAN_TEXT=$WORK/only-invisible-plan.txt
+FLASH_ONLY_INVISIBLE_PLAN=$WORK/flash-only-invisible-plan.json
+FLASH_ONLY_INVISIBLE_PLAN_TEXT=$WORK/flash-only-invisible-plan.txt
 CYCLE_PLAN=$WORK/cycle-plan.json
 CYCLE_PLAN_TEXT=$WORK/cycle-plan.txt
 RESUME_ONLY_PLAN=$WORK/resume-only-plan.json
@@ -105,6 +107,18 @@ expect_count() {
     record PASS "$name"
   else
     record FAIL "$name" "count=$actual, expected=$expected"
+  fi
+}
+
+expect_arg_after() {
+  marker=$1
+  value=$2
+  name=$3
+  file=$4
+  if grep -A1 -F -- "$marker" "$file" 2>/dev/null | grep -Fqx -- "$value"; then
+    record PASS "$name"
+  else
+    record FAIL "$name" "missing [$marker $value]"
   fi
 }
 
@@ -206,6 +220,31 @@ process.stdout.write(JSON.stringify({
 }, null, 2) + '\n');
 NODE
 cat > "$ONLY_INVISIBLE_PLAN_TEXT" <<'EOF'
+开发顺序（同时 1 份，共 4 个 worker）
+先恢复：#224
+EOF
+
+node - "$WT224" > "$FLASH_ONLY_INVISIBLE_PLAN" <<'NODE'
+const worktree = process.argv[2];
+process.stdout.write(JSON.stringify({
+  parallel_specs: 1,
+  workers: 4,
+  per_spec_parallel: 2,
+  resume: [{
+    spec: 224,
+    title: 'Invisible resume',
+    branch: 'spec-224',
+    worktree,
+    command: '/implement-spec-split 224 --impl agent --agent-model sonnet --parallel 2',
+  }],
+  active: [],
+  wave1: [],
+  later: [],
+  cycles: [],
+  standalone: [],
+}, null, 2) + '\n');
+NODE
+cat > "$FLASH_ONLY_INVISIBLE_PLAN_TEXT" <<'EOF'
 开发顺序（同时 1 份，共 4 个 worker）
 先恢复：#224
 EOF
@@ -471,6 +510,26 @@ expect_has --workers 'pipeline receives worker total' "$PIPELINE_LOG"
 expect_has --json 'dry run asks pipeline for JSON' "$PIPELINE_LOG"
 expect_without 'reserve' 'dry run makes no claim' "$CLAIM_LOG"
 expect_without 'create' 'dry run creates no Orca worktree' "$ORCA_LOG"
+cat > "$WORK/dry.expected" <<EOF
+开发顺序（同时 2 份，共 4 个 worker）
+先恢复：#222 #224 #238
+第 1 波：
+ 1. #237 New spec → /implement-spec-split 237 --impl codex --parallel 2
+之后：
+ 2. #239 Later spec（等 #237）
+
+现在启动吗？会在 Orca 里自动运行：
+ #222（恢复，原 worktree）→ /implement-spec-split 222 --impl codex --parallel 2
+ #224（恢复，在主工作树开终端标签）→ cd $WT224 后运行 /implement-spec-split 224 --impl codex --parallel 2
+ #238（恢复，找不到 worktree，需手动）
+ #237（新 worktree）→ /implement-spec-split 237 --impl codex --parallel 2
+EOF
+if cmp -s "$WORK/dry.out" "$WORK/dry.expected"; then
+  record PASS 'dry run without flash is byte-for-byte unchanged'
+else
+  record FAIL 'dry run without flash is byte-for-byte unchanged' \
+    "$(diff -u "$WORK/dry.expected" "$WORK/dry.out" | tail -n 5)"
+fi
 
 LARGE_ORCA_LIST_BYTES=$(wc -c < "$ORCA_LIST_LARGE" | tr -d '[:space:]')
 if [ "$LARGE_ORCA_LIST_BYTES" -ge 1500000 ]; then
@@ -642,6 +701,73 @@ expect_has '#237 已启动' 'agent next wave starts a free spec' "$WORK/agent-ne
 expect_has '--impl agent --agent-model opus' 'next wave reuses the agent suffix' "$PIPELINE_LOG"
 expect_has '/implement-spec-split 237 --impl agent --agent-model opus --parallel 2' \
   'next wave command keeps the agent backend' "$ORCA_LOG"
+unset LAUNCH_OMIT_WORKERS
+
+# FLASH_ORCHESTRATOR selects OpenClaude for the spec session and agent for implementation.
+rm -f "$LAUNCH_STATE_FILE"
+: > "$PIPELINE_LOG"; : > "$ORCA_LOG"
+FLASH_ORCHESTRATOR=1
+export FLASH_ORCHESTRATOR
+run_launch "$WORK/flash-apply.out" --apply --only 237
+expect_exit 0 "flash apply succeeds"
+expect_has '--impl agent --agent-model sonnet' \
+  'flash apply defaults to the agent backend' "$PIPELINE_LOG"
+expect_arg_after --agent openclaude 'flash apply uses OpenClaude' "$ORCA_LOG"
+expect_has '/implement-spec-split 237 --impl agent --agent-model sonnet --parallel 2' \
+  'flash apply launches the agent-backed command' "$ORCA_LOG"
+if node -e '
+  const fs = require("fs");
+  const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  if (value.flash !== true || value.launch_agent !== "openclaude" ||
+      value.impl !== "agent" || value.agent_model !== "sonnet") process.exit(1);
+' "$LAUNCH_STATE_FILE"; then
+  record PASS 'flash apply records the session and backend choices'
+else
+  record FAIL 'flash apply records the session and backend choices'
+fi
+
+: > "$CLAIM_LOG"; : > "$ORCA_LOG"; : > "$SEQUENCE_LOG"
+run_launch "$WORK/flash-resume.out" --apply --only 222
+expect_exit 0 "flash resume succeeds"
+expect_arg_after --agent openclaude 'flash resume uses OpenClaude' "$ORCA_LOG"
+
+: > "$CLAIM_LOG"; : > "$ORCA_LOG"; : > "$SEQUENCE_LOG"
+LAUNCH_PLAN_FILE_OVERRIDE=$FLASH_ONLY_INVISIBLE_PLAN
+LAUNCH_PLAN_TEXT_FILE_OVERRIDE=$FLASH_ONLY_INVISIBLE_PLAN_TEXT
+ISS_PIPELINE_STATUS_OVERRIDE=$BIN/fake-pipeline
+export LAUNCH_PLAN_FILE_OVERRIDE LAUNCH_PLAN_TEXT_FILE_OVERRIDE
+export ISS_PIPELINE_STATUS_OVERRIDE
+run_launch "$WORK/flash-terminal.out" --apply --only 224
+expect_exit 0 "flash invisible resume succeeds"
+cp "$ORCA_LOG" "$WORK/flash-terminal-orca.log"
+FLASH_ESCAPED_WT224=$(printf '%q' "$WT224")
+FLASH_ESCAPED_COMMAND=$(printf '%q' \
+  '/implement-spec-split 224 --impl agent --agent-model sonnet --parallel 2')
+expect_has "cd $FLASH_ESCAPED_WT224 && claude-flash $FLASH_ESCAPED_COMMAND" \
+  'flash terminal command uses claude-flash' "$ORCA_LOG"
+unset LAUNCH_PLAN_FILE_OVERRIDE LAUNCH_PLAN_TEXT_FILE_OVERRIDE
+ISS_PIPELINE_STATUS_OVERRIDE=$BIN/fake-pipeline-dynamic
+export ISS_PIPELINE_STATUS_OVERRIDE
+
+# A non-flash session continues a flash batch from the recorded launch state.
+unset FLASH_ORCHESTRATOR
+: > "$PIPELINE_LOG"; : > "$CLAIM_LOG"; : > "$ORCA_LOG"
+LAUNCH_OMIT_WORKERS=1
+export LAUNCH_OMIT_WORKERS
+run_launch "$WORK/flash-next-wave.out" --next-wave --apply --only 237
+expect_exit 0 "flash next wave succeeds"
+expect_has '--impl agent --agent-model sonnet' \
+  'flash next wave reuses the agent backend' "$PIPELINE_LOG"
+expect_arg_after --agent openclaude 'flash next wave uses OpenClaude' "$ORCA_LOG"
+if node -e '
+  const fs = require("fs");
+  const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  if (value.flash !== true || value.launch_agent !== "openclaude") process.exit(1);
+' "$LAUNCH_STATE_FILE"; then
+  record PASS 'flash next wave preserves the session choice'
+else
+  record FAIL 'flash next wave preserves the session choice'
+fi
 unset LAUNCH_OMIT_WORKERS
 
 # --auto-land is authorized by --apply and reused by --next-wave.

@@ -25,6 +25,10 @@ state files without the field keep the codex backend. --agent-model is only
 valid together with --impl agent. --auto-land appends the authorization to
 every generated command; --apply records it for the current batch only and
 --next-wave reuses it. --next-wave cannot accept --auto-land itself.
+With FLASH_ORCHESTRATOR=1, spec sessions use Orca's openclaude agent (and the
+manual launcher claude-flash); without an explicit --impl, implementation
+defaults to the agent backend with the sonnet model. --apply records these
+session choices for --next-wave.
 EOF
 }
 
@@ -57,6 +61,9 @@ AGENT_MODEL=sonnet
 IMPL_GIVEN=0
 AGENT_MODEL_GIVEN=0
 AUTO_LAND=0
+FLASH=0
+LAUNCH_AGENT=claude
+MANUAL_AGENT=claude
 while [ $# -gt 0 ]; do
   case "$1" in
     --repo)
@@ -138,6 +145,16 @@ while [ $# -gt 0 ]; do
       ;;
   esac
 done
+
+if [ "${FLASH_ORCHESTRATOR:-}" = 1 ]; then
+  FLASH=1
+  LAUNCH_AGENT=openclaude
+  MANUAL_AGENT=claude-flash
+  if [ "$IMPL_GIVEN" -eq 0 ]; then
+    IMPL=agent
+    AGENT_MODEL=sonnet
+  fi
+fi
 
 [ "$AUTO_LAND" -eq 0 ] || [ "$NEXT_WAVE" -eq 0 ] ||
   die "--auto-land is not valid with --next-wave; authorize it with the initial --apply"
@@ -235,6 +252,16 @@ state_auto_land() {
   '
 }
 
+state_flash() {
+  STATE_FILE_ACT="$LAUNCH_STATE_FILE" node -e '
+    const fs = require("fs");
+    let value = null;
+    try { value = JSON.parse(fs.readFileSync(process.env.STATE_FILE_ACT, "utf8")); }
+    catch (_) { process.exit(1); }
+    process.exit(value && value.flash === true ? 0 : 1);
+  '
+}
+
 valid_positive() {
   [[ "$1" =~ ^[1-9][0-9]*$ ]]
 }
@@ -264,6 +291,19 @@ read_workers_without_flag() {
 
 read_next_wave_state() {
   local value pair
+  if [ "$FLASH" -eq 0 ] && state_flash; then
+    FLASH=1
+    MANUAL_AGENT=claude-flash
+    value=$(state_string launch_agent)
+    case "$value" in
+      openclaude)
+        LAUNCH_AGENT=$value
+        ;;
+      *)
+        die "launch state contains an invalid flash launch agent: ${value:-<missing>}"
+        ;;
+    esac
+  fi
   if [ "$WORKERS_GIVEN" -eq 0 ]; then
     read_workers_without_flag
   fi
@@ -321,6 +361,7 @@ write_launch_state() {
   STATE_DIR_ACT="$LAUNCH_STATE_DIR" STATE_FILE_ACT="$LAUNCH_STATE_FILE" \
   STATE_WORKERS="$WORKERS" STATE_SPECS="$SPECS" STATE_APART="$state_apart_value" \
   STATE_IMPL="$IMPL" STATE_AGENT_MODEL="$AGENT_MODEL" STATE_AUTO_LAND="$AUTO_LAND" \
+  STATE_FLASH="$FLASH" STATE_LAUNCH_AGENT="$LAUNCH_AGENT" \
   STATE_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ) node -e '
     const fs = require("fs"), path = require("path");
     const apart = process.env.STATE_APART.split(/\r?\n/).filter(Boolean);
@@ -328,10 +369,15 @@ write_launch_state() {
       ? {impl: "agent", agent_model: process.env.STATE_AGENT_MODEL}
       : {};
     const authorization = process.env.STATE_AUTO_LAND === "1" ? {auto_land: true} : {};
+    const session = {
+      flash: process.env.STATE_FLASH === "1",
+      launch_agent: process.env.STATE_LAUNCH_AGENT,
+    };
     const value = JSON.stringify({
       workers: +process.env.STATE_WORKERS,
       specs: +process.env.STATE_SPECS,
       apart,
+      ...session,
       ...backend,
       ...authorization,
       updated: process.env.STATE_AT,
@@ -667,7 +713,7 @@ while IFS=$'\t' read -r kind spec command_json worktree_json; do
     fi
     resume_worktree=$(printf '%s\n' "$reserve_output" | sed -n '1p')
     if in_orca "$worktree"; then
-      if "$ORCA" agent launch --agent claude --worktree "path:$resume_worktree" \
+      if "$ORCA" agent launch --agent "$LAUNCH_AGENT" --worktree "path:$resume_worktree" \
         --prompt "$command" --json < /dev/null > "$run_out" 2> "$run_err"; then
         printf '#%s 已启动：%s\n' "$spec" "$resume_worktree"
         started=$((started + 1))
@@ -681,7 +727,7 @@ while IFS=$'\t' read -r kind spec command_json worktree_json; do
       escaped_command=$(printf '%q' "$command")
       if "$ORCA" terminal create --worktree "path:$MAIN_WORKTREE" \
         --title "spec-$spec" \
-        --command "cd $escaped_worktree && claude $escaped_command" \
+        --command "cd $escaped_worktree && $MANUAL_AGENT $escaped_command" \
         --json < /dev/null > "$run_out" 2> "$run_err"; then
         printf '#%s 已启动：%s（挂在主工作树的终端标签 spec-%s）\n' \
           "$spec" "$worktree" "$spec"
@@ -714,7 +760,7 @@ while IFS=$'\t' read -r kind spec command_json worktree_json; do
 
   if "$ORCA" worktree create --repo "path:$MAIN_WORKTREE" --name "spec-$spec" \
     --branch "spec-$spec" --base-branch "origin/$MAIN_BRANCH" --issue "$spec" \
-    --no-parent --agent claude --prompt "$command" --json < /dev/null > "$run_out" 2> "$run_err"; then
+    --no-parent --agent "$LAUNCH_AGENT" --prompt "$command" --json < /dev/null > "$run_out" 2> "$run_err"; then
     created=$(extract_created_worktree "$(cat "$run_out")")
     [ -n "$created" ] || created='路径未知'
     printf '#%s 已启动：%s\n' "$spec" "$created"
