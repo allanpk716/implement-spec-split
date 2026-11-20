@@ -17,8 +17,8 @@
 # to opus. --kind draft reviews a draft spec/ticket/research result.
 # --kind diagnose diagnoses a failed worker/run and recommends 续跑, 改 Brief, or
 # 停车. Every kind must mark items that need a human tradeoff under
-# “需要人取舍”. --cwd defaults to the current directory and --timeout defaults
-# to 900 seconds.
+# “需要人取舍”. --cwd defaults to the current directory. --timeout defaults to
+# 3600 seconds for code and 1200 seconds for draft and diagnose.
 #
 # This wrapper removes GLM/proxy Anthropic environment mappings before invoking
 # claude, then runs `claude -p --model opus` with read-only tools. Claude's final
@@ -28,6 +28,7 @@
 #   0  success; findings are in --out
 #   2  authentication failed
 #   3  quota exhausted or rate limited
+#   4  transient service or network unavailability
 #   5  timed out
 #   6  other claude or findings-write error
 #  64  bad usage
@@ -40,7 +41,7 @@ KIND=""
 INPUT=""
 OUT=""
 CWD="$ORIG_PWD"
-TIMEOUT=900
+TIMEOUT=""
 POLL_INTERVAL=0.2
 CLAUDE_PID=""
 OUTPUT_TMP=""
@@ -97,6 +98,13 @@ case "$KIND" in
   "") die "--kind is required (code, draft, or diagnose)" ;;
   *) die "--kind must be code, draft, or diagnose (got $KIND)" ;;
 esac
+if [ -z "$TIMEOUT" ]; then
+  if [ "$KIND" = code ]; then
+    TIMEOUT=3600
+  else
+    TIMEOUT=1200
+  fi
+fi
 [ -n "$INPUT" ] || die "--input is required"
 [ -n "$OUT" ] || die "--out is required"
 [[ "$TIMEOUT" =~ ^[0-9]+$ ]] || die "--timeout must be a positive integer (got $TIMEOUT)"

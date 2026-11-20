@@ -70,6 +70,32 @@ esac
 FAKE
 chmod +x "$BIN/claude"
 
+cat > "$BIN/date" <<'FAKE'
+#!/usr/bin/env bash
+if [ "${FAKE_DATE_JUMP_SECONDS:-0}" -eq 0 ]; then
+  /bin/date "$@"
+  exit $?
+fi
+if [ "${1:-}" = +%s ]; then
+  if [ ! -f "$FAKE_DATE_STATE" ]; then
+    printf '%s\n' '1000000000' > "$FAKE_DATE_STATE"
+    printf '%s\n' '1000000000'
+  else
+    rm -f "$FAKE_DATE_STATE"
+    printf '%s\n' "$((1000000000 + FAKE_DATE_JUMP_SECONDS))"
+  fi
+  exit 0
+fi
+/bin/date "$@"
+FAKE
+chmod +x "$BIN/date"
+
+reset_fake_date() {
+  rm -f "$FAKE_DATE_STATE"
+  FAKE_DATE_JUMP_SECONDS=$1
+  export FAKE_DATE_JUMP_SECONDS
+}
+
 export PATH="$BIN:$PATH"
 export ANTHROPIC_BASE_URL="https://glm-proxy.invalid/v1"
 export ANTHROPIC_AUTH_TOKEN="fake-glm-token"
@@ -86,6 +112,7 @@ export FAKE_CLAUDE_LOG="$WORK/code-env-args.log"
 export FAKE_CLAUDE_CWD="$WORK/code-cwd.log"
 export FAKE_CLAUDE_CHILD_PID="$WORK/timeout-child.pid"
 export FAKE_CLAUDE_SCENARIO=ok
+export FAKE_DATE_STATE="$WORK/fake-date-state"
 
 run_review() {
   "$REVIEW" "$@" >"$WORK/run.out" 2>"$WORK/run.err"
@@ -161,12 +188,23 @@ check "code prompt gives the fixed point" grep -Fq 'fixed point: main' "$FAKE_CL
 check "code prompt pins both review axes to opus" bash -c "grep -Fq 'Standards' '$FAKE_CLAUDE_LOG' && grep -Fq 'Spec' '$FAKE_CLAUDE_LOG' && grep -Fq 'opus' '$FAKE_CLAUDE_LOG'"
 check "code prompt requires human-tradeoff findings" grep -Fq '需要人取舍' "$FAKE_CLAUDE_LOG"
 
+reset_fake_date 3600
+export FAKE_CLAUDE_LOG="$WORK/code-default-timeout.log" FAKE_CLAUDE_SCENARIO=sleep
+run_review --kind code --input main --out "$WORK/code-default-findings.md" --cwd "$REPO"
+expect_rc "code default timeout is 3600 seconds" 5 "$RUN_RC"
+check "code default timeout is reported" grep -Fq 'after 3600s' "$WORK/run.err"
+check "code default timeout writes no findings" test ! -e "$WORK/code-default-findings.md"
+reset_fake_date 0
+export FAKE_CLAUDE_SCENARIO=ok
+
 printf 'draft content\n' > "$WORK/draft.md"
 export FAKE_CLAUDE_LOG="$WORK/draft-env-args.log"
 (
   cd "$WORK"
-  run_review --kind draft --input draft.md --out "$WORK/draft-findings.md" --timeout 5
+  "$REVIEW" --kind draft --input draft.md --out "$WORK/draft-findings.md" --timeout 5 \
+    >"$WORK/run.out" 2>"$WORK/run.err"
 )
+RUN_RC=$?
 expect_rc "draft review succeeds" 0 "$RUN_RC"
 check "draft findings are written" grep -Fqx 'fake Opus findings' "$WORK/draft-findings.md"
 check "draft prompt reviews the draft" bash -c "grep -Fqi 'draft' '$FAKE_CLAUDE_LOG' && grep -Fq '$WORK/draft.md' '$FAKE_CLAUDE_LOG'"
@@ -180,6 +218,23 @@ check "diagnose prompt reads the failure record" grep -Fq "$WORK/failure.md" "$F
 check "diagnose prompt offers the three actions" bash -c "grep -Fq '续跑' '$FAKE_CLAUDE_LOG' && grep -Fq '改 Brief' '$FAKE_CLAUDE_LOG' && grep -Fq '停车' '$FAKE_CLAUDE_LOG'"
 check "diagnose prompt requires human-tradeoff findings" grep -Fq '需要人取舍' "$FAKE_CLAUDE_LOG"
 
+reset_fake_date 1200
+export FAKE_CLAUDE_LOG="$WORK/draft-default-timeout.log" FAKE_CLAUDE_SCENARIO=sleep
+run_review --kind draft --input "$WORK/draft.md" --out "$WORK/draft-default-findings.md" --cwd "$REPO"
+expect_rc "draft default timeout is 1200 seconds" 5 "$RUN_RC"
+check "draft default timeout is reported" grep -Fq 'after 1200s' "$WORK/run.err"
+check "draft default timeout writes no findings" test ! -e "$WORK/draft-default-findings.md"
+reset_fake_date 0
+
+reset_fake_date 1200
+export FAKE_CLAUDE_LOG="$WORK/diagnose-default-timeout.log" FAKE_CLAUDE_SCENARIO=sleep
+run_review --kind diagnose --input "$WORK/failure.md" --out "$WORK/diagnose-default-findings.md" --cwd "$REPO"
+expect_rc "diagnose default timeout is 1200 seconds" 5 "$RUN_RC"
+check "diagnose default timeout is reported" grep -Fq 'after 1200s' "$WORK/run.err"
+check "diagnose default timeout writes no findings" test ! -e "$WORK/diagnose-default-findings.md"
+reset_fake_date 0
+
+export FAKE_CLAUDE_SCENARIO=ok
 export FAKE_CLAUDE_LOG="$WORK/auth.log" FAKE_CLAUDE_SCENARIO=auth
 run_review --kind draft --input "$WORK/draft.md" --out "$WORK/auth-findings.md" --cwd "$REPO" --timeout 5
 expect_rc "authentication failure exits 2" 2 "$RUN_RC"
