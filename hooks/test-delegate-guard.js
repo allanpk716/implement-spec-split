@@ -420,6 +420,37 @@ testCase('flash mode Bash non-source writes allow', home => {
   }
 });
 
+testCase('ordinary mode still treats unknown extensions as source', home => {
+  const reason = parseDeny(
+    runHook(
+      hookPayload('Write', {
+        file_path: 'C:/WorkSpace/x/run/output',
+        content: lines(50),
+      }),
+      home
+    )
+  );
+  assert.match(reason, /50/);
+});
+
+testCase('flash mode allows fd and combined redirections', home => {
+  const commands = [
+    'node scripts/check.js &> src/a.ts',
+    'node scripts/check.js &>> src/a.ts',
+    'node scripts/check.js 2> src/a.ts',
+    'node scripts/check.js 2>> src/a.ts',
+    'node scripts/check.js 2>&1',
+    'node scripts/check.js >&2',
+  ];
+  for (const command of commands) {
+    assertAllow(
+      runHook(hookPayload('Bash', { command }), home, {
+        FLASH_ORCHESTRATOR: '1',
+      })
+    );
+  }
+});
+
 testCase('flash mode ignores redirections inside heredoc bodies', home => {
   assertAllow(
     runHook(
@@ -449,7 +480,8 @@ testCase('flash mode allows Edit and Write files without source extensions', hom
         file_path: 'C:/WorkSpace/x/run/output.log',
         content: lines(50),
       }),
-      home
+      home,
+      { FLASH_ORCHESTRATOR: '1' }
     )
   );
 });

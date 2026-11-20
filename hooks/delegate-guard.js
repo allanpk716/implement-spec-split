@@ -150,9 +150,17 @@ function tokenizeShell(command) {
   const tokens = [];
   let current = '';
   let quoted = false;
+  let currentStartsAt = 0;
 
   const flushWord = () => {
-    if (current !== '') tokens.push({ text: current, quoted });
+    if (current !== '') {
+      tokens.push({
+        text: current,
+        quoted,
+        startsAt: currentStartsAt,
+        endsAt: currentStartsAt + current.length - 1,
+      });
+    }
     current = '';
     quoted = false;
   };
@@ -177,16 +185,19 @@ function tokenizeShell(command) {
       if (character === '\r' && command[index + 1] === '\n') {
         index += 1;
       }
+      currentStartsAt = index + 1;
       continue;
     }
 
     if (/\s/.test(character)) {
       flushWord();
+      currentStartsAt = index + 1;
       continue;
     }
 
     if ('<>|;&()'.includes(character)) {
       flushWord();
+      currentStartsAt = index + 1;
       const next = command[index + 1];
       if (
         (character === '>' && next === '>') ||
@@ -194,10 +205,20 @@ function tokenizeShell(command) {
         (character === '&' && next === '&') ||
         (character === '|' && next === '|')
       ) {
-        tokens.push({ text: character + next, quoted: false });
+        tokens.push({
+          text: character + next,
+          quoted: false,
+          startsAt: index,
+          endsAt: index + 1,
+        });
         index += 1;
       } else {
-        tokens.push({ text: character, quoted: false });
+        tokens.push({
+          text: character,
+          quoted: false,
+          startsAt: index,
+          endsAt: index,
+        });
       }
       continue;
     }
@@ -238,9 +259,16 @@ function isSourceBashWrite(command) {
   const tokens = withoutHeredocBody(tokenizeShell(command));
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index];
+    const previous = index > 0 ? tokens[index - 1] : undefined;
+    const isFdOrCombinedRedirect =
+      previous !== undefined &&
+      !previous.quoted &&
+      previous.endsAt === token.startsAt - 1 &&
+      (previous.text === '&' || /^\d+$/.test(previous.text));
     if (
       (token.text === '>' || token.text === '>>') &&
       !token.quoted &&
+      !isFdOrCombinedRedirect &&
       index + 1 < tokens.length &&
       !tokens[index + 1].text.startsWith('&') &&
       isSourceFileName(tokens[index + 1].text)
@@ -351,7 +379,12 @@ function isSourceFileName(filePath) {
 }
 
 function isAllowedFileName(filePath) {
-  return !isSourceFileName(filePath);
+  const fileName = fileNameOf(filePath);
+  if (TEXT_FILENAMES.has(fileName)) return true;
+
+  const dot = fileName.lastIndexOf('.');
+  if (dot <= 0) return false;
+  return TEXT_EXTENSIONS.has(fileName.slice(dot).toLowerCase());
 }
 
 function hasValidOverride(homeDir) {
@@ -475,8 +508,8 @@ function main() {
         : toolInput.file_path;
     if (typeof filePath !== 'string' || filePath === '') return;
 
-    if (flashMode && !isAllowedFileName(filePath)) {
-      deny(FLASH_REASON);
+    if (flashMode) {
+      if (isSourceFileName(filePath)) deny(FLASH_REASON);
       return;
     }
 
