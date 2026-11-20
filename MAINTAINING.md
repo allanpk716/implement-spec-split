@@ -198,6 +198,7 @@
 - **进度看板**：`bash scripts/test-board.sh`。用假 orca、假 pipeline-status、临时 git 仓库和临时 Run/Worker 目录测仓库登记、刷新节奏、关系图快照、认领状态、Run 阶段、Worker 异常、终端/网页输出、EPIPE、Board pruning 和帮助文本，不访问网络。
 - **Run 阶段记录**：`bash scripts/test-run-phase.sh`。用临时 HOME/ISS_STATE_DIR 测各阶段写入、覆盖、省略字段、最新 Run 目录选择、状态目录覆盖、写失败只警告和参数校验。
 - **锁与领取记录**：`bash scripts/test-locks.sh`。测 `lock.sh` 的互斥、重入、等待超时、死持有者接管、槽位排队，`claim.sh` 的领取、并发领取、恢复与释放权限、交接预留与接手，worker 上限配置文件，以及两个 `codex-worker.sh` 在 `ISS_MAX_WORKERS=1` 下排队，不访问网络。
+- **Design session**：`bash scripts/test-design-session.sh`。用假 orca 测 feature/map prompt、`--agent claude`、`orchestration check --wait` 超时、会话退出、launch/check 失败、handoff 缺失和两个薄技能文本，不调用真实 Orca。
 - **自动启动第 1 波**：`bash find-next/scripts/test-launch-wave.sh`。用假 pipeline-status、claim、max-workers、orca 测试运行输出、不在 Orca 时的手动输出、预留后再启动、预留冲突跳过、启动失败撤销预留并删空分支、`--only` 过滤和恢复条目（含原 worktree 不在 Orca 时在主工作树开终端标签、路径带空格的转义）、`--apply` 写启动状态、`--next-wave` 读取状态/max-workers、跳过中断条目、无可启动、循环依赖和仓库锁占用，以及 `--impl agent --agent-model` 的命令后缀、状态写入/读回、旧状态回退 codex 与非法参数，不调用真实 orca。
 - **codex 后端**：`scripts/selftest-codex.sh [--only L1|V1|V2|V3]`。各级的内容见脚本开头的注释和 `docs/codex-backend.md` 第三节：
   - V1：假 codex，确定性，不花 GLM；
