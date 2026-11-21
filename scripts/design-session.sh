@@ -186,9 +186,10 @@ SESSION_INFO=$(printf '%s\n' "$LAUNCH_JSON" | node -e '
   const fs = require("fs");
   const root = JSON.parse(fs.readFileSync(0, "utf8"));
   const outcome = root.result?.outcome ?? root.result ?? {};
-  process.stdout.write([outcome.kind ?? "", outcome.sessionId ?? "", outcome.handle ?? ""].join("\t"));
+  process.stdout.write([outcome.kind ?? "", outcome.sessionId ?? "", outcome.handle ?? ""].join("\x1f"));
 ')
-IFS=$'\t' read -r SESSION_KIND SESSION_ID SESSION_HANDLE <<EOF
+# \x1f is not IFS whitespace, so an empty sessionId cannot shift handle left.
+IFS=$'\037' read -r SESSION_KIND SESSION_ID SESSION_HANDLE <<EOF
 $SESSION_INFO
 EOF
 
@@ -221,6 +222,7 @@ if [ -n "$SESSION_ID" ]; then
       if [ -n "$SHOW_JSON" ] && ! printf '%s\n' "$SHOW_JSON" | node -e '
         const fs = require("fs");
         const root = JSON.parse(fs.readFileSync(0, "utf8"));
+        if (root.ok === false) process.exit(0);
         const places = root.result?.places;
         process.exit(Array.isArray(places) && places.length > 0 ? 0 : 1);
       '; then

@@ -104,6 +104,12 @@ case "\$command" in
         fi
         ;;
       show)
+        case " \$* " in
+          *" --id term_"*)
+            printf '%s\\n' '{"ok":false,"error":{"code":"agent_terminal_handle","message":"terminal handle"}}'
+            exit 1
+            ;;
+        esac
         if [ "\${DESIGN_TEST_SESSION_EXIT:-0}" = 1 ] ||
            [ "\${DESIGN_TEST_CLOSED_AFTER_HANDOFF:-0}" = 1 ]; then
           printf '%s\\n' '{"ok":true,"result":{"places":[]}}'
@@ -129,6 +135,7 @@ case "\$command" in
         if [ "\${DESIGN_TEST_SESSION_EXIT:-0}" = 1 ]; then
           sleep 2
         fi
+        sleep "\${DESIGN_TEST_CHECK_SLEEP:-0}"
         for argument in "\$@"; do
           printf '%s\\n' "\$argument" >> "\$CHECK_LOG"
         done
@@ -213,6 +220,7 @@ run_design_session() {
   DESIGN_TEST_MISSING_HANDOFF=${DESIGN_TEST_MISSING_HANDOFF:-0} \
   DESIGN_TEST_CLOSED_AFTER_HANDOFF=${DESIGN_TEST_CLOSED_AFTER_HANDOFF:-0} \
   DESIGN_TEST_TERMINAL=${DESIGN_TEST_TERMINAL:-0} \
+  DESIGN_TEST_CHECK_SLEEP=${DESIGN_TEST_CHECK_SLEEP:-0} \
   DESIGN_TEST_UNRELATED_FIRST=${DESIGN_TEST_UNRELATED_FIRST:-0} \
   DESIGN_TEST_WRONG_REPORT_THEN_TIMEOUT=${DESIGN_TEST_WRONG_REPORT_THEN_TIMEOUT:-0} \
   CHECK_ATTEMPTS=$CHECK_ATTEMPTS \
@@ -396,8 +404,12 @@ fi
 unset DESIGN_TEST_CLOSED_AFTER_HANDOFF
 
 DESIGN_TEST_TERMINAL=1
+# Keep the session alive across several polls: a terminal launch has no
+# sessionId, so the monitor must not mistake the handle for one.
+DESIGN_TEST_CHECK_SLEEP=0.5
 run_design_session "$WORK/terminal.out" feature 'Terminal session' --timeout 5
 expect_exit 0 'terminal-backed design session succeeds'
+unset DESIGN_TEST_CHECK_SLEEP
 
 DESIGN_TEST_SESSION_EXIT=1
 run_design_session "$WORK/terminal-exit.out" feature 'Closed terminal session' --timeout 5

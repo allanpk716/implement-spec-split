@@ -255,17 +255,17 @@ classify() {
       if (e.type === "turn.failed") failed = e;
       if (e.type === "error") lastError = String(e.message || "");
     }
-    if (completed) { console.log("ok\t\t" + thread); process.exit(0); }
+    if (completed) { console.log("ok\x1f\x1f" + thread); process.exit(0); }
     if (failed) {
       const msg = failed.error ? String(failed.error.message || "").replace(/\s+/g, " ") : "";
       let cls = "error";
       if (/\b40[13]\b|身份验证|unauthori[sz]ed|invalid api key/i.test(msg)) cls = "auth";
       else if (/\b429\b/.test(msg)) cls = "transient429";
       else if (/stream disconnected|idle timeout|timed out|timeout|network|connection|ECONN|\b5\d\d\b/i.test(msg)) cls = "transient";
-      console.log(cls + "\t" + msg + "\t" + thread); process.exit(0);
+      console.log(cls + "\x1f" + msg + "\x1f" + thread); process.exit(0);
     }
     const suffix = lastError ? " (last error: " + lastError + ")" : "";
-    console.log("error\tcodex exited " + process.env.CODEX_EXIT + " without turn.completed/turn.failed" + suffix + "\t" + thread);
+    console.log("error\x1fcodex exited " + process.env.CODEX_EXIT + " without turn.completed/turn.failed" + suffix + "\x1f" + thread);
   '
 }
 
@@ -939,7 +939,8 @@ while :; do
     if [ "$SEG_ATTEMPT" -le "$RETRIES" ]; then sleep "$((RETRY_WAIT * SEG_ATTEMPT))"; continue; fi
     break
   fi
-  IFS=$'\t' read -r CLS MSG NEW_THREAD < <(classify "$ATTEMPT_EVENTS" "$CODEX_EXIT")
+  # \x1f, unlike tab, is not IFS whitespace: an empty MSG keeps NEW_THREAD in place.
+  IFS=$'\037' read -r CLS MSG NEW_THREAD < <(classify "$ATTEMPT_EVENTS" "$CODEX_EXIT")
   [ -n "${NEW_THREAD:-}" ] && SESSION_ID="$NEW_THREAD"; write_state
   case "$CLS" in
     ok) STATUS=ok; ERROR=""; EXIT_CODE=0; break ;;
