@@ -302,6 +302,54 @@ Run records are stored in `~/.cache/codex-runs/<repository>-<time>-<task>/`, con
 
 ---
 
+## Stage 4: flash mode (cheap Orchestrator)
+
+Everyday scheduling spends no subscription quota: the main session (Orchestrator) runs on Zhipu `glm-5.3-flash` and only executes and relays within a whitelist; source changes and bulk reading go to glm-5.3 subagents; every judgment call (review, root cause, trade-offs, landability, stop-or-go) leaves the session for the official-subscription Opus ([ADR 0001](adr/0001-cheap-orchestrator-default-deny.md)). This stage targets mini6 (macOS) only.
+
+**Prerequisites**
+
+- Stage 0 (symlink install) and Stage 3 (the delegate-guard hook) are in place; the `/grill-feature` and `/grill-map` symlinks are installed per the README.
+- `claude-glm` is set up (the Stage 2 GLM endpoint and API key): `claude-flash` reuses its endpoint and `~/ops/state/claude-glm/apikey` and never copies the key.
+- Install the launcher (the four-piece set lives in `~/ops/services/claude-flash/`; see its README.md):
+
+  ```bash
+  cd ~/ops/services/claude-flash && ./install.sh   # creates the /opt/homebrew/bin/claude-flash symlink
+  ```
+
+**Starting a flash main session**
+
+- Run `claude-flash` in a terminal (it sets `FLASH_ORCHESTRATOR=1` and injects flash-only settings and a system prompt: the whitelist, judgments go to Opus, source changes go to subagents; the official sessions' Opus/codex division rules are excluded and the codex plugin is disabled).
+- To take over the Orca slot: repoint the `/opt/homebrew/bin/openclaude` symlink at `~/ops/services/claude-flash/claude-flash` (or fill Orca Settings → Agents → OpenClaude's command override with the absolute path of `claude-flash`). The OpenClaude slot then opens flash main sessions; the original `claude-glm` stays available side by side.
+- Smoke test:
+
+  ```bash
+  claude-flash -p 'Which model are you? Answer with the model name only' --output-format json
+  claude-flash -p 'Use Bash to print $FLASH_ORCHESTRATOR' --allowedTools Bash   # should print 1
+  ```
+
+**The two design entry points (Design session)**
+
+- `/grill-feature <idea>`: small features. The flash main session calls `scripts/design-session.sh` to open an official-Opus Design session, then blocks and burns no tokens; you switch to that session and discuss with Opus directly. When the discussion ends it does to-spec, to-tickets, commit and push on the spot, writes a handoff summary and notifies flash to continue; flash reads only the summary.
+- `/grill-map <map or idea>`: large modules (wayfinder maps). Same flow; saying "先到这" ends it early and research tickets go back to flash for subagents to investigate.
+- A Design session's run directory is `~/.cache/implement-spec-split/design/<repo>-<time>-<kind>/`; the handoff summary is its `handoff.md`.
+
+**Spec sessions and Opus review**
+
+- In a flash main session, `/find-next` has launch-wave open spec sessions through the OpenClaude slot (i.e. flash) with `--impl agent` by default (glm-5.3 subagents implement), so a spec runs start to finish without subscription quota.
+- Code review, draft review and consecutive-failure diagnosis inside a flash spec session never run in-session (an "opus" subagent in a GLM session is actually GLM — a fake review); they always call `scripts/opus-review.sh`, which runs outside the session on official Opus: `--kind code` (a branch/fixed point), `--kind draft` (a spec/ticket draft), `--kind diagnose` (a failure; recommends continue / re-brief / stop). Any non-zero exit parks the run with an explanation (meanings in the script's header comment); no automatic retry, no GLM downgrade, no in-session self-review.
+
+**The flash boundary**
+
+- Whitelisted: run scripts and branch on exit codes, read short structured output, write tickets from prepared text, relay questions with prepared options, start sessions/subagents/Opus reviews, conflict-free merges and commits, and follow findings item by item.
+- It writes no source line, ever: the Stage 3 delegate-guard hard-blocks source writes in flash sessions (threshold 0; `~/.claude/state/allow-direct-edit` does not apply).
+- Every conclusion cites its source (a subagent result or an Opus findings path); when unsure who to hand to, default to Opus; push, tagging and releases ask you first (Design-session doc pushes excepted).
+
+**Rollback**
+
+Both repositories carry the bookmark tag `pre-flash-orchestrator`, and the global-config snapshot sits in `~/.claude/backups/pre-flash-orchestrator-20261120/`: follow the four steps in its ROLLBACK.md (check out the tag in the skill repo, restore ~/ops and uninstall claude-flash, copy the `~/.claude/` config back, repoint the Orca slot at claude-glm). The new behaviour only exists in flash sessions; official sessions and the original `claude-glm` coexist throughout.
+
+---
+
 ## Updating and rollback
 
 - **Update**: `cd ~/.claude/skills/implement-spec-split && git pull`. Templates and scripts take effect immediately; the hook takes effect on its next call.

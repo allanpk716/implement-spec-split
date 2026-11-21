@@ -73,6 +73,10 @@ ln -s ~/.claude/skills/implement-spec-split/grill-map ~/.claude/skills/grill-map
 
 `/grill-feature <idea>` opens a Design session for a small feature; `/grill-map <map or idea>` does the same for a large-module wayfinder map. Each wrapper blocks until `scripts/design-session.sh` receives `handoff.md`.
 
+## Flash mode
+
+For GLM-side setups there is a three-tier split (ADR 0001, [docs/setup.md 阶段 4](docs/setup.md) / [docs/setup.en.md Stage 4](docs/setup.en.md)): a cheap **flash Orchestrator** (`claude-flash`, glm-5.3-flash) runs the main and spec sessions and only executes and relays within a whitelist; glm-5.3 subagents do all source changes; every judgment call — code review, draft review, failure diagnosis — leaves the session via `scripts/opus-review.sh` for official-subscription Opus, which also powers the Design sessions behind `/grill-feature` and `/grill-map`. A `FLASH_ORCHESTRATOR=1` session is hard-blocked (delegate-guard) from writing any source line, cites a findings/result path for every conclusion it reports, and parks rather than downgrades when Opus is unavailable. Rolling back is one tag (`pre-flash-orchestrator`) plus a config snapshot; official sessions and `claude-glm` coexist throughout.
+
 ## Keeping up with upstream
 
 Read [MAINTAINING.md](MAINTAINING.md) (中文) before syncing or editing: it records the design decisions and pitfalls.

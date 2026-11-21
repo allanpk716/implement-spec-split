@@ -308,6 +308,54 @@ node -e 'console.log(JSON.stringify({tool_name:"Write",tool_input:{file_path:"C:
 
 ---
 
+## 阶段 4：flash 模式（便宜主会话）
+
+日常调度不花订阅额度：主会话（Orchestrator）由智谱 `glm-5.3-flash` 驱动，只做白名单内的执行与转述；源码修改和大量阅读交给 glm-5.3 子代理；所有结论性判断（审核、根因、取舍、能否落地、是否停车）出会话交给官方订阅的 Opus（[ADR 0001](adr/0001-cheap-orchestrator-default-deny.md)）。本阶段只适配 mini6（macOS）。
+
+**前提**
+
+- 阶段 0（软链安装）和阶段 3（delegate-guard hook）已就绪；`/grill-feature`、`/grill-map` 两个软链按 README 安装。
+- `claude-glm` 已配好（阶段 2 的 GLM 端点与 API Key）：`claude-flash` 复用它的端点和 `~/ops/state/claude-glm/apikey`，不复制密钥。
+- 安装启动器（四件套在 `~/ops/services/claude-flash/`，详见其 README.md）：
+
+  ```bash
+  cd ~/ops/services/claude-flash && ./install.sh   # 建 /opt/homebrew/bin/claude-flash 软链
+  ```
+
+**开 flash 主会话**
+
+- 终端直接跑 `claude-flash`（它注入 `FLASH_ORCHESTRATOR=1`、flash 专用 settings 和系统提示词：白名单、判断上交 Opus、源码交给子代理；排除官方会话的 Opus/codex 分工规则，关闭 codex 插件）。
+- 挂到 Orca 槽位：把 `/opt/homebrew/bin/openclaude` 软链改指 `~/ops/services/claude-flash/claude-flash`（Orca 设置 → Agents → OpenClaude 的命令覆盖填 `claude-flash` 绝对路径亦可）。此后 Orca 的 OpenClaude 槽位开出的就是 flash 主会话；原 `claude-glm` 会话不受影响，仍可手动使用。
+- 冒烟验证：
+
+  ```bash
+  claude-flash -p '你是什么模型？只答模型名' --output-format json
+  claude-flash -p '用 Bash 输出 $FLASH_ORCHESTRATOR' --allowedTools Bash   # 应输出 1
+  ```
+
+**两个设计入口（Design session）**
+
+- `/grill-feature <想法>`：小功能。flash 主会话调 `scripts/design-session.sh` 开出一个官方 Opus 的 Design session，然后阻塞等待、不耗 token；你切到那个会话直接和 Opus 讨论，讨论完它当场做 to-spec、to-tickets、commit、push，写交接摘要后通知 flash 继续，flash 只读摘要。
+- `/grill-map <地图或想法>`：大模块（wayfinder 地图）。同上；你说"先到这"就提前结束，research 票交回 flash 派子代理调查。
+- Design session 的运行目录在 `~/.cache/implement-spec-split/design/<repo>-<时间>-<kind>/`，交接摘要是其中的 `handoff.md`。
+
+**规格会话与 Opus review**
+
+- flash 主会话里跑 `/find-next` 时，launch-wave 用 OpenClaude 槽位（即 flash）开规格会话，默认 `--impl agent`（glm-5.3 子代理实现），一份规格从头跑到尾不占订阅额度。
+- flash 规格会话里的代码审核、草稿审读、连续失败诊断不落在会话内（GLM 会话里的 "opus" 子代理实际是 GLM，等于假审核），一律调 `scripts/opus-review.sh` 出会话用官方 Opus 执行：`--kind code`（审分支/固定点）、`--kind draft`（审规格/票草稿）、`--kind diagnose`（诊断失败、建议续跑/改 Brief/停车）。任何非 0 退出码都停车并说明（含义见脚本头注释），不自动重试、不降级 GLM、不会话内自审。
+
+**flash 的边界**
+
+- 白名单内：跑脚本并按退出码分支、读短的结构化输出、照现成文本写票、转述已备好选项的问题、启动会话/子代理/Opus review、无冲突合并与 commit、逐条执行 findings。
+- 一行源码都不写：阶段 3 的 delegate-guard 在 flash 会话里对源码写入硬拦（阈值 0，`~/.claude/state/allow-direct-edit` 不生效）。
+- 每个结论注明出处（子代理 result 或 Opus findings 路径）；拿不准交给谁时默认上交 Opus；push、打 tag、发版先问用户（Design session 推送文档除外）。
+
+**回退**
+
+两仓库都打了书签 tag `pre-flash-orchestrator`，全局配置快照在 `~/.claude/backups/pre-flash-orchestrator-20261120/`：按其中的 ROLLBACK.md 四步回退（技能仓库 checkout tag、~/ops 还原并卸载 claude-flash、`~/.claude/` 配置拷回、Orca 槽位指回 claude-glm）。新行为只在 flash 会话里生效，官方会话和原 `claude-glm` 会话一直可并存。
+
+---
+
 ## 更新与回滚
 
 - **更新**：`cd ~/.claude/skills/implement-spec-split && git pull`。模板和脚本立即生效；hook 下次调用即生效。

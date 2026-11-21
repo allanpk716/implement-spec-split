@@ -99,6 +99,19 @@
 23. **2026-11-19：默认后端按会话自动选（`IMPLEMENT_BACKEND = auto`）。** 自 10-11 起默认是 `sonnet`。find-next 生成的命令自带 `--impl codex`，所以平时不出问题；但手敲 `/implement-spec-split <n>` 不带 `--impl` 时，官方订阅会话会把实现角色全开成 Sonnet 子代理，花的是 Claude 额度，违背「判断以外交给 codex worker」的分工（Spec #7 的 Run 就是这样跑的）。同一套技能还要在 GLM 驱动的 Claude Code（`claude-glm` / Orca 的 OpenClaude 槽位）里用，那里的子代理本身就是 GLM，不该派 worker。决定：不带 `--impl` 时看环境里的 `DELEGATE_GUARD_DISABLE=1`（`claude-glm` 启动器设置的标记）：有就用 `agent`，没有就用 `codex`。只带 `--agent-model` 时也用 `agent`。显式 `--impl` 照旧优先；find-next 生成的命令不变。
 24. **2026-11-20：Flash 模式的审核必须出会话。** 在 GLM 驱动的会话里，Agent 工具传 `opus` 只是把名字映射到 glm-5.3；同会话里开 Standards/Spec「opus」子代理仍是 GLM 审 GLM，等于假审核。因此 `FLASH_ORCHESTRATOR=1` 的代码审核、设计级意见、冲突复审和连续失败诊断都只能调用 `scripts/opus-review.sh`：它会清掉 GLM/Anthropic 代理映射，出会话用官方订阅的 `claude -p --model opus` 执行。脚本失败就停车，不降级到 GLM，也不由会话自审。
 
+## flash 模式设计要点（2026-11-20 规格定稿，ADR 0001）
+
+三档分工：flash 主会话/规格会话（`claude-flash` = glm-5.3-flash，只执行与转述）、glm-5.3 子代理（全部源码修改与大量阅读）、官方 Opus（一切结论性判断）。要点：
+
+- **白名单默认禁止**（不是黑名单）：flash 只做白名单内的事，漏列的情况会上交而不是被当成允许。评估过"flash 自己做小判断"和"黑名单"，都否了——flash 过度自信的小错会在后续波次放大，黑名单漏列即放行。
+- **一行源码都不写**：delegate-guard flash 模式对源码写入阈值 0、`allow-direct-edit` 不生效，靠 hook 硬拦而不是靠 flash 自觉。
+- **判断一律出会话**：GLM 会话里 "opus" 子代理是假的 Opus（见第 24 条），所以审核、诊断、冲突复审全走 `scripts/opus-review.sh`。Opus 不可用（退出码非 0）就停车，不降级、不自审、不自动重试。
+- **Design session 承担讨论**：`/grill-feature`、`/grill-map` 由 Orca 开官方 Opus 会话，用户直接谈；讨论完当场 to-spec/to-tickets/commit/push（文档推送预授权），写 `handoff.md` 通知 flash。flash 在等待期间阻塞、不轮询不耗 token。
+- **结论必须带出处**：flash 汇报的每个结论注明支撑它的 findings/result 文件路径，拿不出出处的结论不许说。防止 flash 把自己当判断者。
+- **拿不准默认上交 Opus**，不自己在两个上交对象之间挑。
+- **停车条件收紧**：flash 只对 Opus 标注「需要人取舍」的条目停车，不许自创取舍；但 Opus 脚本错误照常硬停车。
+- **回退优先**：改造前两仓库打 `pre-flash-orchestrator` tag、全局配置快照 + ROLLBACK.md 在 `~/.claude/backups/pre-flash-orchestrator-20261120/`；新行为只活在 flash 会话里，官方会话与 claude-glm 并存。改 flash 相关行为时先想回退路径还在不在。
+
 ## find-next 设计要点（2026-11-01 grilling 定稿）
 
 `find-next/` 是放在本仓库里的另一个技能：扫描当前仓库的 wayfinder 地图与票。它最初只给出一个 Next step（GLOSSARY.md），2026-11-14 起默认进入推进模式，`--suggest` 保留这个旧行为。起因：在手机上用 wayfinder 讨论出一大堆票后，不知道下一步该对哪张做 to-spec / to-tickets / grilling。原版技能都要人自己去找。
