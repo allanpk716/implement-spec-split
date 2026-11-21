@@ -117,6 +117,7 @@
 - **交接后关闭 Design session（2026-11-21）**：Opus Design session 交出 handoff 后原本一直挂着，占 Orca 槽位，用户回去说话还会继续花 Opus 额度。现在 `design-session.sh` 收到 handoff 后等 3 秒（`ISS_DESIGN_CLOSE_DELAY`），用 `orca terminal close --terminal <handle> --tab` 关掉它的标签；关闭失败只提示不报错，`ISS_DESIGN_KEEP_SESSION=1` 保留。只处理 terminal 形态（有 handle）的会话，chat 形态没有 handle，保持原样。
 - **Design session 自动切换焦点（2026-11-21）**：`orca agent launch` 默认开新标签但不切焦点，用户得自己找过去。现在 launch 加 `--focus` 直接切到 Design session；收到 handoff 后先用 `orca terminal switch --terminal $ORCA_TERMINAL_HANDLE` 切回发起等待的主会话终端，再关 Design 标签。切回失败只提示不报错；不在 Orca 终端里跑（没有 `ORCA_TERMINAL_HANDLE`）就不切。
 - **界面 mock 在 Design session 里、to-spec 之前做（2026-11-21）**：选哪个 mock 本身是设计决定，放到 flash 去做的话，规格写的就是猜测；而且 flash 不做判断，Design session 交接后又会被关掉，没地方接着讨论。真正费 Opus 额度的是"监工"（写 Brief、读报告、看截图），不在会话放在哪，所以把监工拿掉：Opus 只写方向卡，用 `templates/brief-mock.md` 交给一个 codex worker 出单文件页面，worker 用 Playwright DOM 断言自检（非空、非源码、无横向溢出、关键交互点得通）并写 `mock/manifest.json`；Opus 不看截图和 HTML，按 manifest 的路径调一次 `mockit_submit`（mockit 没有 CLI 提交，只能走 MCP，但接受本地路径），由用户在手机上拍板。不加视觉模型自检：GLM-5.3 不支持多模态，智谱视觉 MCP（`@z_ai/mcp-server`）也没进 worker home；评委只有用户，视觉自检替用户省不了事，出现"坏页面送审"再接入。等用户审页面可能超过 2 小时，而后台 Bash 最多跑 7200000ms，所以 design-session.sh 超时后用 `--attach <run-dir>` 续等同一会话，技能遇退出码 5 自动续等。
+- **子代理放行与进度标签（2026-11-21）**：ssh-manager-mcp spec-349 的 flash 编排会话派出 glm 子代理后，子代理继承 `FLASH_ORCHESTRATOR=1`，源码写入被 delegate-guard 全拦；三个子代理分别另起 headless `claude-glm`、改走 `orca orchestration worker-start`、用 `env -u` 绕过，导致正在开发的会话大多在 Orca 里不可见。现在 hook 在 flash payload 带非空 `agent_id` 时放行子代理源码写入、主会话仍全拦，并要求实现角色被拦时停下报告、禁止绕路；`ticket-watch.sh` 另开只读 Orca 进度标签显示 worktree、提交和文件状态。不做 `--impl orca` 后端：那会改派发、等待和恢复链路，测试面大，需要时再单独做。
 - **回退优先**：改造前两仓库打 `pre-flash-orchestrator` tag、全局配置快照 + ROLLBACK.md 在 `~/.claude/backups/pre-flash-orchestrator-20261120/`；新行为只活在 flash 会话里，官方会话与 claude-glm 并存。改 flash 相关行为时先想回退路径还在不在。
 
 ## find-next 设计要点（2026-11-01 grilling 定稿）
@@ -218,6 +219,7 @@
 - **流水线状态**：`bash scripts/test-pipeline-status.sh`。它用假 `gh` 和临时 git 仓库测独立规格、单票规格、原版父规格、旧父 issue 形状、缺规格分组、探索中的地图、分支接手、外部阻塞、`--order` 开发顺序（状态、排序、波次、`--apart`、循环依赖）和 gh 失败，不访问网络。
 - **进度看板**：`bash scripts/test-board.sh`。用假 orca、假 pipeline-status、临时 git 仓库和临时 Run/Worker 目录测仓库登记、刷新节奏、关系图快照、认领状态、Run 阶段、Worker 异常、终端/网页输出、EPIPE、Board pruning 和帮助文本，不访问网络。
 - **Run 阶段记录**：`bash scripts/test-run-phase.sh`。用临时 HOME/ISS_STATE_DIR 测各阶段写入、覆盖、省略字段、最新 Run 目录选择、状态目录覆盖、写失败只警告和参数校验。
+- **票进度标签**：`bash scripts/test-ticket-watch.sh`。用临时 git 仓库测 `ticket-watch.sh --once` 的 worktree、分支、领先提交、脏文件、最近提交和外部 worker run dir 输出，worktree 清理后的零退出提示，以及缺失参数和非法 interval 的报错，不访问网络。
 - **锁与领取记录**：`bash scripts/test-locks.sh`。测 `lock.sh` 的互斥、重入、等待超时、死持有者接管、槽位排队，`claim.sh` 的领取、并发领取、恢复与释放权限、交接预留与接手，worker 上限配置文件，以及两个 `codex-worker.sh` 在 `ISS_MAX_WORKERS=1` 下排队，不访问网络。
 - **Design session**：`bash scripts/test-design-session.sh`。用假 orca 测 feature/map prompt、`--agent claude`、`orchestration check --wait` 超时、会话退出、launch/check 失败、handoff 缺失和两个薄技能文本，不调用真实 Orca。
 - **grill 进度查询**：`bash scripts/test-grill-status.sh`。用临时 Design session 目录和假 `gh` 测已完成 / 进行中 / 中断（有无 topic.md）、仓库名前缀不误匹配、gh 失败和无记录，不访问网络。

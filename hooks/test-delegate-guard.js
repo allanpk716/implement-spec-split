@@ -39,7 +39,12 @@ function lines(count, lineEnding = '\n') {
   );
 }
 
-function hookPayload(toolName, toolInput, cwd = process.cwd()) {
+function hookPayload(
+  toolName,
+  toolInput,
+  cwd = process.cwd(),
+  extraPayload = {}
+) {
   return JSON.stringify({
     session_id: 'test-session',
     transcript_path: 'test-transcript',
@@ -47,6 +52,7 @@ function hookPayload(toolName, toolInput, cwd = process.cwd()) {
     hook_event_name: 'PreToolUse',
     tool_name: toolName,
     tool_input: toolInput,
+    ...extraPayload,
   });
 }
 
@@ -387,6 +393,95 @@ testCase('flash mode Bash redirect source write denies', home => {
     )
   );
   assert.match(reason, /flash 会话不写源码/);
+});
+
+testCase('flash mode subagent Write source allows', home => {
+  assertAllow(
+    runHook(
+      hookPayload(
+        'Write',
+        {
+          file_path: 'C:/WorkSpace/x/src/a.ts',
+          content: lines(50),
+        },
+        process.cwd(),
+        { agent_id: 'test-agent', agent_type: 'general-purpose' }
+      ),
+      home,
+      { FLASH_ORCHESTRATOR: '1' }
+    )
+  );
+});
+
+testCase('flash mode subagent Bash source redirect allows', home => {
+  assertAllow(
+    runHook(
+      hookPayload(
+        'Bash',
+        { command: 'printf line > src/a.ts' },
+        process.cwd(),
+        { agent_id: 'test-agent', agent_type: 'general-purpose' }
+      ),
+      home,
+      { FLASH_ORCHESTRATOR: '1' }
+    )
+  );
+});
+
+testCase('flash mode empty agent_id still denies source writes', home => {
+  assert.match(
+    parseDeny(
+      runHook(
+        hookPayload(
+          'Write',
+          {
+            file_path: 'C:/WorkSpace/x/src/a.ts',
+            content: lines(1),
+          },
+          process.cwd(),
+          { agent_id: '' }
+        ),
+        home,
+        { FLASH_ORCHESTRATOR: '1' }
+      )
+    ),
+    /flash 会话不写源码/
+  );
+  assert.match(
+    parseDeny(
+      runHook(
+        hookPayload(
+          'Bash',
+          { command: 'printf line > src/a.ts' },
+          process.cwd(),
+          { agent_id: '' }
+        ),
+        home,
+        { FLASH_ORCHESTRATOR: '1' }
+      )
+    ),
+    /flash 会话不写源码/
+  );
+});
+
+testCase('agent_id does not change ordinary threshold behavior', home => {
+  const reason = parseDeny(
+    runHook(
+      hookPayload(
+        'Write',
+        {
+          file_path: 'C:/WorkSpace/x/src/a.ts',
+          content: lines(50),
+        },
+        process.cwd(),
+        { agent_id: 'test-agent' }
+      ),
+      home
+    )
+  );
+  assert.match(reason, /50/);
+  assert.match(reason, /10/);
+  assert.ok(!reason.includes('flash 会话不写源码'));
 });
 
 testCase('flash mode Bash tee source write denies', home => {

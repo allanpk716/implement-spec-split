@@ -4,10 +4,12 @@
 // ordinary sessions it denies source-code changes larger than the configured
 // limit (default: 10), while allowing invalid/failing input, configured file
 // types, small edits, disabled projects, and a temporary override stored at
-// <home>/.claude/state/allow-direct-edit. Flash sessions (FLASH_ORCHESTRATOR=1)
-// instead deny every source-code write, including common Bash writes. The
-// ordinary limit comes from the nearest .claude/delegate-guard.json above
-// payload.cwd, DELEGATE_GUARD_LIMIT, or the default. Invalid input fails open;
+// <home>/.claude/state/allow-direct-edit. Flash orchestrator sessions
+// (FLASH_ORCHESTRATOR=1) deny every source-code write, including common Bash
+// writes, while payloads from dispatched subagents (a non-empty agent_id) are
+// allowed. The ordinary limit comes from the nearest
+// .claude/delegate-guard.json above payload.cwd, DELEGATE_GUARD_LIMIT, or the
+// default. Invalid input fails open;
 // internal failures fail open and append an error to
 // <home>/.claude/state/delegate-guard.log when that log is writable.
 
@@ -494,8 +496,11 @@ function main() {
     if (!toolInput || typeof toolInput !== 'object') return;
 
     const flashMode = process.env.FLASH_ORCHESTRATOR === '1';
+    const isSubagent =
+      typeof payload.agent_id === 'string' && payload.agent_id !== '';
     if (payload.tool_name === 'Bash') {
       if (!flashMode) return;
+      if (isSubagent) return;
       const command = toolInput.command;
       if (typeof command !== 'string' || command === '') return;
       if (isSourceBashWrite(command)) deny(FLASH_REASON);
@@ -509,6 +514,7 @@ function main() {
     if (typeof filePath !== 'string' || filePath === '') return;
 
     if (flashMode) {
+      if (isSubagent) return;
       if (isSourceFileName(filePath)) deny(FLASH_REASON);
       return;
     }
