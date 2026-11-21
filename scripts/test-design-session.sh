@@ -193,6 +193,7 @@ case "\$command" in
         fi
         printf '%s\\n' '{"ok":true,"result":{"exited":true}}'
         ;;
+      close) printf '%s\\n' '{"ok":true}' ;;
       *) exit 70 ;;
     esac
     ;;
@@ -223,6 +224,8 @@ run_design_session() {
   DESIGN_TEST_CHECK_SLEEP=${DESIGN_TEST_CHECK_SLEEP:-0} \
   DESIGN_TEST_UNRELATED_FIRST=${DESIGN_TEST_UNRELATED_FIRST:-0} \
   DESIGN_TEST_WRONG_REPORT_THEN_TIMEOUT=${DESIGN_TEST_WRONG_REPORT_THEN_TIMEOUT:-0} \
+  ISS_DESIGN_CLOSE_DELAY=0 \
+  ISS_DESIGN_KEEP_SESSION=${ISS_DESIGN_KEEP_SESSION:-} \
   CHECK_ATTEMPTS=$CHECK_ATTEMPTS \
   REPORT_LOG=$REPORT_LOG \
     bash "$SCRIPT" "$@" > "$output" 2> "$RUN_STDERR"
@@ -407,8 +410,21 @@ DESIGN_TEST_TERMINAL=1
 # Keep the session alive across several polls: a terminal launch has no
 # sessionId, so the monitor must not mistake the handle for one.
 DESIGN_TEST_CHECK_SLEEP=0.5
+: > "$ORCA_LOG"
 run_design_session "$WORK/terminal.out" feature 'Terminal session' --timeout 5
 expect_exit 0 'terminal-backed design session succeeds'
+expect_file_has 'close' 'handoff closes the Design session terminal' "$ORCA_LOG"
+expect_file_has 'term_test' 'close targets the launched terminal handle' "$ORCA_LOG"
+: > "$ORCA_LOG"
+ISS_DESIGN_KEEP_SESSION=1
+run_design_session "$WORK/terminal-keep.out" feature 'Keep session' --timeout 5
+expect_exit 0 'terminal-backed design session with keep succeeds'
+if grep -qx 'close' "$ORCA_LOG"; then
+  record FAIL 'ISS_DESIGN_KEEP_SESSION=1 leaves the Design session open' "log=$(cat "$ORCA_LOG")"
+else
+  record PASS 'ISS_DESIGN_KEEP_SESSION=1 leaves the Design session open'
+fi
+unset ISS_DESIGN_KEEP_SESSION
 unset DESIGN_TEST_CHECK_SLEEP
 
 DESIGN_TEST_SESSION_EXIT=1

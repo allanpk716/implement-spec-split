@@ -175,7 +175,7 @@ $KIND_INSTRUCTIONS
 2. 上下文过重、一次要产出多份规格，或 main 已经变化时，提示用户另开 Design session，不要硬塞进本次会话。
 3. GLOSSARY、ADR 等文档改动由你自己 commit 并 push。
 4. 写不超过 30 行的 $RUN_DIR/handoff.md，包含：规格号、票号、新增或改动的 ADR 与术语、给 Orchestrator 的待办。实现类待办只写「实现规格 #N」（多份写各自规格号和先后顺序），不写由谁、用 worker 还是子代理、串行还是并行去做：执行方式由 /implement-spec-split 决定。
-5. 最后运行 orca orchestration send --subject "Design session handoff" --to run:$RUN_ID --report-path "$RUN_DIR/handoff.md" 通知主会话。
+5. 最后运行 orca orchestration send --subject "Design session handoff" --to run:$RUN_ID --report-path "$RUN_DIR/handoff.md" 通知主会话。发送后本会话会被自动关闭，发送就是最后一步。
 ${EARLY_HANDOFF}
 EOF
 )
@@ -315,6 +315,13 @@ while :; do
       die 6 "handoff report is missing: $HANDOFF"
     printf '%s\n' "$HANDOFF"
     cleanup_wait
+    # The Design session's job ends with the handoff; close its tab so it stops
+    # holding an Orca slot and Opus quota. ISS_DESIGN_KEEP_SESSION=1 keeps it.
+    if [ -n "$SESSION_HANDLE" ] && [ "${ISS_DESIGN_KEEP_SESSION:-}" != 1 ]; then
+      sleep "${ISS_DESIGN_CLOSE_DELAY:-3}"
+      "$ORCA" terminal close --terminal "$SESSION_HANDLE" --tab --json > "$RUN_DIR/close.json" 2>&1 ||
+        printf 'design-session: 未能关闭 Design session（%s），请手动关闭\n' "$SESSION_HANDLE" >&2
+    fi
     exit 0
   fi
   sleep "$POLL_SECONDS"
