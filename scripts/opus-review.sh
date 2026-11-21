@@ -175,6 +175,7 @@ Output requirements:
 - Return the review findings themselves, suitable for an Orchestrator to act on.
 - End with a section headed exactly \`## 需要人取舍\`.
 - Put every finding that needs a human decision or tradeoff in that section. If there are none, put only \`无\` in it.
+- For each item in that section, list the mutually exclusive options with their costs, then a line \`推荐：<option> — <reason>\`; if you genuinely cannot recommend one, write \`推荐：无 — <why>\` instead of omitting the line.
 - This entire final response is saved verbatim as the findings file; do not add conversational wrapper text."
     ;;
   draft)
@@ -194,6 +195,7 @@ Output requirements:
 - Recommend whether the draft is ready for implementation and what must change first.
 - End with a section headed exactly \`## 需要人取舍\`.
 - Put every unresolved judgment call that needs a human tradeoff in that section. If there are none, put only \`无\` in it.
+- For each item in that section, list the mutually exclusive options with their costs, then a line \`推荐：<option> — <reason>\`; if you genuinely cannot recommend one, write \`推荐：无 — <why>\` instead of omitting the line.
 - This entire final response is saved verbatim as the findings file; do not add conversational wrapper text."
     ;;
   diagnose)
@@ -214,6 +216,7 @@ Output requirements:
 - Include any follow-up checks needed to confirm the diagnosis.
 - End with a section headed exactly \`## 需要人取舍\`.
 - Put every diagnosis or remedy that requires a human tradeoff in that section. If there are none, put only \`无\` in it.
+- For each item in that section, list the mutually exclusive options with their costs, then a line \`推荐：<option> — <reason>\`; if you genuinely cannot recommend one, write \`推荐：无 — <why>\` instead of omitting the line.
 - This entire final response is saved verbatim as the findings file; do not add conversational wrapper text."
     ;;
 esac

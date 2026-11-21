@@ -304,7 +304,7 @@ flash 模式下，Opus review 与 Design session 的失败处理见「flash 模�
     --out <运行目录>/opus-draft-review-<轮次>.md --cwd <仓库>
   ```
 
-  Flash 只照 findings 执行：通过或给出可照抄修改时，才写 Resolution、关票、更新地图、改草稿或发布；findings 要求重派时，把其指出的缺陷补进新 Brief 并重派对应 worker；findings 标为「需要人取舍」的条目原样进入第 6 步问题轮。不得在 findings 之外自行判断「小问题」、补充推荐理由或放宽审读标准。向用户汇报结论时注明对应 findings 文件路径。
+  Flash 只照 findings 执行：通过或给出可照抄修改时，才写 Resolution、关票、更新地图、改草稿或发布；findings 要求重派时，把其指出的缺陷补进新 Brief 并重派对应 worker；findings 标为「需要人取舍」的条目原样进入第 6 步问题轮，每条的「推荐：」行照抄为该条的「建议」行（Opus 写「推荐：无」时如实写「无建议：<原因>」）。不得在 findings 之外自行判断「小问题」、补充推荐理由或放宽审读标准。向用户汇报结论时注明对应 findings 文件路径。
 - **地图起草门槛**：`S<k>=map:<地图号>` 组只有在地图已收口、Map fog 为空、且它依赖的每张 Decision ticket 都能在该票 Resolution 中读到完整决定时，才派 worker 起草；地图摘要不能替代票 Resolution。无法机械确认、仍有开着的 Decision ticket、或起草/审稿结果出现未决条目时，这一组不发布、不改成选择题，改推荐 `/grill-map <地图号或话题>`，等 Design session 交接后再进入后续轮次。
 - **问题轮与「展开」**：本轮全部问题都是已备好选项的选择题时，flash 直接按原有格式合并和转述，不新增判断、不改写选项和推荐。用户对某条回「展开」时，不在当前会话讨论，直接开对应的 Design session（等价于 `/grill-map` 或 `/grill-feature`）：
 

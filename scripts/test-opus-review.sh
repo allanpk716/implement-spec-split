@@ -196,6 +196,7 @@ check "code prompt names the full code-review skill" grep -Fq 'mattpocock-skills
 check "code prompt gives the fixed point" grep -Fq 'fixed point: main' "$FAKE_CLAUDE_LOG"
 check "code prompt pins both review axes to opus" bash -c "grep -Fq 'Standards' '$FAKE_CLAUDE_LOG' && grep -Fq 'Spec' '$FAKE_CLAUDE_LOG' && grep -Fq 'opus' '$FAKE_CLAUDE_LOG'"
 check "code prompt requires human-tradeoff findings" grep -Fq '需要人取舍' "$FAKE_CLAUDE_LOG"
+check "code prompt requires a recommendation per tradeoff" grep -Fq '推荐：<option>' "$FAKE_CLAUDE_LOG"
 
 reset_fake_date 3600
 export FAKE_CLAUDE_LOG="$WORK/code-default-timeout.log" FAKE_CLAUDE_SCENARIO=sleep
@@ -218,6 +219,7 @@ expect_rc "draft review succeeds" 0 "$RUN_RC"
 check "draft findings are written" grep -Fqx 'fake Opus findings' "$WORK/draft-findings.md"
 check "draft prompt reviews the draft" bash -c "grep -Fqi 'draft' '$FAKE_CLAUDE_LOG' && grep -Fq '$WORK/draft.md' '$FAKE_CLAUDE_LOG'"
 check "draft prompt requires human-tradeoff findings" grep -Fq '需要人取舍' "$FAKE_CLAUDE_LOG"
+check "draft prompt requires a recommendation per tradeoff" grep -Fq '推荐：<option>' "$FAKE_CLAUDE_LOG"
 
 printf 'failure content\n' > "$WORK/failure.md"
 export FAKE_CLAUDE_LOG="$WORK/diagnose-env-args.log"
@@ -226,6 +228,7 @@ expect_rc "diagnose review succeeds" 0 "$RUN_RC"
 check "diagnose prompt reads the failure record" grep -Fq "$WORK/failure.md" "$FAKE_CLAUDE_LOG"
 check "diagnose prompt offers the three actions" bash -c "grep -Fq '续跑' '$FAKE_CLAUDE_LOG' && grep -Fq '改 Brief' '$FAKE_CLAUDE_LOG' && grep -Fq '停车' '$FAKE_CLAUDE_LOG'"
 check "diagnose prompt requires human-tradeoff findings" grep -Fq '需要人取舍' "$FAKE_CLAUDE_LOG"
+check "diagnose prompt requires a recommendation per tradeoff" grep -Fq '推荐：<option>' "$FAKE_CLAUDE_LOG"
 
 reset_fake_date 1200
 export FAKE_CLAUDE_LOG="$WORK/draft-default-timeout.log" FAKE_CLAUDE_SCENARIO=sleep
