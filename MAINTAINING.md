@@ -109,7 +109,9 @@
 - **Design session 承担讨论**：`/grill-feature`、`/grill-map` 由 Orca 开官方 Opus 会话，用户直接谈；讨论完当场 to-spec/to-tickets/commit/push（文档推送预授权），写 `handoff.md` 通知 flash。flash 在等待期间阻塞、不轮询不耗 token。
 - **结论必须带出处**：flash 汇报的每个结论注明支撑它的 findings/result 文件路径，拿不出出处的结论不许说。防止 flash 把自己当判断者。
 - **拿不准默认上交 Opus**，不自己在两个上交对象之间挑。
-- **停车条件收紧**：flash 只对 Opus 标注「需要人取舍」的条目停车，不许自创取舍；但 Opus 脚本错误照常硬停车。
+- **停车条件收紧**：flash 只对 Opus 标注「需要人取舍」的条目停车，不许自创取舍；但 Opus 脚本错误照常硬停车。「需要人取舍」的每一条都原样转给用户，flash 不许以「规格已写明」为由自己裁掉（2026-11-21 human-res-cost 规格 #49 实测：5 条里 flash 自判了 2 条）。
+- **实现只能走 `/implement-spec-split`（2026-11-21 加）**：同一次实测里，flash 读完 Design session 的 handoff（Opus 写了「单 worker 串行即可」）后没调技能，自己建 worktree、手写 brief、直接跑 `codex-worker.sh`，认领、阶段标记、agent 后端、落地锁全被跳过。修法三层：grill-feature/grill-map 第 5 步规定实现待办必须走技能；design-session.sh 要求 handoff 只写「实现规格 #N」、不写执行方式；`codex-worker.sh` / `pi-worker.sh` 在 `FLASH_ORCHESTRATOR=1` 时拒跑，只有显式 `--impl codex|pi` 的 Run 带 `WORKER_ALLOW_FLASH=1` 放行——措辞拦不住 flash，和「一行源码不写」一样靠硬拦。
+- **Opus 审查要能读 issue（2026-11-21 修）**：`opus-review.sh` 用 `--permission-prompts none`，原先白名单只有 git，`gh issue view` 被自动拒绝，Spec 轴只能拿 CONTEXT.md 和 commit message 凑数，等于没对照规格。现放行 `gh issue view` / `gh pr view` / `gh pr diff`（只读）。
 - **回退优先**：改造前两仓库打 `pre-flash-orchestrator` tag、全局配置快照 + ROLLBACK.md 在 `~/.claude/backups/pre-flash-orchestrator-20261120/`；新行为只活在 flash 会话里，官方会话与 claude-glm 并存。改 flash 相关行为时先想回退路径还在不在。
 
 ## find-next 设计要点（2026-11-01 grilling 定稿）

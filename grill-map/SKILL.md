@@ -11,4 +11,5 @@ description: 大模块 wayfinder 地图：用户说“开/推进一张地图”�
    `bash ~/.claude/skills/implement-spec-split/scripts/design-session.sh map --topic-file <topic-file> --timeout 7200`
 4. Tell the user to switch to the Orca Claude Design session and continue there. Do not answer map questions or poll the run directory.
 5. After the completion notification arrives, read only the `handoff.md` path printed to stdout, then continue its Orchestrator todo items in this session.
+   - A todo item that implements a Spec always runs through `/implement-spec-split <spec number>` (several Specs: `/find-next`, which starts them through launch-wave). Never create the worktree, write the Brief, or call `codex-worker.sh` / `pi-worker.sh` yourself, whatever the handoff says about workers: the skill does the claim, phase marks, backend choice, review, and landing.
 6. On a non-zero exit, report the script's stderr and stop.

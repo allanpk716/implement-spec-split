@@ -137,6 +137,9 @@ ALLOWED_TOOLS=(
   'Bash(git merge-base:*)'
   'Bash(git ls-files:*)'
   'Bash(git cat-file:*)'
+  'Bash(gh issue view:*)'
+  'Bash(gh pr view:*)'
+  'Bash(gh pr diff:*)'
   Skill
   Agent
 )

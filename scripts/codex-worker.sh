@@ -146,6 +146,13 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# A flash Orchestrator must not start External workers on its own: its
+# implementing roles are in-session glm-5.3 subagents. Only an explicit
+# `/implement-spec-split --impl codex` Run sets the opt-in (2026-11-21).
+if [ "${FLASH_ORCHESTRATOR:-}" = 1 ] && [ "${WORKER_ALLOW_FLASH:-}" != 1 ]; then
+  die "refusing to run in a flash session (FLASH_ORCHESTRATOR=1): implement Specs with /implement-spec-split <n>; only an explicit --impl codex Run sets WORKER_ALLOW_FLASH=1"
+fi
+
 if $RESUME; then
   [ -n "$RUN_DIR" ] || die "--resume needs --run-dir"
   [ -d "$RUN_DIR" ] || die "--resume: run dir not found: $RUN_DIR"

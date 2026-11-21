@@ -174,7 +174,7 @@ $KIND_INSTRUCTIONS
 1. 讨论完成后，在同一会话接着做 to-spec 和 to-tickets；to-tickets 照常让用户确认拆分。
 2. 上下文过重、一次要产出多份规格，或 main 已经变化时，提示用户另开 Design session，不要硬塞进本次会话。
 3. GLOSSARY、ADR 等文档改动由你自己 commit 并 push。
-4. 写不超过 30 行的 $RUN_DIR/handoff.md，包含：规格号、票号、新增或改动的 ADR 与术语、给 Orchestrator 的待办。
+4. 写不超过 30 行的 $RUN_DIR/handoff.md，包含：规格号、票号、新增或改动的 ADR 与术语、给 Orchestrator 的待办。实现类待办只写「实现规格 #N」（多份写各自规格号和先后顺序），不写由谁、用 worker 还是子代理、串行还是并行去做：执行方式由 /implement-spec-split 决定。
 5. 最后运行 orca orchestration send --subject "Design session handoff" --to run:$RUN_ID --report-path "$RUN_DIR/handoff.md" 通知主会话。
 ${EARLY_HANDOFF}
 EOF
