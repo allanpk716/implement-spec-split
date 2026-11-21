@@ -81,15 +81,22 @@ description: 默认进入推进模式：循环扫描当前 GitHub 仓库的 wayf
 
 1. **机械扫描**：
    - GitHub：`~/.claude/skills/implement-spec-split/scripts/pipeline-status.sh --all`。除默认段外还列出：「地图仍在探索」每张地图开着的决策票；「空地图（待 /wayfinder 画图）」（open、未搁置、没有子票的 `wayfinder:map`）；「认领后不动（>3 天）」（open、有 Assignee、`updated_at` 早于 3 天的 `wayfinder:*` 决策票）；「状态没收尾」（规格已关闭但执行票还开着、实现票只被已关闭的规格覆盖、规格未关执行票全是搁置票）；「散票」（不属于任何地图或规格的 open issue，带标签、来源地图和时机）。「地图迷雾待毕业」在默认输出和 `--all` 都有。「可以实现」会排除未关执行票全是搁置票的规格；混合规格的搁置票带 `(搁置)` 后缀。
+   - GitHub 另跑 `~/.claude/skills/implement-spec-split/scripts/grill-status.sh`，按 grill 题目列出每次 Design session 的规格与票完成数（中断的标「中断（无 handoff）」）。
    - 本地 markdown 跟踪器：`scan.py` 的 JSON 已含全部票、每张地图的 `has_fog`、`fog_maps` 候选和成员关系；按下面的分组自己归类。open、未搁置且 `members` 为空的地图归「空地图」。本地票头没有可信更新时间，不推断「认领后不动」，该组写「（本地跟踪器无 updated_at，不判断）」。
 2. **轻量判断**（我自己做，只看标题和标签，必要时 `gh issue view` 一两张）：
    - 散票里标题相近、描述同一现象的，标「疑似重复」；带 `timing` 的标「等待时机：<条件>」，不推断条件是否满足。
    - 「缺规格」里明显依赖别的票的（比如 Web UI 票依赖还在实现的后端规格、整体验收册票依赖所有功能），注明「等 #N」。
+   - 「正在实现」的每份规格（GitHub）：`gh issue view <n> --comments` 只看最后一条评论是否为落地报告或 `## 停车报告`；`git for-each-ref --sort=-committerdate --format='%(refname:short) %(committerdate:relative)' 'refs/heads/spec-<n>-t*'` 看正在做的票分支及最近提交时间（票号取分支名 `t` 后的数字）。脚本里的「0/5」只数已关闭的票，正在做的票靠这一步补上。
    - 不逐张读正文，不派 worker；脚本输出就是清单主体。
 3. **输出**，按分组列出，空的组写「（无）」：
 
 ```
 待办清单 · <仓库名> · <日期>
+
+按 grill 题目的进度
+■ <题目>（<日期> feature|map）<进行中 / 已完成 / 中断>
+  - #349 规格名：票 1/5 已关，正在做 #352（最近提交 12 分钟前）／停车：<一句原因>
+（grill-status.sh 输出为空时写「（本仓库没有 Design session 记录）」）
 
 A. 正在实现 / 可以实现（搁置票不算待实现）
 - #212 规格名 0/9 已接手（分支 spec-212） → /implement-spec-split 212
@@ -101,6 +108,12 @@ F. 认领后不动（>3 天） → /find-next --batch
 G. 空地图（待 /wayfinder 画图）
 H. 状态没收尾（核对后关票 / 只剩搁置票可关规格，由用户确认）
 I. 散票（bug / needs-triage 等；含等待时机、疑似重复和推进模式分流提示）
+
+要你做的
+- 现在：停车报告、待拍板的决策票（D 组）、中断的 grill（重新开 /grill-feature 或 /grill-map）、状态没收尾（H 组）
+- 自动进行中（不用管）：正在实现且未停车的规格，写出结果会出现在规格 issue 的落地报告
+- 以后：一批规格全部落地后发版上线（handoff 里有上线顺序时照抄），及其他带触发条件的待办
+空的段写「（无）」。
 
 建议先做：<一两句，按「阶段与优先级」挑出的那一个>
 ```
