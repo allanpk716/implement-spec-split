@@ -158,8 +158,12 @@ case "\$command" in
           printf '%s\\n' '{"ok":true,"result":{"messages":[{"id":"noise","payload":{"body":"not a handoff"}}]}}'
           exit 0
         fi
-        REPORT_DIR=\$(sed -n 's/^运行目录：//p' "\$PROMPT_LOG" | head -1)
-        REPORT_PATH="\$REPORT_DIR/handoff.md"
+        if [ -n "\${DESIGN_TEST_REPORT_PATH:-}" ]; then
+          REPORT_PATH=\$DESIGN_TEST_REPORT_PATH
+        else
+          REPORT_DIR=\$(sed -n 's/^运行目录：//p' "\$PROMPT_LOG" | head -1)
+          REPORT_PATH="\$REPORT_DIR/handoff.md"
+        fi
         if [ "\${DESIGN_TEST_WRONG_REPORT_THEN_TIMEOUT:-0}" = 1 ]; then
           if [ "\$attempts" = 1 ]; then
             printf '%s\\n' '{"ok":true,"result":{"messages":[{"id":"wrong","payload":{"reportPath":"'$WORK'/wrong-handoff.md"}}]}}'
@@ -224,6 +228,7 @@ run_design_session() {
   DESIGN_TEST_CHECK_SLEEP=${DESIGN_TEST_CHECK_SLEEP:-0} \
   DESIGN_TEST_UNRELATED_FIRST=${DESIGN_TEST_UNRELATED_FIRST:-0} \
   DESIGN_TEST_WRONG_REPORT_THEN_TIMEOUT=${DESIGN_TEST_WRONG_REPORT_THEN_TIMEOUT:-0} \
+  DESIGN_TEST_REPORT_PATH=${DESIGN_TEST_REPORT_PATH:-} \
   ISS_DESIGN_CLOSE_DELAY=0 \
   ISS_DESIGN_KEEP_SESSION=${ISS_DESIGN_KEEP_SESSION:-} \
   CHECK_ATTEMPTS=$CHECK_ATTEMPTS \
@@ -261,6 +266,7 @@ expect_file_has --run 'handoff wait targets the created Run' "$CHECK_LOG"
 expect_file_has 'run_test_design' 'handoff wait names the created Run id' "$CHECK_LOG"
 expect_file_has --timeout-ms 'handoff wait has a timeout' "$CHECK_LOG"
 expect_file_has '1000' 'timeout is converted to milliseconds' "$CHECK_LOG"
+expect_file_has 'brief-mock.md' 'feature prompt includes the mock brief' "$PROMPT_LOG"
 
 RUN_DIR_FOUND=
 for directory in "$WORK"/runs/implement-spec-split-*-feature; do
@@ -275,6 +281,96 @@ if [ -n "$RUN_DIR_FOUND" ]; then
 else
   record FAIL 'feature run creates a stamped run directory' 'no matching directory'
 fi
+
+make_attach_run() {
+  attach_dir=$1
+  mkdir -p "$attach_dir"
+  printf '%s\n' '{"ok":true,"result":{"id":"run_test_design"}}' \
+    > "$attach_dir/run-create.json"
+  printf '%s\n' \
+'{"ok":true,"result":{"outcome":{"kind":"structured","sessionId":"orca_session_id:test-design","handle":"term_test"},"worktreeId":"wt-test"}}' \
+    > "$attach_dir/launch.json"
+}
+
+ATTACH_RUN=$WORK/attach-run
+make_attach_run "$ATTACH_RUN"
+: > "$ORCA_LOG"
+: > "$CHECK_LOG"
+rm -f "$CHECK_ATTEMPTS"
+DESIGN_TEST_REPORT_PATH=$ATTACH_RUN/handoff.md
+run_design_session "$WORK/attach.out" --attach "$ATTACH_RUN" --timeout 1
+expect_exit 0 'attach succeeds when check receives the handoff'
+if [ "$(cat "$WORK/attach.out")" = "$ATTACH_RUN/handoff.md" ]; then
+  record PASS 'attach prints the received handoff path'
+else
+  record FAIL 'attach prints the received handoff path' "stdout=$(cat "$WORK/attach.out")"
+fi
+expect_file_has 'run_test_design' 'attach waits on the saved Run id' "$CHECK_LOG"
+expect_file_has 'close' 'attach closes the saved session handle' "$ORCA_LOG"
+if grep -qx 'run-create' "$ORCA_LOG"; then
+  record FAIL 'attach does not create another Run'
+else
+  record PASS 'attach does not create another Run'
+fi
+unset DESIGN_TEST_REPORT_PATH
+
+ATTACH_EXISTING_RUN=$WORK/attach-existing-run
+make_attach_run "$ATTACH_EXISTING_RUN"
+printf '%s\n' 'Spec #15, tickets #18.' > "$ATTACH_EXISTING_RUN/handoff.md"
+: > "$ORCA_LOG"
+: > "$CHECK_LOG"
+rm -f "$CHECK_ATTEMPTS"
+run_design_session "$WORK/attach-existing.out" --attach "$ATTACH_EXISTING_RUN" --timeout 1
+expect_exit 0 'attach accepts an already delivered handoff file'
+if [ "$(cat "$WORK/attach-existing.out")" = "$ATTACH_EXISTING_RUN/handoff.md" ]; then
+  record PASS 'existing handoff attach prints its path'
+else
+  record FAIL 'existing handoff attach prints its path' "stdout=$(cat "$WORK/attach-existing.out")"
+fi
+if [ -e "$CHECK_ATTEMPTS" ]; then
+  record FAIL 'existing handoff attach avoids consuming another message' \
+    "attempts=$(cat "$CHECK_ATTEMPTS")"
+else
+  record PASS 'existing handoff attach avoids consuming another message'
+fi
+expect_file_has 'close' 'existing handoff attach closes the session' "$ORCA_LOG"
+
+ATTACH_MISSING_RUN=$WORK/attach-missing-run
+make_attach_run "$ATTACH_MISSING_RUN"
+rm -f "$ATTACH_MISSING_RUN/launch.json"
+run_design_session "$WORK/attach-missing.out" --attach "$ATTACH_MISSING_RUN" --timeout 1
+expect_exit 64 'attach with missing metadata returns exit code sixty-four'
+expect_file_has 'missing launch.json' 'attach missing metadata names the file' "$RUN_STDERR"
+
+ATTACH_MISSING_CREATE_RUN=$WORK/attach-missing-create-run
+make_attach_run "$ATTACH_MISSING_CREATE_RUN"
+rm -f "$ATTACH_MISSING_CREATE_RUN/run-create.json"
+run_design_session "$WORK/attach-missing-create.out" --attach "$ATTACH_MISSING_CREATE_RUN" --timeout 1
+expect_exit 64 'attach without run-create metadata returns exit code sixty-four'
+expect_file_has 'missing run-create.json' 'attach missing Run metadata names the file' "$RUN_STDERR"
+
+run_design_session "$WORK/attach-not-found.out" --attach "$WORK/attach-not-found" --timeout 1
+expect_exit 64 'attach with a missing run directory returns exit code sixty-four'
+expect_file_has 'run directory does not exist' 'attach missing run names the directory' "$RUN_STDERR"
+
+ATTACH_TIMEOUT_RUN=$WORK/attach-timeout-run
+make_attach_run "$ATTACH_TIMEOUT_RUN"
+rm -f "$CHECK_ATTEMPTS"
+DESIGN_TEST_TIMEOUT=1
+run_design_session "$WORK/attach-timeout.out" --attach "$ATTACH_TIMEOUT_RUN" --timeout 1
+expect_exit 5 'attach timeout returns exit code five'
+if grep -Fq "design-session.sh --attach $ATTACH_TIMEOUT_RUN --timeout 1" "$RUN_STDERR"; then
+  record PASS 'attach timeout prints the resume command'
+else
+  record FAIL 'attach timeout prints the resume command' "stderr=$(cat "$RUN_STDERR")"
+fi
+TIMEOUT_ATTACH_DIR=$(sed -n 's/^bash .*design-session\.sh --attach \(.*\) --timeout 1$/\1/p' "$RUN_STDERR")
+if [ -n "$TIMEOUT_ATTACH_DIR" ] && [ -d "$TIMEOUT_ATTACH_DIR" ]; then
+  record PASS 'timeout stderr includes a usable attach command'
+else
+  record FAIL 'timeout stderr includes a usable attach command' "stderr=$(cat "$RUN_STDERR")"
+fi
+unset DESIGN_TEST_TIMEOUT
 
 cat > "$TOPIC_FILE" <<'TOPIC'
 Topic with "quotes", `backticks`, and $(pwd)
@@ -305,6 +401,7 @@ RUN_EXIT=$?
 expect_exit 0 'help succeeds without a kind and topic'
 expect_file_has 'Usage: design-session.sh' 'help prints the usage' "$WORK/help.out"
 expect_file_has '--topic-file <path>' 'help documents topic files' "$WORK/help.out"
+expect_file_has '--attach <run-dir>' 'help documents attach mode' "$WORK/help.out"
 
 DESIGN_SESSION_ROOT=$WORK/runs ISS_ORCA=$BIN/orca \
   ISS_DESIGN_SESSION_POLL=0.01 ORCA_LOG=$ORCA_LOG PROMPT_LOG=$PROMPT_LOG \
@@ -381,6 +478,12 @@ if grep -Fq '超时' "$RUN_STDERR"; then
   record PASS 'timeout message is reported'
 else
   record FAIL 'timeout message is reported' "stderr=$(cat "$RUN_STDERR")"
+fi
+INITIAL_TIMEOUT_ATTACH_DIR=$(sed -n 's/^bash .*design-session\.sh --attach \(.*\) --timeout 1$/\1/p' "$RUN_STDERR")
+if [ -n "$INITIAL_TIMEOUT_ATTACH_DIR" ] && [ -d "$INITIAL_TIMEOUT_ATTACH_DIR" ]; then
+  record PASS 'initial timeout stderr includes a usable attach command'
+else
+  record FAIL 'initial timeout stderr includes a usable attach command' "stderr=$(cat "$RUN_STDERR")"
 fi
 unset DESIGN_TEST_TIMEOUT
 
@@ -478,6 +581,7 @@ expect_file_has '--topic-file' 'feature skill passes topic files' "$FEATURE_SKIL
 expect_file_has 'run_in_background: true' 'feature skill waits in the background' "$FEATURE_SKILL"
 expect_file_has 'timeout: 7500000ms' 'feature skill timeout exceeds the script cap' "$FEATURE_SKILL"
 expect_file_has '7200000ms' 'feature skill documents the script cap' "$FEATURE_SKILL"
+expect_file_has '--attach' 'feature skill can resume a timed-out wait' "$FEATURE_SKILL"
 expect_file_has 'completion notification' 'feature skill waits for completion notification' "$FEATURE_SKILL"
 expect_file_has 'handoff.md' 'feature skill returns through the handoff' "$FEATURE_SKILL"
 expect_file_has 'name: grill-map' 'map skill has its name' "$MAP_SKILL"
@@ -490,6 +594,7 @@ expect_file_has '--topic-file' 'map skill passes topic files' "$MAP_SKILL"
 expect_file_has 'run_in_background: true' 'map skill waits in the background' "$MAP_SKILL"
 expect_file_has 'timeout: 7500000ms' 'map skill timeout exceeds the script cap' "$MAP_SKILL"
 expect_file_has '7200000ms' 'map skill documents the script cap' "$MAP_SKILL"
+expect_file_has '--attach' 'map skill can resume a timed-out wait' "$MAP_SKILL"
 expect_file_has 'completion notification' 'map skill waits for completion notification' "$MAP_SKILL"
 expect_file_has 'handoff.md' 'map skill returns through the handoff' "$MAP_SKILL"
 expect_file_has 'grill-feature' 'README documents the feature skill symlink' "$ROOT/README.md"
