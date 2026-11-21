@@ -203,6 +203,8 @@ else
   done
   mkdir -p "$RUN_DIR" || die 64 "could not create run directory: $RUN_DIR"
   RUN_DIR=$(cd "$RUN_DIR" && pwd) || die 64 "could not resolve run directory: $RUN_DIR"
+  printf '%s' "$TOPIC" > "$RUN_DIR/topic.md" ||
+    die 64 "could not persist topic to $RUN_DIR/topic.md"
 fi
 
 if [ "$MODE" = launch ]; then

@@ -26,7 +26,8 @@ cleanup() {
   rc=$?
   trap - EXIT HUP INT TERM
   if [ "$rc" -eq 0 ] && [ "$FAILED" -eq 0 ]; then
-    rm -r "$WORK"
+    # Keep mktemp scratch in place; the tests must not recursively delete it.
+    :
   fi
   exit "$rc"
 }
@@ -63,6 +64,17 @@ expect_file_has() {
     record PASS "$name"
   else
     record FAIL "$name" "missing [$text] in $(basename "$file")"
+  fi
+}
+
+expect_same_file() {
+  expected=$1
+  name=$2
+  actual=$3
+  if [ -f "$actual" ] && cmp -s "$expected" "$actual"; then
+    record PASS "$name"
+  else
+    record FAIL "$name" "actual=$actual"
   fi
 }
 
@@ -278,6 +290,10 @@ done
 if [ -n "$RUN_DIR_FOUND" ]; then
   record PASS 'feature run creates a stamped run directory'
   expect_file_has "$RUN_DIR_FOUND" 'feature prompt carries the run directory' "$PROMPT_LOG"
+  printf 'Add export button' > "$WORK/expected-feature-topic.md"
+  expect_same_file "$WORK/expected-feature-topic.md" \
+    'feature run persists the inline topic verbatim' \
+    "$RUN_DIR_FOUND/topic.md"
 else
   record FAIL 'feature run creates a stamped run directory' 'no matching directory'
 fi
@@ -294,6 +310,8 @@ make_attach_run() {
 
 ATTACH_RUN=$WORK/attach-run
 make_attach_run "$ATTACH_RUN"
+printf 'Previous attach topic' > "$ATTACH_RUN/topic.md"
+printf 'Previous attach topic' > "$WORK/expected-attach-topic.md"
 : > "$ORCA_LOG"
 : > "$CHECK_LOG"
 rm -f "$CHECK_ATTEMPTS"
@@ -307,6 +325,8 @@ else
 fi
 expect_file_has 'run_test_design' 'attach waits on the saved Run id' "$CHECK_LOG"
 expect_file_has 'close' 'attach closes the saved session handle' "$ORCA_LOG"
+expect_same_file "$WORK/expected-attach-topic.md" 'attach does not rewrite topic.md' \
+  "$ATTACH_RUN/topic.md"
 if grep -qx 'run-create' "$ORCA_LOG"; then
   record FAIL 'attach does not create another Run'
 else
@@ -384,6 +404,9 @@ expect_exit 0 'topic file design session succeeds'
 expect_file_has 'Topic with "quotes", `backticks`, and $(pwd)' \
   'topic file preserves shell characters' "$PROMPT_LOG"
 expect_file_has 'second line' 'topic file preserves newlines' "$PROMPT_LOG"
+TOPIC_FILE_RUN_DIR=$(dirname "$(cat "$REPORT_LOG")")
+expect_same_file "$TOPIC_FILE" 'topic file run preserves the topic verbatim' \
+  "$TOPIC_FILE_RUN_DIR/topic.md"
 
 run_design_session "$WORK/missing-topic-file-value.out" feature --topic-file \
   --timeout 1
