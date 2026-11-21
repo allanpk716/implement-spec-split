@@ -248,7 +248,7 @@ $KIND_INSTRUCTIONS
 ${EARLY_HANDOFF}
 EOF
   )
-  LAUNCH_JSON=$("$ORCA" agent launch --agent claude --json --prompt "$PROMPT" 2>"$RUN_DIR/launch.err") ||
+  LAUNCH_JSON=$("$ORCA" agent launch --agent claude --focus --json --prompt "$PROMPT" 2>"$RUN_DIR/launch.err") ||
     die 6 "orca agent launch failed: $(cat "$RUN_DIR/launch.err")"
   printf '%s\n' "$LAUNCH_JSON" > "$RUN_DIR/launch.json"
   SESSION_INFO=$(session_info_from_json "$RUN_DIR/launch.json") ||
@@ -302,6 +302,11 @@ accept_handoff() {
     die 6 "handoff report is missing: $handoff"
   printf '%s\n' "$handoff"
   cleanup_wait
+  # Bring the user back to the Orchestrator terminal that started this wait.
+  if [ -n "${ORCA_TERMINAL_HANDLE:-}" ]; then
+    "$ORCA" terminal switch --terminal "$ORCA_TERMINAL_HANDLE" --json > "$RUN_DIR/switch.json" 2>&1 ||
+      printf 'design-session: 未能切回主会话（%s），请手动切换\n' "$ORCA_TERMINAL_HANDLE" >&2
+  fi
   # The Design session's job ends with the handoff; close its tab so it stops
   # holding an Orca slot and Opus quota. ISS_DESIGN_KEEP_SESSION=1 keeps it.
   if [ -n "$SESSION_HANDLE" ] && [ "${ISS_DESIGN_KEEP_SESSION:-}" != 1 ]; then
