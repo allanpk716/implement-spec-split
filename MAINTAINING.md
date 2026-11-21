@@ -112,6 +112,7 @@
 - **停车条件收紧**：flash 只对 Opus 标注「需要人取舍」的条目停车，不许自创取舍；但 Opus 脚本错误照常硬停车。「需要人取舍」的每一条都原样转给用户，flash 不许以「规格已写明」为由自己裁掉（2026-11-21 human-res-cost 规格 #49 实测：5 条里 flash 自判了 2 条）。
 - **实现只能走 `/implement-spec-split`（2026-11-21 加）**：同一次实测里，flash 读完 Design session 的 handoff（Opus 写了「单 worker 串行即可」）后没调技能，自己建 worktree、手写 brief、直接跑 `codex-worker.sh`，认领、阶段标记、agent 后端、落地锁全被跳过。修法三层：grill-feature/grill-map 第 5 步规定实现待办必须走技能；design-session.sh 要求 handoff 只写「实现规格 #N」、不写执行方式；`codex-worker.sh` / `pi-worker.sh` 在 `FLASH_ORCHESTRATOR=1` 时拒跑，只有显式 `--impl codex|pi` 的 Run 带 `WORKER_ALLOW_FLASH=1` 放行——措辞拦不住 flash，和「一行源码不写」一样靠硬拦。
 - **Opus 审查要能读 issue（2026-11-21 修）**：`opus-review.sh` 用 `--permission-prompts none`，原先白名单只有 git，`gh issue view` 被自动拒绝，Spec 轴只能拿 CONTEXT.md 和 commit message 凑数，等于没对照规格。现放行 `gh issue view` / `gh pr view` / `gh pr diff`（只读）。
+- **flash 提问框乱码（2026-11-21 修）**：glm-5.3-flash 调 AskUserQuestion 时常在中英文交界、标点前夹回车符 `\r`（一个会话 4 次里 3 次），终端把提问框渲染成乱码，普通回复和 Bash 不受影响。措辞拦不住，改用 `hooks/ask-sanitize.js`（PreToolUse，`ask` + `updatedInput` 删掉 `\r` 后照常弹框，已在真实会话里验证不会多弹确认），注册在 flash 专用 settings。
 - **回退优先**：改造前两仓库打 `pre-flash-orchestrator` tag、全局配置快照 + ROLLBACK.md 在 `~/.claude/backups/pre-flash-orchestrator-20261120/`；新行为只活在 flash 会话里，官方会话与 claude-glm 并存。改 flash 相关行为时先想回退路径还在不在。
 
 ## find-next 设计要点（2026-11-01 grilling 定稿）

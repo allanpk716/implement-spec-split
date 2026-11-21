@@ -69,6 +69,37 @@ flash 模式优先于 `DELEGATE_GUARD_DISABLE=1`、项目配置和 `allow-direct
 
 flash 模式不使用这个例外开关：flash 会话一行源码都不写（见 [ADR 0001](../docs/adr/0001-cheap-orchestrator-default-deny.md)）。
 
+## ask-sanitize hook
+
+`ask-sanitize.js` 是 Claude Code 的 `PreToolUse` hook，用于删除 `AskUserQuestion` 输入字符串里的回车符（U+000D）：flash 会话的 glm-5.3-flash 可能在 question/header/label/description 中夹入回车，导致终端把问题框渲染成乱码。hook 只对 `AskUserQuestion` 生效，会递归清洗 `tool_input` 中的字符串，并通过 `permissionDecision: "ask"` 和 `updatedInput` 用清洗后的输入照常弹出提问框；其他工具或异常输入一律无输出放行。
+
+把它放进 flash 会话专用的 settings（作者环境为 `~/ops/etc/claude-flash/settings.json`）：
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node <skills>/implement-spec-split/hooks/ask-sanitize.js",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+测试命令：
+
+```text
+node hooks/test-ask-sanitize.js
+```
+
 ## 测试
 
 ```text
