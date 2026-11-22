@@ -2,6 +2,9 @@
 Implementation Brief template. Copy it into <run dir>/brief.md, fill every <...>,
 delete sections that do not apply, and delete this comment. Write each Brief fresh;
 do not sed-derive one Brief from another.
+When the implement-spec-split implementing-role flow requires the worker to commit
+its own steps, delete the "不要 git commit" fixed rule below and state the commit
+requirement under 期望改法.
 -->
 
 # 任务：<一句话目标>

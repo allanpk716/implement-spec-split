@@ -668,6 +668,89 @@ testCase('DELEGATE_GUARD_DISABLE without flash still allows', home => {
   );
 });
 
+testCase('bare codex exec denies in ordinary sessions', home => {
+  const commands = [
+    'codex exec hi',
+    '/opt/homebrew/bin/codex exec -C /tmp -s workspace-write "hi"',
+    'cd /tmp && codex exec hi',
+    'codex -C /tmp exec hi',
+    'codex --cd /tmp exec hi',
+    'env FOO=bar nohup timeout 30 time codex exec hi',
+    '(codex exec hi)',
+    'false || codex exec hi',
+    'echo start; codex exec hi',
+    'nohup codex exec hi &',
+  ];
+  for (const command of commands) {
+    assert.match(
+      parseDeny(runHook(hookPayload('Bash', { command }), home)),
+      /不要直接调 codex exec/
+    );
+  }
+});
+
+testCase('bare codex exec denies subagents, flash and disabled sessions', home => {
+  const payload = hookPayload(
+    'Bash',
+    { command: 'codex exec hi' },
+    process.cwd(),
+    { agent_id: 'impl-t1' }
+  );
+  assert.match(
+    parseDeny(runHook(payload, home)),
+    /不要直接调 codex exec/
+  );
+  assert.match(
+    parseDeny(
+      runHook(payload, home, { FLASH_ORCHESTRATOR: '1' }),
+    ),
+    /不要直接调 codex exec/
+  );
+  assert.match(
+    parseDeny(
+      runHook(hookPayload('Bash', { command: 'codex exec hi' }), home, {
+        DELEGATE_GUARD_DISABLE: '1',
+      })
+    ),
+    /不要直接调 codex exec/
+  );
+});
+
+testCase('codex wrappers and non-exec codex commands allow', home => {
+  const commands = [
+    'codex --version',
+    'codex login status',
+    'codex e hi',
+    '~/.claude/skills/implement-spec-split/scripts/codex-worker.sh --cwd /tmp --brief b.md --run-dir /tmp/r',
+    'scripts/pi-worker.sh --cwd /tmp',
+    'scripts/selftest-codex.sh --only L1',
+    'echo "run codex exec please"',
+    "cat <<'EOF' > docs/a.md\ncodex exec hi\nEOF",
+  ];
+  for (const command of commands) {
+    assertAllow(
+      runHook(hookPayload('Bash', { command }), home, {
+        FLASH_ORCHESTRATOR: '1',
+      })
+    );
+  }
+});
+
+testCase('flash mode allows deterministic Go formatting writes', home => {
+  const commands = [
+    'gofmt -w internal/a.go',
+    'goimports -w internal/a.go',
+    'go fmt ./...',
+  ];
+  for (const command of commands) {
+    assertAllow(
+      runHook(hookPayload('Bash', { command }), home, {
+        FLASH_ORCHESTRATOR: '1',
+      })
+    );
+  }
+});
+
 testCase('NotebookEdit 20 lines denies', home => {
   const reason = parseDeny(
     runHook(

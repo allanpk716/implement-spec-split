@@ -152,6 +152,49 @@ run_id_from_json() {
   ' "$1"
 }
 
+remind_pending_design_sessions() {
+  cutoff=$(date -v-7d +%Y%m%d-%H%M 2>/dev/null) ||
+    cutoff=$(date -d '7 days ago' +%Y%m%d-%H%M 2>/dev/null) ||
+    cutoff=
+  [ -n "$cutoff" ] || return 0
+
+  pending_count=0
+  pending_lines=
+  for directory in "$ROOT/$REPO_NAME"-*/; do
+    [ -d "$directory" ] || continue
+    directory=${directory%/}
+    run_base=$(basename "$directory")
+    run_rest=${run_base#"$REPO_NAME"-}
+    # Match the repository-name prefix rule used by grill-status.sh: the date
+    # must follow the repository name directly, so repo `foo` never consumes
+    # `foo-bar-20260101-1200-feature`.
+    [[ "$run_rest" =~ ^([0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9])-([0-9][0-9])([0-9][0-9])(-[0-9]+)?-(feature|map)$ ]] ||
+      continue
+    stamp="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}${BASH_REMATCH[3]}"
+    # Old, un-handed sessions are historical noise; only the last 7 days count.
+    [[ "$stamp" < "$cutoff" ]] && continue
+    [ -f "$directory/handoff.md" ] && continue
+    kind=${BASH_REMATCH[5]}
+    title='（题目未记录）'
+    if [ -f "$directory/topic.md" ]; then
+      topic_line=
+      IFS= read -r topic_line < "$directory/topic.md" || topic_line=
+      if [ -n "$topic_line" ]; then
+        title=$topic_line
+      fi
+    fi
+    display="${stamp:0:4}-${stamp:4:2}-${stamp:6:2} ${stamp:9:2}:${stamp:11:2}"
+    pending_count=$((pending_count + 1))
+    pending_lines="${pending_lines}- ${display} ${kind} ${title}  续等：design-session.sh --attach ${directory}
+"
+  done
+
+  if [ "$pending_count" -gt 0 ]; then
+    printf '提醒：本仓库还有 %d 个 Design session 没交接：\n%s' \
+      "$pending_count" "$pending_lines" >&2
+  fi
+}
+
 session_info_from_json() {
   node -e '
     const fs = require("fs");
@@ -194,6 +237,7 @@ else
   REPO_NAME=$(printf '%s' "$REPO_NAME" | tr '[:upper:]' '[:lower:]')
   [ -n "$REPO_NAME" ] || REPO_NAME=$(basename "$REPO_ROOT")
   ROOT=${DESIGN_SESSION_ROOT:-${ISS_DESIGN_SESSION_ROOT:-$HOME/.cache/implement-spec-split/design}}
+  remind_pending_design_sessions
   STAMP=$(date +%Y%m%d-%H%M)
   RUN_DIR=$ROOT/$REPO_NAME-$STAMP-$KIND
   SUFFIX=1

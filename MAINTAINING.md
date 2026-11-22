@@ -98,6 +98,7 @@
     - 不写 ADR：用 Orca 当仓库清单、用快照加定时刷新，这两条都容易改回去。
 23. **2026-11-19：默认后端按会话自动选（`IMPLEMENT_BACKEND = auto`）。** 自 10-11 起默认是 `sonnet`。find-next 生成的命令自带 `--impl codex`，所以平时不出问题；但手敲 `/implement-spec-split <n>` 不带 `--impl` 时，官方订阅会话会把实现角色全开成 Sonnet 子代理，花的是 Claude 额度，违背「判断以外交给 codex worker」的分工（Spec #7 的 Run 就是这样跑的）。同一套技能还要在 GLM 驱动的 Claude Code（`claude-glm` / Orca 的 OpenClaude 槽位）里用，那里的子代理本身就是 GLM，不该派 worker。决定：不带 `--impl` 时看环境里的 `DELEGATE_GUARD_DISABLE=1`（`claude-glm` 启动器设置的标记）：有就用 `agent`，没有就用 `codex`。只带 `--agent-model` 时也用 `agent`。显式 `--impl` 照旧优先；find-next 生成的命令不变。
 24. **2026-11-20：Flash 模式的审核必须出会话。** 在 GLM 驱动的会话里，Agent 工具传 `opus` 只是把名字映射到 glm-5.3；同会话里开 Standards/Spec「opus」子代理仍是 GLM 审 GLM，等于假审核。因此 `FLASH_ORCHESTRATOR=1` 的代码审核、设计级意见、冲突复审和连续失败诊断都只能调用 `scripts/opus-review.sh`：它会清掉 GLM/Anthropic 代理映射，出会话用官方订阅的 `claude -p --model opus` 执行。脚本失败就停车，不降级到 GLM，也不由会话自审。
+25. **2026-11-22：编排防卡死。** ssh-manager-mcp Spec 349 的 flash 编排会话里，实现子代理为跑一条 `gofmt -w` 裸调 `codex exec`，Bash 超时后命令转入后台，子代理和编排主会话都只「等通知」，codex 进程空转 10 小时无人发现；早上续会话时编排者还把日志里的启动钟点误算成运行时长。owner 定：delegate-guard 对所有会话（含子代理、非 flash、例外开关开启）一律拒绝 Bash 直接调用 `codex exec`，外部 worker 只能走 wrapper；编排派发实现/合并/修复角色后必须挂 `run-watchdog.sh`，指纹无进展即退出唤醒编排者，绝不无限等通知；判断时长先 `date` 再 `ps` 看 etime/time，不从日志钟点推算；`gofmt -w` 这类确定性格式化不算写源码，任何角色直接执行。
 
 ## flash 模式设计要点（2026-11-20 规格定稿，ADR 0001）
 
@@ -220,8 +221,10 @@
 - **进度看板**：`bash scripts/test-board.sh`。用假 orca、假 pipeline-status、临时 git 仓库和临时 Run/Worker 目录测仓库登记、刷新节奏、关系图快照、认领状态、Run 阶段、Worker 异常、终端/网页输出、EPIPE、Board pruning 和帮助文本，不访问网络。
 - **Run 阶段记录**：`bash scripts/test-run-phase.sh`。用临时 HOME/ISS_STATE_DIR 测各阶段写入、覆盖、省略字段、最新 Run 目录选择、状态目录覆盖、写失败只警告和参数校验。
 - **票进度标签**：`bash scripts/test-ticket-watch.sh`。用临时 git 仓库测 `ticket-watch.sh --once` 的 worktree、分支、领先提交、脏文件、最近提交和外部 worker run dir 输出，worktree 清理后的零退出提示，以及缺失参数和非法 interval 的报错，不访问网络。
+- **编排看门狗**：`bash scripts/test-run-watchdog.sh`。用临时 git 仓库和小间隔测 `run-watchdog.sh` 的卡死（STALLED/退出码 3）、后台持续提交判活到 max（ALIVE/退出码 2）、worktree 消失判结束（DONE/退出码 0）、多对象混合输出、worker run dir 进展计入指纹和参数错误（退出码 64），不访问网络。
+- **delegate-guard**：`node hooks/test-delegate-guard.js`。测普通阈值、flash 源码拦截与子代理放行、Bash 各类源码写入形态、裸调 `codex exec` 在所有会话（含子代理、非 flash、`DELEGATE_GUARD_DISABLE=1`）被拦而 wrapper/非 exec 子命令/字符串与 heredoc 字样放行、`gofmt -w`/`goimports -w`/`go fmt` 放行、项目配置与例外开关，不访问网络。
 - **锁与领取记录**：`bash scripts/test-locks.sh`。测 `lock.sh` 的互斥、重入、等待超时、死持有者接管、槽位排队，`claim.sh` 的领取、并发领取、恢复与释放权限、交接预留与接手，worker 上限配置文件，以及两个 `codex-worker.sh` 在 `ISS_MAX_WORKERS=1` 下排队，不访问网络。
-- **Design session**：`bash scripts/test-design-session.sh`。用假 orca 测 feature/map prompt、`--agent claude`、`orchestration check --wait` 超时、会话退出、launch/check 失败、handoff 缺失和两个薄技能文本，不调用真实 Orca。
+- **Design session**：`bash scripts/test-design-session.sh`。用假 orca 测 feature/map prompt、`--agent claude`、`orchestration check --wait` 超时、会话退出、launch/check 失败、handoff 缺失、启动前未交接 session 提醒（7 天内、无 handoff、同仓库名前缀才提醒；过期、已交接、其他仓库不提醒且退出码不变）和两个薄技能文本（含提醒转述），不调用真实 Orca。
 - **grill 进度查询**：`bash scripts/test-grill-status.sh`。用临时 Design session 目录和假 `gh` 测已完成 / 进行中 / 中断（有无 topic.md）、仓库名前缀不误匹配、gh 失败和无记录，不访问网络。
 - **自动启动第 1 波**：`bash find-next/scripts/test-launch-wave.sh`。用假 pipeline-status、claim、max-workers、orca 测试运行输出、不在 Orca 时的手动输出、预留后再启动、预留冲突跳过、启动失败撤销预留并删空分支、`--only` 过滤和恢复条目（含原 worktree 不在 Orca 时在主工作树开终端标签、路径带空格的转义）、`--apply` 写启动状态、`--next-wave` 读取状态/max-workers、跳过中断条目、无可启动、循环依赖和仓库锁占用，以及 `--impl agent --agent-model` 的命令后缀、状态写入/读回、旧状态回退 codex 与非法参数，不调用真实 orca。另测 `FLASH_ORCHESTRATOR=1` 的首波/恢复路径用 `openclaude`、终端用 `claude-flash`、默认 agent 后端写入状态，以及无标记的下一波从状态读回 flash 选择。
 - **codex 后端**：`scripts/selftest-codex.sh [--only L1|V1|V2|V3]`。各级的内容见脚本开头的注释和 `docs/codex-backend.md` 第三节：

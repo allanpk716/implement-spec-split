@@ -23,6 +23,10 @@ const LIMIT = 10;
 const TOOLS = new Set(['Edit', 'Write', 'NotebookEdit', 'Bash']);
 const FLASH_REASON =
   'flash 会话不写源码：派 glm-5.3 子代理（或 codex worker）。';
+const BARE_CODEX_EXEC_REASON =
+  '不要直接调 codex exec：它没有卡死检测（2026-11-22 曾挂 10 小时）。' +
+  '用 ~/.claude/skills/implement-spec-split/scripts/codex-worker.sh；' +
+  '会话内实现者直接自己写代码。';
 const TEXT_EXTENSIONS = new Set([
   '.md',
   '.txt',
@@ -372,6 +376,124 @@ function isSourceBashWrite(command) {
   return false;
 }
 
+const SHELL_COMMAND_SEPARATORS = new Set([
+  '|',
+  '||',
+  ';',
+  '&&',
+  '&',
+  '(',
+  ')',
+  '\n',
+]);
+const CODEX_VALUE_OPTIONS = new Set([
+  '-C',
+  '--cd',
+  '-c',
+  '--config',
+  '-m',
+  '--model',
+  '--profile',
+  '--image-limit',
+]);
+
+function isCommandSeparator(token) {
+  return !token.quoted && SHELL_COMMAND_SEPARATORS.has(token.text);
+}
+
+function isRedirectionToken(token) {
+  return !token.quoted && /^\d*[<>]+$/.test(token.text);
+}
+
+function baseNameOf(value) {
+  const normalized = String(value).replace(/\\/g, '/');
+  const parts = normalized.split('/');
+  return parts[parts.length - 1] || '';
+}
+
+function codexRunsExec(tokens, startIndex) {
+  for (let index = startIndex; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (isCommandSeparator(token)) return false;
+    if (!token.quoted && token.text.startsWith('-')) {
+      const option = token.text.split('=', 1)[0] || token.text;
+      if (
+        !token.text.includes('=') &&
+        CODEX_VALUE_OPTIONS.has(option) &&
+        index + 1 < tokens.length &&
+        !isCommandSeparator(tokens[index + 1])
+      ) {
+        index += 1;
+      }
+      continue;
+    }
+    return token.text === 'exec';
+  }
+  return false;
+}
+
+function isBareCodexExec(command) {
+  const tokens = withoutHeredocBody(tokenizeShell(command));
+  let index = 0;
+  while (index < tokens.length) {
+    let cursor = index;
+    let commandToken;
+    while (cursor < tokens.length) {
+      const token = tokens[cursor];
+      if (isCommandSeparator(token)) break;
+      if (isRedirectionToken(token)) {
+        cursor += 1;
+        const target = tokens[cursor];
+        if (
+          target &&
+          !isCommandSeparator(target) &&
+          !isRedirectionToken(target) &&
+          !target.text.startsWith('&')
+        ) {
+          cursor += 1;
+        }
+        continue;
+      }
+      if (
+        !token.quoted &&
+        (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token.text) ||
+          token.text === 'env' ||
+          token.text === 'nohup' ||
+          token.text === 'time')
+      ) {
+        cursor += 1;
+        continue;
+      }
+      if (!token.quoted && token.text === 'timeout') {
+        cursor += 1;
+        if (
+          cursor < tokens.length &&
+          !isCommandSeparator(tokens[cursor]) &&
+          !isRedirectionToken(tokens[cursor])
+        ) {
+          cursor += 1;
+        }
+        continue;
+      }
+      commandToken = token;
+      break;
+    }
+    if (
+      commandToken !== undefined &&
+      baseNameOf(commandToken.text) === 'codex' &&
+      codexRunsExec(tokens, cursor + 1)
+    ) {
+      return true;
+    }
+    let next = commandToken === undefined ? cursor : cursor + 1;
+    while (next < tokens.length && !isCommandSeparator(tokens[next])) {
+      next += 1;
+    }
+    index = next + 1;
+  }
+  return false;
+}
+
 function isSourceFileName(filePath) {
   const fileName = fileNameOf(filePath);
   if (TEXT_FILENAMES.has(fileName)) return false;
@@ -499,11 +621,18 @@ function main() {
     const isSubagent =
       typeof payload.agent_id === 'string' && payload.agent_id !== '';
     if (payload.tool_name === 'Bash') {
-      if (!flashMode) return;
-      if (isSubagent) return;
       const command = toolInput.command;
-      if (typeof command !== 'string' || command === '') return;
-      if (isSourceBashWrite(command)) deny(FLASH_REASON);
+      if (typeof command === 'string' && command !== '') {
+        // Bare `codex exec` has no stuck detection; block it in every session
+        // (including subagents and non-flash sessions) before the mode rules.
+        if (isBareCodexExec(command)) {
+          deny(BARE_CODEX_EXEC_REASON);
+          return;
+        }
+        if (!flashMode) return;
+        if (isSubagent) return;
+        if (isSourceBashWrite(command)) deny(FLASH_REASON);
+      }
       return;
     }
 
