@@ -409,6 +409,46 @@ TOPIC_FILE_RUN_DIR=$(dirname "$(cat "$REPORT_LOG")")
 expect_same_file "$TOPIC_FILE" 'topic file run preserves the topic verbatim' \
   "$TOPIC_FILE_RUN_DIR/topic.md"
 
+# A recent un-handed session for this repository warns before a new launch.
+RECENT_DATE=$(date +%Y%m%d)
+RECENT_DISPLAY="${RECENT_DATE:0:4}-${RECENT_DATE:4:2}-${RECENT_DATE:6:2}"
+PENDING_DIR=$WORK/runs/implement-spec-split-$RECENT_DATE-0901-feature
+mkdir -p "$PENDING_DIR"
+printf '%s\n' 'Old feature topic' > "$PENDING_DIR/topic.md"
+run_design_session "$WORK/pending-reminder.out" feature 'Fresh feature' --timeout 1
+expect_exit 0 'pending session reminder still launches successfully'
+if [ "$(cat "$WORK/pending-reminder.out")" = "$(cat "$REPORT_LOG")" ]; then
+  record PASS 'pending session reminder run still prints the handoff path'
+else
+  record FAIL 'pending session reminder run still prints the handoff path' \
+    "stdout=$(cat "$WORK/pending-reminder.out")"
+fi
+expect_file_has '提醒：本仓库还有 1 个 Design session 没交接：' \
+  'pending session reminder header is printed' "$RUN_STDERR"
+expect_file_has "- $RECENT_DISPLAY 09:01 feature Old feature topic" \
+  'pending session reminder lists the session' "$RUN_STDERR"
+expect_file_has "续等：design-session.sh --attach $PENDING_DIR" \
+  'pending session reminder shows the attach command' "$RUN_STDERR"
+# Mark this scratch session handled so later launches stay quiet.
+printf '%s\n' 'Spec #15, tickets #18.' > "$PENDING_DIR/handoff.md"
+
+# Old, already-handed and other-repository sessions do not warn.
+OLD_DATE=$(date -v-8d +%Y%m%d 2>/dev/null || date -d '8 days ago' +%Y%m%d)
+OLD_DIR=$WORK/runs/implement-spec-split-$OLD_DATE-0902-feature
+mkdir -p "$OLD_DIR"
+printf '%s\n' 'Ancient topic' > "$OLD_DIR/topic.md"
+OTHER_REPO_DIR=$WORK/runs/spec-999-$RECENT_DATE-0903-map
+mkdir -p "$OTHER_REPO_DIR"
+printf '%s\n' 'Other repo topic' > "$OTHER_REPO_DIR/topic.md"
+run_design_session "$WORK/no-reminder.out" feature 'Clean feature' --timeout 1
+expect_exit 0 'quiet launch succeeds'
+if grep -Fq '提醒：' "$RUN_STDERR"; then
+  record FAIL 'old, handed-over and other-repo sessions do not remind' \
+    "stderr=$(cat "$RUN_STDERR")"
+else
+  record PASS 'old, handed-over and other-repo sessions do not remind'
+fi
+
 run_design_session "$WORK/missing-topic-file-value.out" feature --topic-file \
   --timeout 1
 expect_exit 64 'missing topic-file value is a usage error'
@@ -610,6 +650,8 @@ expect_file_has '7200000ms' 'feature skill documents the script cap' "$FEATURE_S
 expect_file_has '--attach' 'feature skill can resume a timed-out wait' "$FEATURE_SKILL"
 expect_file_has 'completion notification' 'feature skill waits for completion notification' "$FEATURE_SKILL"
 expect_file_has 'handoff.md' 'feature skill returns through the handoff' "$FEATURE_SKILL"
+expect_file_has '提醒：本仓库还有' \
+  'feature skill relays pending session reminders' "$FEATURE_SKILL"
 expect_file_has 'name: grill-map' 'map skill has its name' "$MAP_SKILL"
 expect_file_has '大模块' 'map description mentions large modules' "$MAP_SKILL"
 expect_file_has 'wayfinder' 'map description carries wayfinder trigger' "$MAP_SKILL"
@@ -623,6 +665,8 @@ expect_file_has '7200000ms' 'map skill documents the script cap' "$MAP_SKILL"
 expect_file_has '--attach' 'map skill can resume a timed-out wait' "$MAP_SKILL"
 expect_file_has 'completion notification' 'map skill waits for completion notification' "$MAP_SKILL"
 expect_file_has 'handoff.md' 'map skill returns through the handoff' "$MAP_SKILL"
+expect_file_has '提醒：本仓库还有' \
+  'map skill relays pending session reminders' "$MAP_SKILL"
 expect_file_has 'grill-feature' 'README documents the feature skill symlink' "$ROOT/README.md"
 expect_file_has 'grill-map' 'README documents the map skill symlink' "$ROOT/README.md"
 expect_file_has 'grill-feature' 'setup documents the feature skill symlink' "$ROOT/docs/setup.md"

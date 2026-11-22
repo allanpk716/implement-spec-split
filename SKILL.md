@@ -85,6 +85,8 @@ If you need to know whether the blocking Spec is being worked on, check it fresh
 
 ### Recovery
 
+**Clock first.** When resuming this Run, continuing after `/clear`, or judging how long a role or process has run and whether it is still alive, run `date` first for the current time, then `ps -o pid,etime,time,command -p <pid>` for the process's elapsed time (`etime`) and CPU time (`time`); never derive a duration from clock times found in logs. A process whose elapsed time is long while its CPU time is near zero is stalled — treat it as stuck, not as working.
+
 Never read `run.json`: it is display-only and may be stale or missing. GitHub and the worktrees are the only source of truth. Continue the Spec on its existing integration branch and integration worktree (`git worktree list` shows where `spec-<n>` is checked out). Closed tickets count as already merged; only the open ones form the frontier. Then, for each leftover ticket worktree of this Spec (`spec-<n>-t<m>` in `git worktree list`), with its newest run dir under `~/.cache/implement-spec-split/runs/<repo>-<n>-*/`:
 
 - its wrapper still running (`pgrep -f <run dir>`, or `progress.sh` says `running` / `queued`): wait for it, never kill it;
@@ -98,6 +100,8 @@ Never read `run.json`: it is display-only and may be stale or missing. GitHub an
 
 "Dispatch <role>" below means: with the `agent` backend, an In-session subagent with `model:` the agent model (`--agent-model`, default `IMPLEMENT_MODEL`); with the `codex` or `pi` backend, an External worker (see below).
 
+**Implementing roles do not re-delegate.** With the `agent` backend, the implementer, merger, and fix roles write the code and make the commits themselves in their assigned worktree. They never start another worker (`codex`, `pi`, `claude`, `claude-glm`, or `orca orchestration worker-start`); if a hook blocks them, they stop and state that in their report. Deterministic formatting commands (`gofmt -w`, `goimports -w`, `go fmt`) do not count as writing source: any role runs them directly instead of dispatching a worker for them. No role starts a background process and then ends its turn to wait for a notification; if it must wait, it waits in the foreground with a sufficient timeout. External workers are started only through their wrapper scripts (`scripts/codex-worker.sh` / `scripts/pi-worker.sh`).
+
 **Progress tabs.** After dispatching an implementing role (implementer, merger, or fix), when `ORCA_WORKTREE_ID` is set and `orca` is on the `PATH`, open one read-only Orca terminal tab for that dispatch. Use the worktree being implemented (the integration worktree for merger and fix), the integration branch as `--base`, and these titles: `spec-<n> t<m>` for an implementer, `spec-<n> merge t<m>` for a merger, and `spec-<n> fix` for a fix role. Quote the complete command when passing it to Orca:
 
 ```bash
@@ -107,6 +111,18 @@ orca terminal create --worktree current --title "<title>" \
 ```
 
 Pass `--run-dir` only for the `codex` and `pi` backends. Extract a non-empty terminal handle from the JSON, and append `"<title><TAB><handle>"` to this Run's Spec Run root (`~/.cache/implement-spec-split/runs/<repo>-<n>-*/orca-tabs.txt`); if that file already has the title, do not open another tab for it. This is display only: a failed create, JSON parse, or handle append is a warning and must not affect the flow.
+
+**Watchdog.** After dispatching any implementing role (implementer, merger, or fix — every backend), if no watchdog is running for this Run, start one with Bash `run_in_background: true`:
+
+```bash
+<skill dir>/scripts/run-watchdog.sh --watch <worktree>[=<worker run dir>] [--watch ...] \
+  [--stall 2700] [--interval 300] [--max 7200]
+```
+
+Pass one `--watch` per currently running role: the worktree it changes (the integration worktree for merger and fix), with `=<run dir>` appended for `codex`/`pi` workers. Set the Bash `timeout` to `(--max + 600) × 1000` ms. When new roles are dispatched, stop the old watchdog and start a fresh one over the new set. When its completion notification arrives, read the exit code and the lines it printed:
+
+- `0` (every watched worktree is gone) or `2` (still progressing at `--max`): if any role is still running, start another watchdog.
+- `3` (no fingerprint progress for `--stall`): for an External worker, first run `progress.sh <run dir>` — the wrapper has its own Idle timeout; while the wrapper is alive, just re-arm the watchdog. For an In-session subagent, SendMessage it for status and tell it to finish in the foreground, and check with `ps` for processes it started (the Clock-first rules in Recovery apply). If the next watchdog report flags the same role again, treat it as `stalled`: stop that role; re-dispatch in place if its worktree has commits, otherwise dispatch fresh; count it toward the consecutive-failure rules (the Unattended-landing and Flash-mode second-failure rules below still apply).
 
 1. Mark `split` (run-phase.sh), then read the spec and tickets; build the task graph / frontier. The issue tracker comes from the repo's `docs/agents/issue-tracker.md`; if missing, tell the user to run `/setup-matt-pocock-skills`. Use exactly the Spec-to-Ticket resolution rules in step 0 (including a single-ticket Spec whose only Ticket is the referenced map implementation ticket).
 2. (optional) Dispatch an exploration role. It saves its markdown notes in a directory outside the repo, accessible by all later roles, so implementers can focus on implementation. It must not modify the repo.
@@ -156,6 +172,7 @@ Pass `--run-dir` only for the `codex` and `pi` backends. Extract a non-empty ter
 
 The user authorised this batch to land without them, typically to run overnight: nobody will answer a question, and by morning this session's cache has expired, so waiting costs tokens and gains nothing. Two rules decide everything here: save tokens, and never sit waiting for a person. Wherever this file says "ask the user", "tell the user" or "confirm", apply the matching rule below instead; anything not listed means **park** (see below).
 
+- **Watchdog**: the Watchdog rule in Steps is mandatory here — keep one running after every dispatch of an implementing role; an unattended session must never sit waiting only for notifications.
 - **Landing (step 9)**: no confirmation.
 - **Design-level review items (step 8)**: resolve them yourself when the Spec, its tickets or an ADR already answer them, and record each decision in the landing report. Park only when it is a real trade-off the user has not decided.
 - **Main merge (step 9.1)**: conflicts — dispatch a merger, then run one `REVIEW_MODEL` review of the conflict resolution only (`mattpocock-skills:code-review` with the pre-merge `spec-<n>` tip as fixed point); clean → continue, findings → one fix role, then continue if green. Failing tests after the merge — dispatch a fix role with the failure output, at most 2 rounds, then park.
