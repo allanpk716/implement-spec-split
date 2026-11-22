@@ -5,11 +5,15 @@ set -u
 
 usage() {
   cat <<'USAGE'
-Usage: grill-status.sh [<repo dir>] [-h|--help]
+Usage: grill-status.sh [--tsv] [<repo dir>] [-h|--help]
 
 Without <repo dir>, the current directory is used. For every Design session run
 under DESIGN_SESSION_ROOT (default ~/.cache/implement-spec-split/design), print
 its topic, spec states, and ticket progress.
+
+With --tsv, print one tab-separated line per topic instead: run directory
+name, kind, time, status (done|ongoing|interrupted), topic, comma-separated
+spec numbers, and comma-separated unclosed spec numbers.
 USAGE
 }
 
@@ -19,11 +23,16 @@ die() {
 }
 
 REPO_ARG=
+MODE=human
 while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help)
       usage
       exit 0
+      ;;
+    --tsv)
+      MODE=tsv
+      shift
       ;;
     *)
       [ -z "$REPO_ARG" ] || die "unknown extra argument: $1"
@@ -69,6 +78,8 @@ for RUN_DIR in "$ROOT/$REPO_NAME"-*/; do
   TOPIC_FILE=$RUN_DIR/topic.md
   TITLE='（题目未记录）'
   DETAIL_OUTPUT=
+  SPEC_NUMBERS=
+  OPEN_SPEC_NUMBERS=
 
   if [ -f "$HANDOFF" ]; then
     HANDOFF_LINE=
@@ -101,6 +112,8 @@ for RUN_DIR in "$ROOT/$REPO_NAME"-*/; do
         DETAIL_OUTPUT="${DETAIL_OUTPUT}  #$ISSUE_NUMBER （查询失败）
 "
         ALL_CLOSED=0
+        SPEC_NUMBERS="${SPEC_NUMBERS:+$SPEC_NUMBERS,}$ISSUE_NUMBER"
+        OPEN_SPEC_NUMBERS="${OPEN_SPEC_NUMBERS:+$OPEN_SPEC_NUMBERS,}$ISSUE_NUMBER"
         continue
       fi
 
@@ -122,7 +135,13 @@ EOF
         DETAIL_OUTPUT="${DETAIL_OUTPUT}  #$ISSUE_NUMBER （查询失败）
 "
         ALL_CLOSED=0
+        SPEC_NUMBERS="${SPEC_NUMBERS:+$SPEC_NUMBERS,}$ISSUE_NUMBER"
+        OPEN_SPEC_NUMBERS="${OPEN_SPEC_NUMBERS:+$OPEN_SPEC_NUMBERS,}$ISSUE_NUMBER"
         continue
+      fi
+      SPEC_NUMBERS="${SPEC_NUMBERS:+$SPEC_NUMBERS,}$ISSUE_NUMBER"
+      if [ "$ISSUE_STATE" != CLOSED ]; then
+        OPEN_SPEC_NUMBERS="${OPEN_SPEC_NUMBERS:+$OPEN_SPEC_NUMBERS,}$ISSUE_NUMBER"
       fi
       if [ "$TICKETS_TOTAL" -eq 0 ]; then
         TICKET_PROGRESS='票 -'
@@ -159,12 +178,30 @@ EOF
   fi
 
   TOTAL=$((TOTAL + 1))
-  printf '■ %s  (%s %s)  %s\n' "$TITLE" "$DISPLAY_TIME" "$RUN_KIND" "$STATE"
-  [ -z "$DETAIL_OUTPUT" ] || printf '%s' "$DETAIL_OUTPUT"
+  if [ "$MODE" = tsv ]; then
+    case "$STATE" in
+      '已完成') TSV_STATE=done ;;
+      '进行中') TSV_STATE=ongoing ;;
+      *) TSV_STATE=interrupted ;;
+    esac
+    TSV_TITLE=$(printf '%s' "$TITLE" | tr '\t\r\n' '   ')
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$RUN_BASE" "$RUN_KIND" "$DISPLAY_TIME" "$TSV_STATE" "$TSV_TITLE" \
+      "$SPEC_NUMBERS" "$OPEN_SPEC_NUMBERS"
+  else
+    printf '■ %s  (%s %s)  %s\n' "$TITLE" "$DISPLAY_TIME" "$RUN_KIND" "$STATE"
+    [ -z "$DETAIL_OUTPUT" ] || printf '%s' "$DETAIL_OUTPUT"
+  fi
 done
 
 if [ "$TOTAL" -eq 0 ]; then
-  printf '%s\n' '（本仓库没有 Design session 记录）'
+  if [ "$MODE" != tsv ]; then
+    printf '%s\n' '（本仓库没有 Design session 记录）'
+  fi
+  exit 0
+fi
+
+if [ "$MODE" = tsv ]; then
   exit 0
 fi
 

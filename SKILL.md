@@ -133,6 +133,14 @@ Pass `--run-dir` only for the `codex` and `pi` backends. Extract a non-empty ter
    4. `lock.sh release land --scope repo`. Release it on every exit path, including failures and the user saying stop.
 
    If the tracker closes work through PRs instead (a draft PR exists), skip 2–3: mark the PR ready for review and release the lock. Then resolve each ticket the way the tracker closes work. Close the Spec too, and every map implementation ticket on its `实现票` line, even when that implementation ticket has its own sub-issues: an implementation ticket left open after its Spec closes looks unfinished to the tracker, and `find-next` / `pipeline-status.sh` may list it as needing a spec again. When tickets still wait for another Spec, land what is done but keep the Spec, those tickets and the implementation ticket open.
+   **Completion conclusion (after a completed landing only).** Once the tickets and Spec have been closed as above — after a direct landing, or after an unattended PR merge — run:
+
+   ```bash
+   <skill dir>/scripts/completion-report.sh <主 checkout> --spec <n> --notify
+   ```
+
+   and save the output verbatim to `<Spec Run root>/completion.txt`. Do not run it after parking, a user-declined landing, or a PR that has not merged. The script is read-only and deterministic (it never tags and never pushes, so Flash mode needs no special handling); if it exits nonzero, relay stderr and continue without `completion.txt` — the landing itself is already done.
+
    5. **Start the next wave only after a completed direct landing.** If and only if step 2's `git push` succeeded, step 3 has handled the local main branch (including the safe case where it had to be left untouched and reported), and the tickets and Spec have been closed as described above (check with `gh issue view <n> --json state`; `Closes #n` closes asynchronously, and a Spec still open makes its dependents look blocked, so the script would report “无可启动”), run exactly this one launch script:
 
       ```bash
@@ -157,7 +165,7 @@ The user authorised this batch to land without them, typically to run overnight:
 
 **Park** = post a **Parking report** (GLOSSARY.md) on the Spec issue with `gh issue comment`: `## 停车报告`, why the Run stopped, the branch and run dirs, what is already merged into `spec-<n>`, and the exact next step for a human (e.g. "回 find-next 选『先恢复』" or the decision to make). Mark `parked`, then release the landing lock if held, let running workers finish or leave them (Recovery handles them), do step 10 except that the Orca status is `in-review` and the tab `spec-<n> ⏸`, and end the Run. Do not run step 9.5. Other Specs of the batch carry on independently.
 
-**Landing report**: after a successful unattended landing, post the final report (below) on the Spec issue as `## 落地报告`, condensed: tickets landed, review findings and how each was resolved (including decisions made under the design-level rule), tickets left waiting for another Spec, and the Specs step 9.5 started. The user reads GitHub in the morning instead of reopening this session.
+**Landing report**: after a successful unattended landing, post the final report (below) on the Spec issue as `## 落地报告`, condensed: when `completion.txt` exists, put its contents verbatim at the very top of the comment, then tickets landed, review findings and how each was resolved (including decisions made under the design-level rule), tickets left waiting for another Spec, and the Specs step 9.5 started. The user reads GitHub in the morning instead of reopening this session.
 
 ## Flash mode (`FLASH_ORCHESTRATOR=1`)
 
@@ -245,6 +253,7 @@ If any check fails, re-brief once with what is missing; if it still fails, ask t
 
 ## Report at the end
 
+- If `<Spec Run root>/completion.txt` exists, put its contents verbatim at the very top of the final report, before everything else.
 - Which backend and model ran each role (implement / merge / fix / review), and any role that ran on a different backend than configured, and why.
 - For External workers: one line per run with ticket, status, segments (`status.json`; more than 1 means it was Resumed), duration and run directory; whether the run overlapped GLM peak hours.
 - The review findings per axis, and how they were resolved.

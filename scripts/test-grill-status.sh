@@ -192,6 +192,43 @@ else
   record PASS 'no records avoids gh calls'
 fi
 
+: > "$GH_LOG"
+run_grill_status "$WORK/tsv.out" --tsv "$REPO"
+expect_exit 0 'tsv mode succeeds'
+{
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    grill-status-demo-20260101-0900-feature feature '2026-01-01 09:00' done \
+    '完成 grill 状态' 101,102 ''
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    grill-status-demo-20260102-1000-feature feature '2026-01-02 10:00' ongoing \
+    '进行中的 grill' 103,404 103,404
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    grill-status-demo-20260102-1030-feature feature '2026-01-02 10:30' interrupted \
+    "${EXPECTED_LONG_TOPIC}…" '' ''
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    grill-status-demo-20260102-1115-map map '2026-01-02 11:15' interrupted \
+    '（题目未记录）' '' ''
+} > "$WORK/expected-tsv.out"
+expect_same_file "$WORK/expected-tsv.out" 'tsv mode covers states and spec lists' \
+  "$WORK/tsv.out"
+
+: > "$GH_LOG"
+(
+  cd "$REPO"
+  PATH="$BIN:$PATH" \
+    DESIGN_SESSION_ROOT=$EMPTY_ROOT \
+    GRILL_TEST_REPO=$REPO \
+    GRILL_TEST_GH_LOG=$GH_LOG \
+    bash "$SCRIPT" --tsv
+) > "$WORK/no-runs-tsv.out" 2> "$RUN_STDERR"
+RUN_EXIT=$?
+expect_exit 0 'no records in tsv mode is successful'
+if [ -s "$WORK/no-runs-tsv.out" ]; then
+  record FAIL 'no records in tsv mode is empty' "output=$(cat "$WORK/no-runs-tsv.out")"
+else
+  record PASS 'no records in tsv mode is empty'
+fi
+
 run_grill_status "$WORK/help.out" --help
 expect_exit 0 'help succeeds'
 expect_file_has 'Usage: grill-status.sh' 'help prints usage' "$WORK/help.out"

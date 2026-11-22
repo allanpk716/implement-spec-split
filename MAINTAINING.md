@@ -183,6 +183,8 @@
     - 建地图必须用户同意：地图的 Destination 和首批票是范围承诺，worker 只能给草案；同意后主会话建 `wayfinder:map`、子票和阻塞，并在同一轮复查扫描里继续推进新地图。默认关闭原散票并链接新地图，只有草案明确说明更好时才把原票挂为子票改造成首张 decision/research 票。
     - 搁置执行票不待实现：`pipeline-status.sh` 构建可实现规格和开发顺序时跳过 `isShelved` 的执行票；若某规格的未关执行票全是搁置票（如 nexa #40 只剩 #47），该规格不进「可以实现」/`--order`/波次，而在 `--all` 的「状态没收尾」提示可关闭规格。混合规格仍可实现，票列表给搁置票加 `(搁置)` 后缀，进度分母不变。
 
+17. **2026-11-22：grill 题目最后一份规格落地时必须给出完成度结论与发版推荐；「等待时机」分流结论写回票面。** 起因：三份规格全部落地、master 比上一个 tag 多 75 个提交，收尾报告却只说「#371 等待时机」，用户看不出「做完了、该你发版」；同一天 `/find-next --batch 371` 跑三次，每次都重新分流同一张票，因为第 4 步只汇报不写票面。决定：`scripts/completion-report.sh` 统一产出「本次题目进度 + 全仓库状态 + 是否发版（含建议版本号）+ 会解冻的等待时机票 + 中断 grill」，implement-spec-split 落地成功后、find-next 收尾和 `--list` 都把它放在最上面；散票分流判为「等待时机」后由主会话把 `时机：<条件>` 写回票面、去掉 `needs-triage` 并留分流记录，下次扫描直接跳过。
+
 ## 评估过、没有采纳的方案
 
 以后再有人提议引入同类东西，先看这里的理由是否还成立，别重复评估。
@@ -222,6 +224,7 @@
 - **票进度标签**：`bash scripts/test-ticket-watch.sh`。用临时 git 仓库测 `ticket-watch.sh --once` 的 worktree、分支、领先提交、脏文件、最近提交和外部 worker run dir 输出，worktree 清理后的零退出提示，以及缺失参数和非法 interval 的报错，不访问网络。
 - **锁与领取记录**：`bash scripts/test-locks.sh`。测 `lock.sh` 的互斥、重入、等待超时、死持有者接管、槽位排队，`claim.sh` 的领取、并发领取、恢复与释放权限、交接预留与接手，worker 上限配置文件，以及两个 `codex-worker.sh` 在 `ISS_MAX_WORKERS=1` 下排队，不访问网络。
 - **Design session**：`bash scripts/test-design-session.sh`。用假 orca 测 feature/map prompt、`--agent claude`、`orchestration check --wait` 超时、会话退出、launch/check 失败、handoff 缺失和两个薄技能文本，不调用真实 Orca。
+- **完成度结论**：`bash scripts/test-completion-report.sh`。用临时 Design session 目录、带 tag 与提交的临时 git 仓库、假 `gh` 和假通知命令，测情形 1/2（推荐 A/B）/3、无 tag、未发布提交为 0、minor/patch/非语义化 tag 版本号、发版解冻与普通等待时机、中断 grill、`--notify` 仅完成时通知一次且失败不改变退出码、gh 失败写「（查询失败）」和用法错误退出 64，不访问网络。
 - **grill 进度查询**：`bash scripts/test-grill-status.sh`。用临时 Design session 目录和假 `gh` 测已完成 / 进行中 / 中断（有无 topic.md）、仓库名前缀不误匹配、gh 失败和无记录，不访问网络。
 - **自动启动第 1 波**：`bash find-next/scripts/test-launch-wave.sh`。用假 pipeline-status、claim、max-workers、orca 测试运行输出、不在 Orca 时的手动输出、预留后再启动、预留冲突跳过、启动失败撤销预留并删空分支、`--only` 过滤和恢复条目（含原 worktree 不在 Orca 时在主工作树开终端标签、路径带空格的转义）、`--apply` 写启动状态、`--next-wave` 读取状态/max-workers、跳过中断条目、无可启动、循环依赖和仓库锁占用，以及 `--impl agent --agent-model` 的命令后缀、状态写入/读回、旧状态回退 codex 与非法参数，不调用真实 orca。另测 `FLASH_ORCHESTRATOR=1` 的首波/恢复路径用 `openclaude`、终端用 `claude-flash`、默认 agent 后端写入状态，以及无标记的下一波从状态读回 flash 选择。
 - **codex 后端**：`scripts/selftest-codex.sh [--only L1|V1|V2|V3]`。各级的内容见脚本开头的注释和 `docs/codex-backend.md` 第三节：
