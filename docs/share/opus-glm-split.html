@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Opus 想清楚、GLM 写出来</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --line:#2a2f3a; --text:#e8e6e1; --mute:#9aa0aa;
+    --opus:#d97757; --opus-soft:rgba(217,119,87,.14);
+    --glm:#4f9cf0;  --glm-soft:rgba(79,156,240,.14);
+    --ok:#5cc28a; --warn:#e8b04a;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:#000}
+  body{display:flex;align-items:center;justify-content:center;overflow:hidden;
+       font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;color:var(--text)}
+  .slide{width:1920px;height:1080px;background:var(--bg);padding:40px 60px 30px;
+         display:grid;grid-template-rows:auto 1fr auto;gap:18px;transform-origin:center;flex:none}
+  code,.mono{font-family:"SF Mono","JetBrains Mono",Menlo,Consolas,monospace}
+
+  header{display:flex;align-items:flex-end;justify-content:space-between;gap:40px}
+  h1{font-size:44px;font-weight:800;letter-spacing:1px;line-height:1.1}
+  h1 .o{color:var(--opus)} h1 .g{color:var(--glm)}
+  .sub{font-size:18px;color:var(--mute);margin-top:8px;white-space:nowrap}
+  .tags{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+  .tag{font-size:16px;padding:8px 14px;border-radius:10px;border:1px solid var(--line);background:var(--panel);white-space:nowrap}
+  .tag b{font-weight:700}
+  .tag.o{border-color:var(--opus);background:var(--opus-soft)} .tag.o b{color:var(--opus)}
+  .tag.g{border-color:var(--glm);background:var(--glm-soft)}  .tag.g b{color:var(--glm)}
+
+  main{display:grid;grid-template-columns:540px 1fr 390px;gap:34px;min-height:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:26px 28px;display:flex;flex-direction:column;min-height:0}
+  .card h2{font-size:26px;font-weight:700;margin-bottom:18px;display:flex;align-items:center;gap:10px}
+  .card h2 .n{font-size:15px;color:var(--mute);font-weight:500;margin-left:auto}
+
+  .matrix{display:grid;grid-template-columns:40px 1fr 1fr;grid-template-rows:42px 1fr 1fr;gap:10px;flex:1}
+  .ax{font-size:18px;color:var(--mute);display:flex;align-items:center;justify-content:center;text-align:center}
+  .ax.v{writing-mode:vertical-rl;letter-spacing:4px}
+  .cell{border-radius:14px;padding:16px 16px;font-size:18px;line-height:1.55;display:flex;flex-direction:column;gap:6px}
+  .cell .who{font-size:22px;font-weight:800}
+  .cell.o{background:var(--opus-soft);border:1px solid rgba(217,119,87,.5)} .cell.o .who{color:var(--opus)}
+  .cell.g{background:var(--glm-soft);border:1px solid rgba(79,156,240,.5)}  .cell.g .who{color:var(--glm)}
+  .cell.mix{background:linear-gradient(135deg,var(--opus-soft),var(--glm-soft));border:1px solid #555}
+  .cell.mix .who{background:linear-gradient(90deg,var(--opus),var(--glm));-webkit-background-clip:text;color:transparent}
+  .cell.lite{background:#1d2028;border:1px dashed #444} .cell.lite .who{color:#cfa58f}
+  .rule{margin-top:16px;font-size:18px;color:var(--mute);line-height:1.6}
+  .rule b{color:var(--text)}
+
+  .flow{display:flex;flex-direction:column;gap:12px;flex:1;position:relative}
+  .step{display:grid;grid-template-columns:62px 1fr;gap:18px;align-items:stretch}
+  .dot{border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:800;color:#111}
+  .o .dot{background:var(--opus)} .g .dot{background:var(--glm)}
+  .body{border-radius:14px;padding:14px 20px;border:1px solid var(--line);background:#1b1e26}
+  .o .body{border-left:5px solid var(--opus)} .g .body{border-left:5px solid var(--glm);background:#172131}
+  .body .t{font-size:24px;font-weight:700;display:flex;align-items:baseline;gap:12px}
+  .body .t small{font-size:16px;font-weight:500;color:var(--mute)}
+  .body .d{font-size:18px;color:#c9c6c0;line-height:1.55;margin-top:6px}
+  .body .d code{font-size:16px;background:#262a34;padding:1px 7px;border-radius:6px;color:#f0d9c9}
+  .g .body .d code{color:#cfe3fb}
+  .loop{position:absolute;right:-6px;top:308px;height:137px;width:30px;border:3px dashed var(--warn);border-left:none;border-radius:0 18px 18px 0}
+  .loop-label{position:absolute;right:30px;top:396px;font-size:15px;color:var(--warn);background:var(--bg);padding:3px 10px;border-radius:8px;border:1px solid var(--warn)}
+
+  .guard{display:flex;flex-direction:column;gap:14px;flex:1}
+  .g-item{font-size:18px;line-height:1.55;padding:13px 16px;border-radius:12px;background:#1d2028;border:1px solid var(--line)}
+  .g-item b{display:block;font-size:20px;margin-bottom:3px}
+  .g-item b.r{color:#ef7a7a} .g-item b.y{color:var(--warn)} .g-item b.k{color:var(--ok)}
+  .g-item code{font-size:15px;background:#262a34;padding:1px 6px;border-radius:5px}
+
+  footer{display:grid;grid-template-columns:1fr auto;gap:20px;align-items:center;
+         border-top:1px solid var(--line);padding-top:14px}
+  .cmds{display:flex;gap:10px;flex-wrap:wrap}
+  .cmd{font-size:16px;padding:8px 12px;border-radius:8px;background:#1b1e26;border:1px solid var(--line)}
+  .cmd span{color:var(--mute);font-family:inherit;margin-right:8px;font-size:14px}
+  .cmd code{color:#f3efe8}
+  .fit{font-size:15px;color:var(--mute);text-align:right;line-height:1.4}
+  .fit b{color:var(--text)}
+</style>
+</head>
+<body>
+<div class="slide" id="slide">
+
+  <header>
+    <div>
+      <h1><span class="o">Opus</span> 负责想清楚、判对错，<span class="g">GLM</span> 负责写出来</h1>
+      <div class="sub">Claude Code 原生订阅做方案与验收 · codex agent harness 驱动 GLM-5.4 写代码、修 bug · 开源仓库 implement-spec-split</div>
+    </div>
+    <div class="tags">
+      <div class="tag o"><b>Opus 5.5</b> · Claude Code 订阅 · 额度紧，只花在判断上</div>
+      <div class="tag g"><b>GLM-5.4</b> · codex exec · 额度足，花在体量上</div>
+    </div>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2>谁来做？看两个维度</h2>
+      <div class="matrix">
+        <div></div>
+        <div class="ax">体量小</div>
+        <div class="ax">体量大（大量读写）</div>
+
+        <div class="ax v">判断密集</div>
+        <div class="cell o"><span class="who">Opus 自己做</span>方案讨论、架构取舍、根因判断、审查结论、放行 push / PR</div>
+        <div class="cell mix"><span class="who">拆开做</span>GLM 只读调查、写事实报告 → Opus 读报告后拍板</div>
+
+        <div class="ax v">判断稀疏</div>
+        <div class="cell lite"><span class="who">Opus 顺手做</span>commit、单条命令、≤10 行且根因已明确的修改</div>
+        <div class="cell g"><span class="who">交给 GLM</span>写功能、修 bug、补测试、重构、批量改文件、跑测试直到全绿、解冲突</div>
+      </div>
+      <div class="rule">交接有固定成本：写 Brief、读结果、审查。<b>小任务交出去反而更贵</b>。</div>
+    </section>
+
+    <section class="card">
+      <h2>一次交接的完整流程 <span class="n">橙 = Opus · 蓝 = GLM</span></h2>
+      <div class="flow">
+        <div class="step o"><div class="dot">1</div><div class="body">
+          <div class="t">定方案、拆票 <small>/grill · 规格 Spec · 执行票</small></div>
+          <div class="d">和人把需求问清楚，写成规格，拆成票并标好依赖。<code>/find-next --batch</code> 把要拍板的问题合成一轮问人。</div>
+        </div></div>
+        <div class="step o"><div class="dot">2</div><div class="body">
+          <div class="t">写自包含 Brief <small>worker 看不到对话</small></div>
+          <div class="d">写清目标、文件与行号、根因、改法、<b>验收命令</b>、禁区；写明“不要 commit”。</div>
+        </div></div>
+        <div class="step g"><div class="dot">3</div><div class="body">
+          <div class="t">后台编码 <small>codex-worker.sh → GLM-5.4</small></div>
+          <div class="d">每张票独立 worktree，用 TDD 推进，可并行；<code>progress.sh</code> 查看进度，卡死自动判定；结束写 <code>status.json</code> 和 <code>result.md</code>。</div>
+        </div></div>
+        <div class="step o"><div class="dot">4</div><div class="body">
+          <div class="t">验收与审查 <small>不信 worker 的自述 · 不通过就写新 Brief 回到 ③</small></div>
+          <div class="d">读 <code>git diff</code>，<b>亲自重跑</b>验收命令；合入后两路 Opus 审查：Standards（是否合规范）与 Spec（是否合规格）。</div>
+        </div></div>
+        <div class="step o"><div class="dot">5</div><div class="body">
+          <div class="t">落地 <small>对外动作只由 Opus 执行</small></div>
+          <div class="d">commit → 持锁合入 main → push / PR → 关票，再自动开下一波规格。</div>
+        </div></div>
+        <div class="loop"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>护栏：靠机制，不靠自觉</h2>
+      <div class="guard">
+        <div class="g-item"><b class="r">硬拦截大改动</b>PreToolUse hook <code>delegate-guard</code>：Opus 直接改源码超过 10 行即被拒，只能交给 worker。</div>
+        <div class="g-item"><b class="r">对外动作不外包</b>worker 以 bypass 模式运行、权限很大；push、PR、远程操作、删数据一律由 Opus 执行或先问人。</div>
+        <div class="g-item"><b class="y">按状态码分流</b>ok 照常审查 · quota/auth 先问人 · timeout 续跑一次 · stalled/error 补充 Brief 后重跑 · 只读调查改了文件 → 报告作废。</div>
+        <div class="g-item"><b class="k">并行不打架</b>每张票各自 worktree；合并串行；落地持仓库锁；MCP 默认关闭，按需开启。</div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="cmds">
+      <div class="cmd"><span>日常入口</span><code>/find-next --batch</code></div>
+      <div class="cmd"><span>实现一份规格</span><code>/implement-spec-split &lt;spec&gt; --impl codex</code></div>
+      <div class="cmd"><span>单次交接</span><code>codex-worker.sh --brief brief.md [--read-only]</code></div>
+    </div>
+    <div class="fit">适用于 <b>Claude 订阅额度紧、GLM 额度充足</b>的场景<br>Brief 和审查都要花 Claude token，按量计费时未必省钱</div>
+  </footer>
+</div>
+<script>
+  function fit(){const s=Math.min(innerWidth/1920,innerHeight/1080);document.getElementById('slide').style.transform=`scale(${s})`}
+  addEventListener('resize',fit);fit();
+</script>
+</body>
+</html>
