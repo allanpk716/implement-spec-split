@@ -22,7 +22,7 @@ const path = require('path');
 const LIMIT = 10;
 const TOOLS = new Set(['Edit', 'Write', 'NotebookEdit', 'Bash']);
 const FLASH_REASON =
-  'flash 会话不写源码：派 glm-5.3 子代理（或 codex worker）。';
+  'flash 会话不写源码：派 glm-5.4 子代理（或 codex worker）。';
 const BARE_CODEX_EXEC_REASON =
   '不要直接调 codex exec：它没有卡死检测（2026-11-22 曾挂 10 小时）。' +
   '用 ~/.claude/skills/implement-spec-split/scripts/codex-worker.sh；' +

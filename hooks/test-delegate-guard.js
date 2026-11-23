@@ -325,7 +325,7 @@ testCase('flash mode Write one source line denies', home => {
   );
   assert.match(
     reason,
-    /flash 会话不写源码：派 glm-5\.3 子代理（或 codex worker）/
+    /flash 会话不写源码：派 glm-5\.4 子代理（或 codex worker）/
   );
 });
 

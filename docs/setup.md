@@ -44,7 +44,7 @@ English: [setup.en.md](setup.en.md)
 |---|---|
 | 平台 | Windows 11 + Git Bash：完整验证（含真实 GLM 端到端）。Ubuntu 24.04：无模型的自测全部通过（`selftest-codex.sh --only V1`、hook 测试、doctor 测试），但没有用真实 codex 和 GLM 跑过。macOS 27（系统自带 bash 3.2）：完整验证（codex-cli 0.164.0，含真实 GLM 端到端 V3，2026-10-24）。已知限制：备用的 pi 后端（`pi-worker.sh`）在 Linux/macOS 上杀进程时只杀根进程，在这两个平台上请用 codex 后端 |
 | codex-cli | 0.163.0、0.164.0。其他版本未验证，换版本后先跑 `scripts/selftest-codex.sh --only V1` |
-| 模型 | GLM-5.3，经本地代理 |
+| 模型 | GLM-5.4，经本地代理 |
 | 阶段 1 | `--impl codex`、`--impl pi` 在试验仓库端到端验证过；`--impl sonnet` 未验证 |
 | find-next | 本地 markdown 跟踪器：脚本单测通过，`--worker codex` 在真实仓库实跑过一次（2026-11-01）。GitHub 路径和 `--worker pi` 未实跑 |
 | 阶段 3 | hook 单元测试和本机冒烟测试通过；真实会话里的规则遵守情况仍在验收 |
@@ -169,7 +169,7 @@ ln -s ~/.claude/skills/implement-spec-split/grill-map ~/.claude/skills/grill-map
 
    ```toml
    model_provider = "custom"
-   model = "glm-5.3"
+   model = "glm-5.4"
 
    [model_providers.custom]
    name = "zhipu_glm"
@@ -178,7 +178,7 @@ ln -s ~/.claude/skills/implement-spec-split/grill-map ~/.claude/skills/grill-map
    requires_openai_auth = true
    ```
 
-   provider 的名字必须是 `custom`：wrapper 用 `-c model_provider=custom -m glm-5.3` 钉死 provider 和模型。模型不是 `glm-5.3` 时，调用 `codex-worker.sh` 要加 `--model <id>`，阶段 1 则修改 `SKILL.md` Config 里的 `CODEX_MODEL`。key 不要写进本仓库。
+   provider 的名字必须是 `custom`：wrapper 用 `-c model_provider=custom -m glm-5.4` 钉死 provider 和模型。模型不是 `glm-5.4` 时，调用 `codex-worker.sh` 要加 `--model <id>`，阶段 1 则修改 `SKILL.md` Config 里的 `CODEX_MODEL`。key 不要写进本仓库。
 
    照智谱官方 Codex 教程配置、直连 `open.bigmodel.cn` 的话，教程里的 provider 叫 `ZAI`：把 `model_provider = "ZAI"` 和 `[model_providers.ZAI]` 都改成 `custom`，`name = "ZAI"` 可以保留（codex 0.164 起 `name` 不能为空）。否则 worker 会报 `model_providers.custom: provider name must not be empty`。支持其他 provider 名见 issue #6。
 
@@ -310,7 +310,7 @@ node -e 'console.log(JSON.stringify({tool_name:"Write",tool_input:{file_path:"C:
 
 ## 阶段 4：flash 模式（便宜主会话）
 
-日常调度不花订阅额度：主会话（Orchestrator）由智谱 `glm-5.3-flash` 驱动，只做白名单内的执行与转述；源码修改和大量阅读交给 glm-5.3 子代理；所有结论性判断（审核、根因、取舍、能否落地、是否停车）出会话交给官方订阅的 Opus（[ADR 0001](adr/0001-cheap-orchestrator-default-deny.md)）。本阶段只适配 mini6（macOS）。
+日常调度不花订阅额度：主会话（Orchestrator）由智谱 `glm-5.3-flash` 驱动，只做白名单内的执行与转述；源码修改和大量阅读交给 glm-5.4 子代理；所有结论性判断（审核、根因、取舍、能否落地、是否停车）出会话交给官方订阅的 Opus（[ADR 0001](adr/0001-cheap-orchestrator-default-deny.md)）。本阶段只适配 mini6（macOS）。
 
 **前提**
 
@@ -341,7 +341,7 @@ node -e 'console.log(JSON.stringify({tool_name:"Write",tool_input:{file_path:"C:
 
 **规格会话与 Opus review**
 
-- flash 主会话里跑 `/find-next` 时，launch-wave 用 OpenClaude 槽位（即 flash）开规格会话，默认 `--impl agent`（glm-5.3 子代理实现），一份规格从头跑到尾不占订阅额度。
+- flash 主会话里跑 `/find-next` 时，launch-wave 用 OpenClaude 槽位（即 flash）开规格会话，默认 `--impl agent`（glm-5.4 子代理实现），一份规格从头跑到尾不占订阅额度。
 - flash 规格会话里的代码审核、草稿审读、连续失败诊断不落在会话内（GLM 会话里的 "opus" 子代理实际是 GLM，等于假审核），一律调 `scripts/opus-review.sh` 出会话用官方 Opus 执行：`--kind code`（审分支/固定点）、`--kind draft`（审规格/票草稿）、`--kind diagnose`（诊断失败、建议续跑/改 Brief/停车）。任何非 0 退出码都停车并说明（含义见脚本头注释），不自动重试、不降级 GLM、不会话内自审。
 
 **flash 的边界**

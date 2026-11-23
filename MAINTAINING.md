@@ -100,10 +100,11 @@
 24. **2026-11-20：Flash 模式的审核必须出会话。** 在 GLM 驱动的会话里，Agent 工具传 `opus` 只是把名字映射到 glm-5.3；同会话里开 Standards/Spec「opus」子代理仍是 GLM 审 GLM，等于假审核。因此 `FLASH_ORCHESTRATOR=1` 的代码审核、设计级意见、冲突复审和连续失败诊断都只能调用 `scripts/opus-review.sh`：它会清掉 GLM/Anthropic 代理映射，出会话用官方订阅的 `claude -p --model opus` 执行。脚本失败就停车，不降级到 GLM，也不由会话自审。
 25. **2026-11-22：编排防卡死。** ssh-manager-mcp Spec 349 的 flash 编排会话里，实现子代理为跑一条 `gofmt -w` 裸调 `codex exec`，Bash 超时后命令转入后台，子代理和编排主会话都只「等通知」，codex 进程空转 10 小时无人发现；早上续会话时编排者还把日志里的启动钟点误算成运行时长。owner 定：delegate-guard 对所有会话（含子代理、非 flash、例外开关开启）一律拒绝 Bash 直接调用 `codex exec`，外部 worker 只能走 wrapper；编排派发实现/合并/修复角色后必须挂 `run-watchdog.sh`，指纹无进展即退出唤醒编排者，绝不无限等通知；判断时长先 `date` 再 `ps` 看 etime/time，不从日志钟点推算；`gofmt -w` 这类确定性格式化不算写源码，任何角色直接执行。
 26. **2026-11-23：grill-feature / grill-map 交接后用 launch-wave 开实现会话。** oa-helper 规格 #80 的 Design session 交接回主会话后，主会话按第 5 步「走 `/implement-spec-split 80`」用 Skill 工具调本技能，因为设了 `disable-model-invocation` 被拒，只能停下让用户手敲。本技能保留 `disable-model-invocation`（Run 会花额度、会 push，只能由人或 launch-wave 发起）。两份 grill 技能的第 5 步改为跑 `launch-wave.sh --repo <owner/name> --only <n>[,<m>…] --apply`：它领取规格、开 worktree，并在新 Orca 会话里把 `/implement-spec-split <n>` 当作用户输入发出去。launch-wave 失败，或某份规格要手动启动时，才提示用户手敲。注意：试运行会打印整份开发顺序，`--apply` 只启动 `--only` 里列出的规格。
+27. **2026-11-23：默认 worker 模型升到 GLM-5.4。** 环境侧（`~/.codex-worker/config.toml`、claude-glm / claude-flash 的 models.env）已改用 glm-5.4（1M 上下文、支持图片输入），但 `codex-worker.sh` 默认用 `-m glm-5.3` 显式传模型，config.toml 里的值不起作用，worker 实际仍在跑 5.3。现在把脚本默认值、`SKILL.md` Config（`CODEX_MODEL` / `GLM_MODEL`）、测试和说明文字都改成 5.4；flash 档没有 glm-5.4-flash，仍用 glm-5.3-flash。上面第 24 条、ADR 0001 和 `docs/codex-backend.md` 记录的是当时的实测，保留 5.3 的写法。以后升级模型时，除了改 config，还要改脚本默认值。
 
 ## flash 模式设计要点（2026-11-20 规格定稿，ADR 0001）
 
-三档分工：flash 主会话/规格会话（`claude-flash` = glm-5.3-flash，只执行与转述）、glm-5.3 子代理（全部源码修改与大量阅读）、官方 Opus（一切结论性判断）。要点：
+三档分工：flash 主会话/规格会话（`claude-flash` = glm-5.3-flash，只执行与转述）、glm-5.4 子代理（全部源码修改与大量阅读）、官方 Opus（一切结论性判断）。要点：
 
 - **白名单默认禁止**（不是黑名单）：flash 只做白名单内的事，漏列的情况会上交而不是被当成允许。评估过"flash 自己做小判断"和"黑名单"，都否了——flash 过度自信的小错会在后续波次放大，黑名单漏列即放行。
 - **一行源码都不写**：delegate-guard flash 模式对源码写入阈值 0、`allow-direct-edit` 不生效，靠 hook 硬拦而不是靠 flash 自觉。

@@ -2,10 +2,10 @@
 
 A Claude Code skill: [Matt Pocock's `implement-spec`](https://github.com/mattpocock/skills/tree/main/skills/engineering/implement-spec) with **per-role models**.
 
-- Exploration / implementer / merger / fix run on a cheaper model: in-session subagents (`--impl agent`, model chosen with `--agent-model sonnet|opus|haiku|fable`, default `sonnet`; `--impl sonnet` is the legacy alias), or GLM-5.3 through headless External workers, which spends no Claude quota on coding: `--impl codex` ([codex](https://github.com/openai/codex) `exec --json`, with live progress via `scripts/progress.sh`) or `--impl pi` ([pi](https://github.com/earendil-works/pi-mono)). Without `--impl` the backend is picked per session: `codex` in an official-subscription Claude Code session, `agent` in a GLM-driven one (`DELEGATE_GUARD_DISABLE=1`, e.g. `claude-glm`).
+- Exploration / implementer / merger / fix run on a cheaper model: in-session subagents (`--impl agent`, model chosen with `--agent-model sonnet|opus|haiku|fable`, default `sonnet`; `--impl sonnet` is the legacy alias), or GLM-5.4 through headless External workers, which spends no Claude quota on coding: `--impl codex` ([codex](https://github.com/openai/codex) `exec --json`, with live progress via `scripts/progress.sh`) or `--impl pi` ([pi](https://github.com/earendil-works/pi-mono)). Without `--impl` the backend is picked per session: `codex` in an official-subscription Claude Code session, `agent` in a GLM-driven one (`DELEGATE_GUARD_DISABLE=1`, e.g. `claude-glm`).
 - The two code-review subagents (Standards and Spec, from `mattpocock-skills:code-review`) always run on a stronger model (`opus`, or `fable`).
 
-The `agent` backend exists for machines where the Agent tool's model names reach a non-Anthropic endpoint — for example, in a GLM proxy environment, explicitly passing `model: opus` actually runs GLM-5.3, so `/implement-spec-split <n> --impl agent --agent-model opus` lets in-session subagents do the coding without a local codex/pi setup. Unlike the External backends, `--parallel` there caps this Run's concurrent implementing subagents (unlimited when omitted), and agent subagents take no machine-wide worker slots.
+The `agent` backend exists for machines where the Agent tool's model names reach a non-Anthropic endpoint — for example, in a GLM proxy environment, explicitly passing `model: opus` actually runs GLM-5.4, so `/implement-spec-split <n> --impl agent --agent-model opus` lets in-session subagents do the coding without a local codex/pi setup. Unlike the External backends, `--parallel` there caps this Run's concurrent implementing subagents (unlimited when omitted), and agent subagents take no machine-wide worker slots.
 
 The original skill lets every subagent inherit the session model, so you pay top-tier prices for coding or get a weaker review. This version passes `model` explicitly on every subagent call. It also auto-discovers open, unfinished specs when invoked without an argument.
 
@@ -27,7 +27,7 @@ The original skill lets every subagent inherit the session model, so you pay top
   { "providers": { "glm": {
       "baseUrl": "https://open.bigmodel.cn/api/coding/paas/v4", "api": "openai-completions",
       "apiKey": "<your key>",
-      "models": [{ "id": "glm-5.3", "name": "GLM-5.3", "reasoning": true, "input": ["text"],
+      "models": [{ "id": "glm-5.4", "name": "GLM-5.4", "reasoning": true, "input": ["text"],
                    "contextWindow": 1000000, "maxTokens": 131072,
                    "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 } }] } } }
   ```
@@ -76,7 +76,7 @@ Run `scripts/grill-status.sh` from a managed repository (or pass its directory) 
 
 ## Flash mode
 
-For GLM-side setups there is a three-tier split (ADR 0001, [docs/setup.md 阶段 4](docs/setup.md) / [docs/setup.en.md Stage 4](docs/setup.en.md)): a cheap **flash Orchestrator** (`claude-flash`, glm-5.3-flash) runs the main and spec sessions and only executes and relays within a whitelist; glm-5.3 subagents do all source changes; every judgment call — code review, draft review, failure diagnosis — leaves the session via `scripts/opus-review.sh` for official-subscription Opus, which also powers the Design sessions behind `/grill-feature` and `/grill-map`. A `FLASH_ORCHESTRATOR=1` session is hard-blocked (delegate-guard) from writing any source line, cites a findings/result path for every conclusion it reports, and parks rather than downgrades when Opus is unavailable. Rolling back is one tag (`pre-flash-orchestrator`) plus a config snapshot; official sessions and `claude-glm` coexist throughout.
+For GLM-side setups there is a three-tier split (ADR 0001, [docs/setup.md 阶段 4](docs/setup.md) / [docs/setup.en.md Stage 4](docs/setup.en.md)): a cheap **flash Orchestrator** (`claude-flash`, glm-5.3-flash) runs the main and spec sessions and only executes and relays within a whitelist; glm-5.4 subagents do all source changes; every judgment call — code review, draft review, failure diagnosis — leaves the session via `scripts/opus-review.sh` for official-subscription Opus, which also powers the Design sessions behind `/grill-feature` and `/grill-map`. A `FLASH_ORCHESTRATOR=1` session is hard-blocked (delegate-guard) from writing any source line, cites a findings/result path for every conclusion it reports, and parks rather than downgrades when Opus is unavailable. Rolling back is one tag (`pre-flash-orchestrator`) plus a config snapshot; official sessions and `claude-glm` coexist throughout.
 
 ## Keeping up with upstream
 

@@ -10,13 +10,13 @@
 #       tool children) and auth failures are all exercised, the deterministic ones via a
 #       fake pi behind the PI_WORKER_PI hook.
 #
-# Usage: scripts/selftest.sh [--model glm/glm-5.3] [--only L1]
+# Usage: scripts/selftest.sh [--model glm/glm-5.4] [--only L1]
 # Scratch dir: ~/.cache/implement-spec-split-selftest/<timestamp>-<pid>, deleted on success.
 
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 WORKER="$HERE/pi-worker.sh"
-MODEL="glm/glm-5.3"
+MODEL="glm/glm-5.4"
 ONLY=""
 while [ $# -gt 0 ]; do
   case "$1" in

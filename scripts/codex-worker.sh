@@ -4,7 +4,7 @@
 #
 # Usage:
 #   codex-worker.sh --cwd <worktree> --brief <file> --run-dir <dir>
-#                    [--model glm-5.3] [--time-limit 1800] [--idle-timeout 600]
+#                    [--model glm-5.4] [--time-limit 1800] [--idle-timeout 600]
 #                    [--retries 2] [--retry-wait 60]
 #                    [--thinking <low|medium|high|xhigh>] [--skill <dir>]...
 #                    [--add-dir <dir>]...
@@ -99,7 +99,7 @@ set -u
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 
-MODEL="glm-5.3"
+MODEL="glm-5.4"
 TIME_LIMIT=1800
 IDLE_TIMEOUT=600
 RETRIES=2
@@ -147,7 +147,7 @@ while [ $# -gt 0 ]; do
 done
 
 # A flash Orchestrator must not start External workers on its own: its
-# implementing roles are in-session glm-5.3 subagents. Only an explicit
+# implementing roles are in-session glm-5.4 subagents. Only an explicit
 # `/implement-spec-split --impl codex` Run sets the opt-in (2026-11-21).
 if [ "${FLASH_ORCHESTRATOR:-}" = 1 ] && [ "${WORKER_ALLOW_FLASH:-}" != 1 ]; then
   die "refusing to run in a flash session (FLASH_ORCHESTRATOR=1): implement Specs with /implement-spec-split <n>; only an explicit --impl codex Run sets WORKER_ALLOW_FLASH=1"

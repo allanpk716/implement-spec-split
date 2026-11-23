@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Self-test for the codex External worker backend.
 #
-# Usage: scripts/selftest-codex.sh [--model glm-5.3] [--only L1|V1|V2|V3]
+# Usage: scripts/selftest-codex.sh [--model glm-5.4] [--only L1|V1|V2|V3]
 #
 # V1 uses a deterministic fake codex and costs no tokens. V2 uses real codex-cli
 # against local mock Responses servers and costs no GLM tokens. L1 and V3 use real GLM
@@ -14,7 +14,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 WORKER="$HERE/codex-worker.sh"
 PROGRESS="$HERE/progress.sh"
 FAKE="$HERE/testing/fake-codex.sh"
-MODEL="glm-5.3"
+MODEL="glm-5.4"
 ONLY=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -428,11 +428,11 @@ EOF
   "$WORKER" --resume --run-dir "$ROOT/no-such-run" >/dev/null 2>&1; check "resume missing run exits 64" test $? -eq 64
   "$WORKER" --resume --run-dir "$ROOT/ok-run" --cwd "$ROOT/v1" >/dev/null 2>&1; check "resume rejects cwd" test $? -eq 64
   LOST="$ROOT/lost-run"; mkdir -p "$LOST"
-  node -e 'const p=process.argv[1],f=require("fs");const id="11111111-2222-3333-4444-555555555555";f.writeFileSync(p+"/resume.json",JSON.stringify({cwd:p,model:"glm-5.3",skills:[],thinking:"",add_dirs:[],session_id:id,base_head:"",segments:1,attempts:1}))' "$LOST"
+  node -e 'const p=process.argv[1],f=require("fs");const id="11111111-2222-3333-4444-555555555555";f.writeFileSync(p+"/resume.json",JSON.stringify({cwd:p,model:"glm-5.4",skills:[],thinking:"",add_dirs:[],session_id:id,base_head:"",segments:1,attempts:1}))' "$LOST"
   FAKE_CODEX_ARGS_LOG="$ROOT/lost-args.jsonl" "$WORKER" --resume --run-dir "$LOST" >/dev/null 2>&1
   BR=$?; check "missing rollout exits 64 without codex" bash -c "test $BR -eq 64 && ! test -s '$ROOT/lost-args.jsonl'"
   MISSING_SAVED_HOME="$ROOT/missing-saved-home"; mkdir -p "$MISSING_SAVED_HOME"
-  node -e 'const p=process.argv[1],f=require("fs");const id="11111111-2222-3333-4444-555555555555";f.writeFileSync(p+"/resume.json",JSON.stringify({cwd:p,model:"glm-5.3",skills:[],thinking:"",add_dirs:[],session_id:id,base_head:"",segments:1,attempts:1,codex_home:process.argv[2]},null,2))' "$LOST" "$MISSING_SAVED_HOME"
+  node -e 'const p=process.argv[1],f=require("fs");const id="11111111-2222-3333-4444-555555555555";f.writeFileSync(p+"/resume.json",JSON.stringify({cwd:p,model:"glm-5.4",skills:[],thinking:"",add_dirs:[],session_id:id,base_head:"",segments:1,attempts:1,codex_home:process.argv[2]},null,2))' "$LOST" "$MISSING_SAVED_HOME"
   FAKE_CODEX_ARGS_LOG="$ROOT/missing-saved-args.jsonl" "$WORKER" --resume --run-dir "$LOST" >/dev/null 2>&1
   MH=$?; check "missing saved codex home exits 64 without codex" bash -c "test $MH -eq 64 && ! test -s '$ROOT/missing-saved-args.jsonl'"
   node -e 'const p=process.argv[1],f=require("fs");const s=JSON.parse(f.readFileSync(p+"/resume.json"));delete s.codex_home;f.writeFileSync(p+"/resume.json",JSON.stringify(s,null,2))' "$ROOT/ok-run"

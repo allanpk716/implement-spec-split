@@ -45,7 +45,7 @@ This division of labour is optimized for one specific situation: **Claude quota 
 |---|---|
 | Platform | Windows 11 + Git Bash: fully verified, including real GLM end to end. Ubuntu 24.04: all model-free self-tests pass (`selftest-codex.sh --only V1`, hook tests, doctor tests), but it has not been run with a real codex and GLM. macOS 27 (stock bash 3.2): fully verified with codex-cli 0.164.0, including real GLM end to end (V3, 2026-10-24). Known limitation: the alternate pi backend (`pi-worker.sh`) only kills the root process on Linux/macOS; use the codex backend on those platforms |
 | codex-cli | 0.163.0, 0.164.0. Other versions are unverified; after changing versions, first run `scripts/selftest-codex.sh --only V1` |
-| Model | GLM-5.3, through a local proxy |
+| Model | GLM-5.4, through a local proxy |
 | Stage 1 | `--impl codex` and `--impl pi` verified end-to-end in a scratch repo; `--impl sonnet` unverified |
 | find-next | Local markdown tracker: script unit tests pass, `--worker codex` run once on a real repo (2026-11-01). The GitHub path and `--worker pi` not yet run |
 | Stage 3 | Hook unit tests and a local smoke test pass; rule adherence in real sessions is still being validated |
@@ -163,7 +163,7 @@ This makes `codex exec` do work with GLM. Both Stage 1's `--impl codex` and Stag
 
    ```toml
    model_provider = "custom"
-   model = "glm-5.3"
+   model = "glm-5.4"
 
    [model_providers.custom]
    name = "zhipu_glm"
@@ -172,7 +172,7 @@ This makes `codex exec` do work with GLM. Both Stage 1's `--impl codex` and Stag
    requires_openai_auth = true
    ```
 
-   The provider name must be `custom`: the wrappers pin the provider and model with `-c model_provider=custom -m glm-5.3`. If the model is not `glm-5.3`, add `--model <id>` when calling `codex-worker.sh`; in Stage 1, change `CODEX_MODEL` in the Config section of `SKILL.md`. Do not put the key in this repository.
+   The provider name must be `custom`: the wrappers pin the provider and model with `-c model_provider=custom -m glm-5.4`. If the model is not `glm-5.4`, add `--model <id>` when calling `codex-worker.sh`; in Stage 1, change `CODEX_MODEL` in the Config section of `SKILL.md`. Do not put the key in this repository.
 
    If you follow Zhipu's official Codex recipe (direct to `open.bigmodel.cn`), its provider is named `ZAI`: rename both `model_provider = "ZAI"` and `[model_providers.ZAI]` to `custom`; `name = "ZAI"` can stay (codex 0.164+ requires a non-empty `name`). Otherwise the worker fails with `model_providers.custom: provider name must not be empty`. Support for other provider names is tracked in issue #6.
 
@@ -304,7 +304,7 @@ Run records are stored in `~/.cache/codex-runs/<repository>-<time>-<task>/`, con
 
 ## Stage 4: flash mode (cheap Orchestrator)
 
-Everyday scheduling spends no subscription quota: the main session (Orchestrator) runs on Zhipu `glm-5.3-flash` and only executes and relays within a whitelist; source changes and bulk reading go to glm-5.3 subagents; every judgment call (review, root cause, trade-offs, landability, stop-or-go) leaves the session for the official-subscription Opus ([ADR 0001](adr/0001-cheap-orchestrator-default-deny.md)). This stage targets mini6 (macOS) only.
+Everyday scheduling spends no subscription quota: the main session (Orchestrator) runs on Zhipu `glm-5.3-flash` and only executes and relays within a whitelist; source changes and bulk reading go to glm-5.4 subagents; every judgment call (review, root cause, trade-offs, landability, stop-or-go) leaves the session for the official-subscription Opus ([ADR 0001](adr/0001-cheap-orchestrator-default-deny.md)). This stage targets mini6 (macOS) only.
 
 **Prerequisites**
 
@@ -335,7 +335,7 @@ Everyday scheduling spends no subscription quota: the main session (Orchestrator
 
 **Spec sessions and Opus review**
 
-- In a flash main session, `/find-next` has launch-wave open spec sessions through the OpenClaude slot (i.e. flash) with `--impl agent` by default (glm-5.3 subagents implement), so a spec runs start to finish without subscription quota.
+- In a flash main session, `/find-next` has launch-wave open spec sessions through the OpenClaude slot (i.e. flash) with `--impl agent` by default (glm-5.4 subagents implement), so a spec runs start to finish without subscription quota.
 - Code review, draft review and consecutive-failure diagnosis inside a flash spec session never run in-session (an "opus" subagent in a GLM session is actually GLM — a fake review); they always call `scripts/opus-review.sh`, which runs outside the session on official Opus: `--kind code` (a branch/fixed point), `--kind draft` (a spec/ticket draft), `--kind diagnose` (a failure; recommends continue / re-brief / stop). Any non-zero exit parks the run with an explanation (meanings in the script's header comment); no automatic retry, no GLM downgrade, no in-session self-review.
 
 **The flash boundary**

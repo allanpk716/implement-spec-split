@@ -21,7 +21,7 @@ The coding-agent CLI program an External worker runs in (codex or pi); it decide
 _Avoid_: codex worker / pi worker when the model matters, agent CLI
 
 **Worker model**:
-The model an External worker's harness talks to (GLM-5.3 today); chosen separately from the harness, so one harness can serve different models and one model can run under different harnesses.
+The model an External worker's harness talks to (GLM-5.4 today); chosen separately from the harness, so one harness can serve different models and one model can run under different harnesses.
 _Avoid_: implement model, backend model
 
 **Implement backend**:
@@ -29,7 +29,7 @@ Which kind of executor runs the implementing roles for a run: an In-session suba
 _Avoid_: implement model (GLM is not a model the session can select)
 
 **Agent model**:
-The model the `agent` backend passes explicitly on every Agent call, selected per run with `--agent-model <sonnet|opus|haiku|fable>`; defaults to `IMPLEMENT_MODEL` (sonnet). In a GLM proxy environment an explicit `opus` may actually run GLM-5.3.
+The model the `agent` backend passes explicitly on every Agent call, selected per run with `--agent-model <sonnet|opus|haiku|fable>`; defaults to `IMPLEMENT_MODEL` (sonnet). In a GLM proxy environment an explicit `opus` may actually run GLM-5.4.
 _Avoid_: implement model (ambiguous with CODEX_MODEL/GLM_MODEL)
 
 **Implementing roles**:

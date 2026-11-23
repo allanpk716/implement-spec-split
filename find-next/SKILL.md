@@ -334,7 +334,7 @@ flash 模式下，Opus review 与 Design session 的失败处理见「flash 模�
 
   `map` 用于地图、迷雾、空地图、地图内 decision/research 票和大模块话题；`feature` 用于小功能或单个决策类散票。flash 提示用户切换、阻塞等待 handoff，成功后只读 `handoff.md` 并执行其中交给 Orchestrator 的待办，脚本非 0 时转述 stderr 并停止。
 - **推荐入口替换**：flash 模式下，上文推荐 `/wayfinder` 的地方改推荐 `/grill-map`；推荐 `/grill-with-docs` 的地方，小功能或单个决策改 `/grill-feature`，画图、推进地图或大模块讨论改 `/grill-map`。`/find-next` 自身入口和 `/to-spec`、`/to-tickets`、`/implement-spec-split` 的推荐不变。
-- **worker 后端**：没给 `--worker` 时按 `--worker agent` 处理（flash 环境里 `sonnet`/`opus` 都映射到 glm-5.3，子代理本身就是 GLM，与 implement-spec-split、launch-wave 的 flash 默认一致）。`codex-worker.sh` / `pi-worker.sh` 在 `FLASH_ORCHESTRATOR=1` 时拒跑；只有用户显式给了 `--worker codex|pi`，才在每条 wrapper 命令前加 `WORKER_ALLOW_FLASH=1`，其他情况不许设置，也不许绕开本技能自己起 worker。
+- **worker 后端**：没给 `--worker` 时按 `--worker agent` 处理（flash 环境里 `sonnet`/`opus` 都映射到 glm-5.4，子代理本身就是 GLM，与 implement-spec-split、launch-wave 的 flash 默认一致）。`codex-worker.sh` / `pi-worker.sh` 在 `FLASH_ORCHESTRATOR=1` 时拒跑；只有用户显式给了 `--worker codex|pi`，才在每条 wrapper 命令前加 `WORKER_ALLOW_FLASH=1`，其他情况不许设置，也不许绕开本技能自己起 worker。
 - **第 1 波启动**：仍按第 10 步的原有命令试运行并 `--apply`；flash 环境下 `launch-wave.sh` 自己选择 OpenClaude 规格会话，并在未显式指定实现后端时默认 agent 后端，技能层不重复实现该规则。
 - **Opus review 不可用**：任何非 0 退出码都停车并说明（退出码含义见 scripts/opus-review.sh 头注释）；不自动重试、不降级到 GLM、不改由 flash 自己审读。Design session 脚本失败同样停下并转述错误。
 
