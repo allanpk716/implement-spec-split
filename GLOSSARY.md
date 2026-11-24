@@ -111,7 +111,7 @@ The repo-wide lock (`scripts/lock.sh acquire land --scope repo`) a Run holds fro
 _Avoid_: merge lock (mergers inside one Run are already serialised)
 
 **Unattended landing**:
-A Run landing its Spec without asking the user first, because the user authorised the whole batch (and its later waves) in find-next's question round; a Run that would otherwise stop to ask posts a Parking report instead.
+A Run landing its Spec without asking the user first, because find-next's `launch-wave.sh` started it with `--auto-land` (the default; `--no-auto-land` opts a batch out); a Run that would otherwise stop to ask posts a Parking report instead.
 _Avoid_: auto-push, auto-merge, permanent authorisation (it covers one batch only)
 
 **Parking report**:
@@ -123,7 +123,7 @@ A Claim record that `find-next/scripts/launch-wave.sh` writes with `claim.sh res
 _Avoid_: pre-claim, lease
 
 **Launch state**:
-The file `~/.cache/implement-spec-split/launch/<owner>__<name>.json` where `launch-wave.sh --apply` records the chosen worker count, wave size, apart pairs, and (when the `agent` backend was chosen) backend and agent model for a repository; `--next-wave` reuses those judgments while recalculating the order. State files from before the agent backend have no backend field and keep behaving like `--impl codex`.
+The file `~/.cache/implement-spec-split/launch/<owner>__<name>.json` where `launch-wave.sh --apply` records the chosen worker count, wave size, apart pairs, whether the batch lands unattended (`auto_land`), and (when the `agent` backend was chosen) backend and agent model for a repository; `--next-wave` reuses those judgments while recalculating the order. State files from before the agent backend have no backend field and keep behaving like `--impl codex`; state files from before unattended landing became the default have no `auto_land` field and keep landing unattended.
 _Avoid_: order cache (the order itself is recalculated)
 
 **Repo registry**:

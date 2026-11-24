@@ -8,7 +8,7 @@ usage() {
 Usage: launch-wave.sh --repo <owner/name> [--workers N] [--specs K] [--apart A:B]...
                       [--only 222,237] [--apply] [--next-wave]
                       [--impl codex|agent] [--agent-model sonnet|opus|haiku|fable]
-                      [--auto-land]
+                      [--auto-land|--no-auto-land]
 
 Print the development order, then optionally reserve and launch its first wave.
 Without --apply, this script only shows what would run and makes no claims.
@@ -23,9 +23,13 @@ command gets "--impl agent --agent-model <model>" instead of "--impl codex".
 Given without --impl, --agent-model selects the agent backend; combined with an
 explicit non-agent --impl it is an argument conflict. --apply records the
 backend in the launch state and --next-wave reuses it; state files without the
-field keep the codex backend. --auto-land appends the authorization to
-every generated command; --apply records it for the current batch only and
---next-wave reuses it. --next-wave cannot accept --auto-land itself.
+field keep the codex backend. Spec sessions launched here are unattended by
+default: every generated command ends with --auto-land, and --apply records
+auto_land: true. --no-auto-land opts this batch out (commands omit --auto-land,
+the state records auto_land: false); --auto-land is accepted as the default.
+--next-wave reuses the recorded value, treating a state file without the field
+as authorized. --next-wave cannot accept --auto-land or --no-auto-land itself;
+give either with the initial --apply.
 With FLASH_ORCHESTRATOR=1, spec sessions use Orca's openclaude agent (and the
 manual launcher claude-flash). When neither --impl nor --agent-model is given,
 implementation defaults to the agent backend with the sonnet model; explicit
@@ -62,7 +66,8 @@ IMPL=codex
 AGENT_MODEL=sonnet
 IMPL_GIVEN=0
 AGENT_MODEL_GIVEN=0
-AUTO_LAND=0
+AUTO_LAND=1
+AUTO_LAND_GIVEN=0
 FLASH=0
 LAUNCH_AGENT=claude
 MANUAL_AGENT=claude
@@ -135,6 +140,12 @@ while [ $# -gt 0 ]; do
       ;;
     --auto-land)
       AUTO_LAND=1
+      AUTO_LAND_GIVEN=1
+      shift
+      ;;
+    --no-auto-land)
+      AUTO_LAND=0
+      AUTO_LAND_GIVEN=1
       shift
       ;;
     -h|--help)
@@ -162,8 +173,8 @@ if [ "$AGENT_MODEL_GIVEN" -eq 1 ] && [ "$IMPL_GIVEN" -eq 0 ]; then
   IMPL=agent
 fi
 
-[ "$AUTO_LAND" -eq 0 ] || [ "$NEXT_WAVE" -eq 0 ] ||
-  die "--auto-land is not valid with --next-wave; authorize it with the initial --apply"
+[ "$AUTO_LAND_GIVEN" -eq 0 ] || [ "$NEXT_WAVE" -eq 0 ] ||
+  die "--auto-land and --no-auto-land are not valid with --next-wave; give either with the initial --apply"
 [ -n "$REPO" ] || die "--repo is required"
 [[ "$REPO" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]] ||
   die "--repo must be <owner/name>"
@@ -253,8 +264,8 @@ state_auto_land() {
     const fs = require("fs");
     let value = null;
     try { value = JSON.parse(fs.readFileSync(process.env.STATE_FILE_ACT, "utf8")); }
-    catch (_) { process.exit(1); }
-    process.exit(value && value.auto_land === true ? 0 : 1);
+    catch (_) { process.exit(0); }
+    process.exit(value && value.auto_land === false ? 1 : 0);
   '
 }
 
@@ -355,6 +366,8 @@ read_next_wave_state() {
   fi
   if state_auto_land; then
     AUTO_LAND=1
+  else
+    AUTO_LAND=0
   fi
 }
 
@@ -374,7 +387,7 @@ write_launch_state() {
     const backend = process.env.STATE_IMPL === "agent"
       ? {impl: "agent", agent_model: process.env.STATE_AGENT_MODEL}
       : {};
-    const authorization = process.env.STATE_AUTO_LAND === "1" ? {auto_land: true} : {};
+    const authorization = {auto_land: process.env.STATE_AUTO_LAND === "1"};
     const session = process.env.STATE_FLASH === "1"
       ? {flash: true, launch_agent: process.env.STATE_LAUNCH_AGENT}
       : {};

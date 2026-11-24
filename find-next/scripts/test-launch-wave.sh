@@ -667,8 +667,11 @@ else
   record FAIL 'apply writes launch state'
 fi
 
-# Backend selection: without the new flags nothing changes (a).
-expect_without --cmd-suffix 'default apply passes no command suffix' "$PIPELINE_LOG"
+# Backend selection: without backend flags the default backend is codex, and
+# unattended landing is on by default (a).
+expect_has --cmd-suffix 'default apply passes a command suffix' "$PIPELINE_LOG"
+expect_has '--impl codex --auto-land' \
+  'default apply suffix authorizes unattended landing' "$PIPELINE_LOG"
 expect_without '"impl"' 'default apply state keeps the old shape' "$LAUNCH_STATE_FILE"
 expect_without '"agent_model"' 'default apply state has no model field' "$LAUNCH_STATE_FILE"
 expect_has '/implement-spec-split 222 --impl codex --parallel 2' \
@@ -685,11 +688,20 @@ run_launch "$WORK/old-default-apply.out" --apply --apart 237:239 \
   --only 222,237,999
 unset LAUNCH_SCRIPT_OVERRIDE LAUNCH_STATE_DIR_OVERRIDE LAUNCH_WORKER_STATE_DIR_OVERRIDE
 expect_exit 0 "pre-flash launch apply succeeds"
-if cmp -s "$WORK/current-default-state.json" \
-  "$OLD_LAUNCH_STATE_DIR/test__repo.json"; then
-  record PASS 'default apply state is byte-for-byte pre-flash'
+if node -e '
+  const fs = require("fs");
+  const read = (file) => {
+    const value = JSON.parse(fs.readFileSync(file, "utf8"));
+    delete value.auto_land;
+    return JSON.stringify(value);
+  };
+  process.exit(
+    read(process.argv[1]) === read(process.argv[2]) ? 0 : 1
+  );
+' "$WORK/current-default-state.json" "$OLD_LAUNCH_STATE_DIR/test__repo.json"; then
+  record PASS 'default apply state matches pre-flash apart from auto_land'
 else
-  record FAIL 'default apply state is byte-for-byte pre-flash' \
+  record FAIL 'default apply state matches pre-flash apart from auto_land' \
     "$(diff -u "$OLD_LAUNCH_STATE_DIR/test__repo.json" "$WORK/current-default-state.json" | tail -n 8)"
 fi
 expect_without '"flash"' 'default apply state omits flash fields' "$LAUNCH_STATE_FILE"
@@ -700,29 +712,40 @@ rm -f "$LAUNCH_STATE_FILE"
 : > "$PIPELINE_LOG"; : > "$ORCA_LOG"
 ISS_PIPELINE_STATUS_OVERRIDE=$BIN/fake-pipeline-dynamic
 export ISS_PIPELINE_STATUS_OVERRIDE
+run_launch "$WORK/default-dry.out"
+expect_exit 0 "default dry run succeeds"
+expect_has '--impl codex --auto-land' \
+  'default dry run authorizes unattended landing' "$PIPELINE_LOG"
+expect_has " #222（恢复，原 worktree）→ /implement-spec-split 222 --impl codex --auto-land --parallel 2" \
+  'default dry run shows an authorized resume command' "$WORK/default-dry.out"
+expect_has ' #237（新 worktree）→ /implement-spec-split 237 --impl codex --auto-land --parallel 2' \
+  'default dry run shows an authorized wave command' "$WORK/default-dry.out"
+
+: > "$PIPELINE_LOG"; : > "$ORCA_LOG"
 run_launch "$WORK/agent-dry.out" --impl agent --agent-model opus
 expect_exit 0 "agent dry run succeeds"
 expect_has '--cmd-suffix' 'agent dry run passes a command suffix' "$PIPELINE_LOG"
 expect_has '--impl agent --agent-model opus' 'agent suffix names the model' "$PIPELINE_LOG"
-expect_has " #222（恢复，原 worktree）→ /implement-spec-split 222 --impl agent --agent-model opus --parallel 2" \
+expect_has " #222（恢复，原 worktree）→ /implement-spec-split 222 --impl agent --agent-model opus --auto-land --parallel 2" \
   'agent dry run shows the model in resume commands' "$WORK/agent-dry.out"
-expect_has ' #237（新 worktree）→ /implement-spec-split 237 --impl agent --agent-model opus --parallel 2' \
+expect_has ' #237（新 worktree）→ /implement-spec-split 237 --impl agent --agent-model opus --auto-land --parallel 2' \
   'agent dry run shows the model in wave commands' "$WORK/agent-dry.out"
 
 : > "$PIPELINE_LOG"; : > "$CLAIM_LOG"; : > "$ORCA_LOG"
 run_launch "$WORK/agent-apply.out" --apply --impl agent --agent-model opus --only 237
 expect_exit 0 "agent apply succeeds"
 expect_has '#237 已启动' 'agent apply starts the spec' "$WORK/agent-apply.out"
-expect_has '/implement-spec-split 237 --impl agent --agent-model opus --parallel 2' \
+expect_has '/implement-spec-split 237 --impl agent --agent-model opus --auto-land --parallel 2' \
   'agent apply launches the model-suffixed command' "$ORCA_LOG"
 if node -e '
   const fs = require("fs");
   const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-  if (value.impl !== "agent" || value.agent_model !== "opus") process.exit(1);
+  if (value.impl !== "agent" || value.agent_model !== "opus" ||
+      value.auto_land !== true) process.exit(1);
 ' "$LAUNCH_STATE_FILE"; then
-  record PASS 'agent apply writes backend to launch state'
+  record PASS 'agent apply writes backend and authorization to launch state'
 else
-  record FAIL 'agent apply writes backend to launch state'
+  record FAIL 'agent apply writes backend and authorization to launch state'
 fi
 
 # --next-wave without backend flags reuses the recorded agent backend (c).
@@ -732,8 +755,9 @@ export LAUNCH_OMIT_WORKERS
 run_launch "$WORK/agent-next-wave.out" --next-wave --apply
 expect_exit 0 "agent next wave succeeds"
 expect_has '#237 已启动' 'agent next wave starts a free spec' "$WORK/agent-next-wave.out"
-expect_has '--impl agent --agent-model opus' 'next wave reuses the agent suffix' "$PIPELINE_LOG"
-expect_has '/implement-spec-split 237 --impl agent --agent-model opus --parallel 2' \
+expect_has '--impl agent --agent-model opus --auto-land' \
+  'next wave reuses the agent suffix' "$PIPELINE_LOG"
+expect_has '/implement-spec-split 237 --impl agent --agent-model opus --auto-land --parallel 2' \
   'next wave command keeps the agent backend' "$ORCA_LOG"
 unset LAUNCH_OMIT_WORKERS
 
@@ -747,13 +771,14 @@ expect_exit 0 "flash apply succeeds"
 expect_has '--impl agent --agent-model sonnet' \
   'flash apply defaults to the agent backend' "$PIPELINE_LOG"
 expect_arg_after --agent openclaude 'flash apply uses OpenClaude' "$ORCA_LOG"
-expect_has '/implement-spec-split 237 --impl agent --agent-model sonnet --parallel 2' \
+expect_has '/implement-spec-split 237 --impl agent --agent-model sonnet --auto-land --parallel 2' \
   'flash apply launches the agent-backed command' "$ORCA_LOG"
 if node -e '
   const fs = require("fs");
   const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
   if (value.flash !== true || value.launch_agent !== "openclaude" ||
-      value.impl !== "agent" || value.agent_model !== "sonnet") process.exit(1);
+      value.impl !== "agent" || value.agent_model !== "sonnet" ||
+      value.auto_land !== true) process.exit(1);
 ' "$LAUNCH_STATE_FILE"; then
   record PASS 'flash apply records the session and backend choices'
 else
@@ -823,7 +848,7 @@ else
 fi
 unset LAUNCH_OMIT_WORKERS
 
-# --auto-land is authorized by --apply and reused by --next-wave.
+# --auto-land is accepted as the default; --no-auto-land opts out (c).
 rm -f "$LAUNCH_STATE_FILE"
 : > "$PIPELINE_LOG"; : > "$CLAIM_LOG"; : > "$ORCA_LOG"
 run_launch "$WORK/auto-land-codex-apply.out" --apply --auto-land --only 237
@@ -879,32 +904,67 @@ expect_has '/implement-spec-split 237 --impl agent --agent-model opus --auto-lan
   'authorized next wave launches an authorized command' "$ORCA_LOG"
 unset LAUNCH_OMIT_WORKERS
 
+# The default --apply (no flag) also lands unattended.
 : > "$PIPELINE_LOG"; : > "$CLAIM_LOG"; : > "$ORCA_LOG"
-run_launch "$WORK/auto-land-clear-apply.out" --apply --only 237
-expect_exit 0 "apply without auto-land succeeds"
-expect_without --auto-land 'unauthorized apply clears the command authorization' \
+run_launch "$WORK/auto-land-default-apply.out" --apply --only 237
+expect_exit 0 "default apply succeeds"
+expect_has '#237 已启动' 'default apply starts the spec' \
+  "$WORK/auto-land-default-apply.out"
+expect_has '--impl codex --auto-land' 'default apply passes the auto-land suffix' \
   "$PIPELINE_LOG"
+expect_has '/implement-spec-split 237 --impl codex --auto-land --parallel 2' \
+  'default apply launches an authorized command' "$ORCA_LOG"
 if node -e '
   const fs = require("fs");
   const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-  if ("auto_land" in value) process.exit(1);
+  if (value.auto_land !== true) process.exit(1);
 ' "$LAUNCH_STATE_FILE"; then
-  record PASS 'unauthorized apply clears recorded authorization'
+  record PASS 'default apply records authorization'
 else
-  record FAIL 'unauthorized apply clears recorded authorization'
+  record FAIL 'default apply records authorization'
+fi
+
+# --no-auto-land opts this batch out, and the state records false.
+: > "$PIPELINE_LOG"; : > "$CLAIM_LOG"; : > "$ORCA_LOG"
+run_launch "$WORK/no-auto-land-apply.out" --apply --no-auto-land --only 237
+expect_exit 0 "no-auto-land apply succeeds"
+expect_has '#237 已启动' 'no-auto-land apply starts the spec' \
+  "$WORK/no-auto-land-apply.out"
+expect_without --auto-land 'no-auto-land apply omits the suffix' \
+  "$PIPELINE_LOG"
+expect_has '/implement-spec-split 237 --impl codex --parallel 2' \
+  'no-auto-land apply launches a plain command' "$ORCA_LOG"
+if node -e '
+  const fs = require("fs");
+  const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  if (value.auto_land !== false) process.exit(1);
+' "$LAUNCH_STATE_FILE"; then
+  record PASS 'no-auto-land apply records false'
+else
+  record FAIL 'no-auto-land apply records false'
 fi
 
 : > "$PIPELINE_LOG"; : > "$CLAIM_LOG"; : > "$ORCA_LOG"
 LAUNCH_OMIT_WORKERS=1
 export LAUNCH_OMIT_WORKERS
-run_launch "$WORK/auto-land-clear-next-wave.out" --next-wave --apply --only 237
-expect_exit 0 "unauthorized next wave succeeds"
-expect_without --auto-land 'unauthorized next wave omits auto-land' "$PIPELINE_LOG"
+run_launch "$WORK/no-auto-land-next-wave.out" --next-wave --apply --only 237
+expect_exit 0 "no-auto-land next wave succeeds"
+expect_without --auto-land 'no-auto-land next wave omits auto-land' "$PIPELINE_LOG"
 expect_has '/implement-spec-split 237 --impl codex --parallel 2' \
-  'unauthorized next wave keeps the codex command' "$ORCA_LOG"
+  'no-auto-land next wave keeps the plain command' "$ORCA_LOG"
+if node -e '
+  const fs = require("fs");
+  const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  if (value.auto_land !== false) process.exit(1);
+' "$LAUNCH_STATE_FILE"; then
+  record PASS 'no-auto-land next wave keeps false'
+else
+  record FAIL 'no-auto-land next wave keeps false'
+fi
 unset LAUNCH_OMIT_WORKERS
 
-# Old state files without the backend field keep --impl codex (d).
+# Old state files without the backend field keep --impl codex, and a missing
+# auto_land field is treated as authorized (d).
 rm -f "$LAUNCH_STATE_FILE"
 cat > "$LAUNCH_STATE_FILE" <<'EOF'
 {"workers":4,"specs":2,"apart":[],"updated":"2000-01-01T00:00:00Z"}
@@ -914,10 +974,19 @@ LAUNCH_OMIT_WORKERS=1
 export LAUNCH_OMIT_WORKERS
 run_launch "$WORK/legacy-next-wave.out" --next-wave --apply
 expect_exit 0 "legacy next wave succeeds"
-expect_without --cmd-suffix 'legacy state falls back to the codex suffix' "$PIPELINE_LOG"
-expect_without --auto-land 'legacy state has no auto-land authorization' "$PIPELINE_LOG"
-expect_has '/implement-spec-split 237 --impl codex --parallel 2' \
-  'legacy state keeps the codex command' "$ORCA_LOG"
+expect_has '--impl codex --auto-land' \
+  'legacy state defaults to unattended landing' "$PIPELINE_LOG"
+expect_has '/implement-spec-split 237 --impl codex --auto-land --parallel 2' \
+  'legacy state launches an authorized command' "$ORCA_LOG"
+if node -e '
+  const fs = require("fs");
+  const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  if (value.auto_land !== true) process.exit(1);
+' "$LAUNCH_STATE_FILE"; then
+  record PASS 'legacy next wave records authorization'
+else
+  record FAIL 'legacy next wave records authorization'
+fi
 unset LAUNCH_OMIT_WORKERS
 unset ISS_PIPELINE_STATUS_OVERRIDE
 
@@ -944,9 +1013,15 @@ expect_has 'codex or agent' 'unknown backend names the allowed values' \
 
 run_launch "$WORK/next-wave-auto-land-conflict.out" --next-wave --auto-land
 expect_exit 1 "next-wave auto-land flag is rejected"
-expect_has '--auto-land is not valid with --next-wave' \
+expect_has '--auto-land and --no-auto-land are not valid with --next-wave' \
   'next-wave auto-land conflict explains the authorization path' \
   "$WORK/next-wave-auto-land-conflict.out.err"
+
+run_launch "$WORK/next-wave-no-auto-land-conflict.out" --next-wave --no-auto-land
+expect_exit 1 "next-wave no-auto-land flag is rejected"
+expect_has '--auto-land and --no-auto-land are not valid with --next-wave' \
+  'next-wave no-auto-land conflict explains the authorization path' \
+  "$WORK/next-wave-no-auto-land-conflict.out.err"
 
 rm -f "$LAUNCH_STATE_FILE"
 cat > "$LAUNCH_STATE_FILE" <<'EOF'
@@ -990,6 +1065,8 @@ expect_exit 0 "next wave falls back to the max-workers file"
 expect_has '6' 'max-workers fallback is passed to pipeline' "$PIPELINE_LOG"
 expect_has '6' 'max-workers fallback is persisted globally' "$MAX_LOG"
 expect_has '"workers": 6' 'max-workers fallback is written to launch state' "$LAUNCH_STATE_FILE"
+expect_has '--impl codex --auto-land' \
+  'missing state file defaults to unattended landing' "$PIPELINE_LOG"
 unset LAUNCH_OMIT_WORKERS
 rm -f "$WORKER_STATE_DIR/max-workers"
 

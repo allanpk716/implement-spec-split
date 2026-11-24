@@ -16,7 +16,7 @@
 4. **编排的主代理跑在会话模型上。** 只有子代理的模型由本技能决定。主代理要判断 review 意见属于设计层面还是机械修复，所以会话不建议用太弱的模型。
 5. **draft PR 流程。** 如果 tracker 靠 PR 关单，第一次合并后开 draft PR，最后标成可以 review。原版有这一步，最早的 split 版漏了，后来补回。
 6. **找 spec（第 0 步）。** 原版没有这一步，是本技能加的。现在用 `scripts/pipeline-status.sh` 按 to-spec 模板标题 `## Problem Statement` 和 wayfinder 地图结构识别 Spec / Ticket，再保留旧的“开着父 issue + 未完成子票”形状；不要改回依赖标题里的“规格：”字样。原因是单票规格的正文只引用地图实现票（例如“实现票：#58”），实现票自己没有子票，旧的父 issue 查询会把它漏掉。
-7. **push 和关单前先问用户。** 本技能加了这条，原版没有。例外是第 21 条的无人值守落地：用户在 find-next 里给整批授权后不再问。
+7. **push 和关单前先问用户。** 本技能加了这条，原版没有。例外是第 21 条（2026-11-24 由第 28 条修订）的无人值守落地：launch-wave 启动的会话默认带 `--auto-land`，不再问；显式 `--no-auto-land` 的批除外。
 8. **GLM 只能放到会话外面跑（External worker）。**
    - Agent 工具的 `model` 参数只能选 `sonnet`、`opus`、`haiku`、`fable`。
    - 服务地址和 token 是整个进程共用的，所以没法让会话里的某一个子代理单独走 GLM。
@@ -83,7 +83,7 @@
 
 20. **并行子代理与按需 MCP（2026-11-15 实测后改）。** 530 个 codex 会话里 `spawn_agent` 调用为 0；一轮里同时发出多个工具调用的只占 2.3%；等模型的时间占 70–95%；1 到 6 个 worker 并发时，每轮延迟基本不变（中位 6–8 秒）；关掉 MCP 后启动从 9.4 秒降到 3.8 秒，且没有了 rmcp 报错。因此：新会话 prompt 固定要求并行调用并按需开 explorer 子代理；codex-worker 默认关 MCP，用 `--mcp` 按需开启；`~/.codex/config.toml` 设 `[agents] max_concurrent_threads_per_session = 3`（子代理不占 Worker slot）。主会话最清楚每个任务需要什么，所以「默认不带、按需分配」由派活的一方决定。
 21. **2026-11-19：无人值守落地（`--auto-land`）。** 用户常在通宵跑 find-next 启动的整批规格：睡着时没人答问题，醒来后会话缓存早已过期，回去点「推送」既要等又费 token。决定：
-    - 授权只在 find-next 推进模式取得（第 6 步那一问，或调用时带 `--auto-land`），经 launch-wave 写进启动状态、由 `--next-wave` 沿用；下一次不带它的 `--apply` 清掉授权。不做成仓库永久设置，免得哪天白天也无声 push 到 main；手动敲 `/implement-spec-split <n>` 不带参数时仍然确认。
+    - 授权只在 find-next 推进模式取得（第 6 步那一问，或调用时带 `--auto-land`），经 launch-wave 写进启动状态、由 `--next-wave` 沿用；下一次不带它的 `--apply` 清掉授权。不做成仓库永久设置，免得哪天白天也无声 push 到 main；手动敲 `/implement-spec-split <n>` 不带参数时仍然确认。**2026-11-24 修订：launch-wave 启动的会话改为默认无人值守，见第 28 条。**
     - 落地方式不变：直接合入 main 并开下一波；走 PR 的仓库改为等 checks 后自动 `gh pr merge`，同样开下一波（只开 PR 等人审会让通宵只跑一波）。
     - 原先「问用户」的节点改为自动处理，有次数上限，超限就**停车**（规格 issue 下留停车报告、释放认领、结束会话，之后显示为「先恢复」），绝不挂着等人：测试红/CI 红派 fix 最多 2 轮；合 main 冲突由 merger 解决后，再由 REVIEW_MODEL 只审冲突解决部分；规格/ADR 已有答案的设计问题由主会话判断并写进落地报告，真取舍才停车；`transient` 等 10 分钟重试一次；`quota` 后台 sleep、每 30 分钟 preflight、最多 5 小时（sleep 不花 token）；`auth` 和 worker 第二次失败直接停车，不试第三次（两次都失败多半需要人）。
     - 落地成功也在规格 issue 下留落地报告，早上看 GitHub 即可，不回到过期会话。同一批里其他规格互不影响、照常落地。
@@ -101,6 +101,11 @@
 25. **2026-11-22：编排防卡死。** ssh-manager-mcp Spec 349 的 flash 编排会话里，实现子代理为跑一条 `gofmt -w` 裸调 `codex exec`，Bash 超时后命令转入后台，子代理和编排主会话都只「等通知」，codex 进程空转 10 小时无人发现；早上续会话时编排者还把日志里的启动钟点误算成运行时长。owner 定：delegate-guard 对所有会话（含子代理、非 flash、例外开关开启）一律拒绝 Bash 直接调用 `codex exec`，外部 worker 只能走 wrapper；编排派发实现/合并/修复角色后必须挂 `run-watchdog.sh`，指纹无进展即退出唤醒编排者，绝不无限等通知；判断时长先 `date` 再 `ps` 看 etime/time，不从日志钟点推算；`gofmt -w` 这类确定性格式化不算写源码，任何角色直接执行。
 26. **2026-11-23：grill-feature / grill-map 交接后用 launch-wave 开实现会话。** oa-helper 规格 #80 的 Design session 交接回主会话后，主会话按第 5 步「走 `/implement-spec-split 80`」用 Skill 工具调本技能，因为设了 `disable-model-invocation` 被拒，只能停下让用户手敲。本技能保留 `disable-model-invocation`（Run 会花额度、会 push，只能由人或 launch-wave 发起）。两份 grill 技能的第 5 步改为跑 `launch-wave.sh --repo <owner/name> --only <n>[,<m>…] --apply`：它领取规格、开 worktree，并在新 Orca 会话里把 `/implement-spec-split <n>` 当作用户输入发出去。launch-wave 失败，或某份规格要手动启动时，才提示用户手敲。注意：试运行会打印整份开发顺序，`--apply` 只启动 `--only` 里列出的规格。
 27. **2026-11-23：默认 worker 模型升到 GLM-5.4。** 环境侧（`~/.codex-worker/config.toml`、claude-glm / claude-flash 的 models.env）已改用 glm-5.4（1M 上下文、支持图片输入），但 `codex-worker.sh` 默认用 `-m glm-5.3` 显式传模型，config.toml 里的值不起作用，worker 实际仍在跑 5.3。现在把脚本默认值、`SKILL.md` Config（`CODEX_MODEL` / `GLM_MODEL`）、测试和说明文字都改成 5.4；flash 档没有 glm-5.4-flash，仍用 glm-5.3-flash。上面第 24 条、ADR 0001 和 `docs/codex-backend.md` 记录的是当时的实测，保留 5.3 的写法。以后升级模型时，除了改 config，还要改脚本默认值。
+28. **2026-11-24：launch-wave 启动的会话默认无人值守落地（`--auto-land` 变默认，新增 `--no-auto-land` 退出）。** 事故：2026-11-23 oa-helper 规格 #75 由 grill 交接用 `launch-wave --only 75 --apply` 启动，没有 `--auto-land`，且不带它的 `--apply` 会清掉旧授权；会话 23:01 做完后停在第 9 步等确认 push，用户次日 08:26 才点，会话缓存失效白费 token。grill 交接路径根本不问授权，第 21 条靠 find-next 第 6 步那一问覆盖不到它。决定：
+    - 凡经 `launch-wave.sh` 启动的会话（find-next 推进模式、grill-feature / grill-map 交接用的 `--only <n> --apply`、规格合入后的 `--next-wave --apply`）默认带 `--auto-land`，做完自动合入 main / push / 开下一波，不再停下问人；试运行（不带 `--apply`）生成的命令同样默认带 `--auto-land`。
+    - 退出用 `--no-auto-land`；`--auto-land` 保留为可接受参数（等同默认，向后兼容），不报错。`--apply` 写启动状态时总是显式写 `auto_land: true` 或 `false`（`--no-auto-land` 时为 false）。
+    - `--next-wave` 读状态：只有 `auto_land === false` 才关闭；字段缺失（旧状态文件）或状态文件不存在时视为开启。`--next-wave` 仍不接受 `--auto-land` / `--no-auto-land`，报错说明两者都要在初始 `--apply` 时给。
+    - find-next 第 6 步不再问「本批无人值守落地吗？」；调用时带 `--no-auto-land` 才不落地并透传给 launch-wave，`--auto-land` 保留为兼容别名。手动敲 `/implement-spec-split <n>` 不带 `--auto-land` 仍保持 push 前确认，SKILL.md 第 9 步逻辑不改。无人值守落地本身的行为（合入/合 PR、CI 红自动修两轮、停车报告、落地报告）不变。
 
 ## flash 模式设计要点（2026-11-20 规格定稿，ADR 0001）
 
