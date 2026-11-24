@@ -325,6 +325,7 @@ node -e 'console.log(JSON.stringify({tool_name:"Write",tool_input:{file_path:"C:
 **开 flash 主会话**
 
 - 终端直接跑 `claude-flash`（它注入 `FLASH_ORCHESTRATOR=1`、flash 专用 settings 和系统提示词：白名单、判断上交 Opus、源码交给子代理；排除官方会话的 Opus/codex 分工规则，关闭 codex 插件）。
+- 权限模式：启动器给普通会话自动补 `--dangerously-skip-permissions`（已带则不重复），flash 会话一律 bypass。Orca 的 OpenClaude 槽位不会替它加这个参数，缺了会落到 auto mode：无人值守的规格会话可能被分类器拦下，分类器请求走智谱网关还会弹计费通知。
 - 挂到 Orca 槽位：把 `/opt/homebrew/bin/openclaude` 软链改指 `~/ops/services/claude-flash/claude-flash`（Orca 设置 → Agents → OpenClaude 的命令覆盖填 `claude-flash` 绝对路径亦可）。此后 Orca 的 OpenClaude 槽位开出的就是 flash 主会话；原 `claude-glm` 会话不受影响，仍可手动使用。
 - 冒烟验证：
 

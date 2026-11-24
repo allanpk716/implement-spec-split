@@ -319,6 +319,7 @@ Everyday scheduling spends no subscription quota: the main session (Orchestrator
 **Starting a flash main session**
 
 - Run `claude-flash` in a terminal (it sets `FLASH_ORCHESTRATOR=1` and injects flash-only settings and a system prompt: the whitelist, judgments go to Opus, source changes go to subagents; the official sessions' Opus/codex division rules are excluded and the codex plugin is disabled).
+- Permission mode: the launcher appends `--dangerously-skip-permissions` to ordinary sessions (never twice), so flash sessions always run in bypass. Orca's OpenClaude slot does not add the flag itself; without it a session falls into auto mode, where the classifier can stall an unattended spec session and, through the Zhipu gateway, triggers a billing notice.
 - To take over the Orca slot: repoint the `/opt/homebrew/bin/openclaude` symlink at `~/ops/services/claude-flash/claude-flash` (or fill Orca Settings → Agents → OpenClaude's command override with the absolute path of `claude-flash`). The OpenClaude slot then opens flash main sessions; the original `claude-glm` stays available side by side.
 - Smoke test:
 
