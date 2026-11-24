@@ -197,6 +197,7 @@
     - 推进模式全程持 `lock.sh` 的仓库级 `find-next-advance` 锁，`--wait 0`，拿不到就停；会话被关掉锁按 pid 加启动时间自动失效。`--suggest`、`--list` 只读，不拿锁。
     - wayfinder 是上游技能，认领只写 Assignee、不记 pid，本仓库改不了，所以 `pipeline-status.sh --all` 新增 `orphanClaims`：认领不到 3 天、但 `orca terminal list --json` 里本仓库 worktree 下没有标题或屏幕预览提到 `#N` 的活 agent 终端的票，单列「认领但没有活会话」，推进模式那一轮问是否取消认领。判断是启发式（会话标题或屏幕没提到票号会误报），所以只提问、不自动取消；Orca 不可用时不判断，退回 3 天规则。
     - 已知限制：owner pid 由 `lib-owner.sh` 沿父进程找名为 `claude` 的进程；flash 模式等非 `claude` 进程名的编排会话找不到，会退回到当次命令的父 shell，锁和 `run-state` 的判活会立即失效（不会误拦，但也拦不住并发）。
+19. **2026-11-24：Design session 首行用斜杠命令加载上游技能。** 起因：proxy-hub 的 `/grill-map` Design session 讨论完话题后停下，让用户手敲 `/mattpocock-skills:wayfinder`，因为上游 wayfinder 设了 `disable-model-invocation`，Skill 工具调不起来；grill-with-docs 同样设了这个标记。决定：`design-session.sh` 的启动 prompt 首行写 `/$UPSTREAM`，`orca agent launch --prompt` 送进去的是用户输入，斜杠命令能加载这类技能，后面的话题和交接约定成为技能参数（和 launch-wave 发 `/implement-spec-split <n>` 同一机制）。Git Bash 会把开头的 `/` 改写成路径，所以同样设 `MSYS2_ARG_CONV_EXCL` 豁免 `/mattpocock-skills`。
 
 ## 评估过、没有采纳的方案
 

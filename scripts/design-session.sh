@@ -140,6 +140,8 @@ esac
 
 command -v node >/dev/null 2>&1 || die 64 'node is required but was not found on PATH'
 ORCA=${ISS_ORCA:-orca}
+# Git Bash rewrites a leading-slash --prompt as a POSIX path; exempt the skill prefix.
+export MSYS2_ARG_CONV_EXCL="${MSYS2_ARG_CONV_EXCL:+$MSYS2_ARG_CONV_EXCL;}/mattpocock-skills"
 
 run_id_from_json() {
   node -e '
@@ -273,11 +275,15 @@ if [ "$MODE" = launch ]; then
       ;;
   esac
 
+  # The upstream skills set disable-model-invocation, so the Skill tool cannot
+  # load them. Lead with the slash command: the launch prompt arrives as user
+  # input, which may invoke them; everything after it becomes the arguments.
   PROMPT=$(cat <<EOF
+/$UPSTREAM
 你是一个 Design session，由 Orchestrator 从当前仓库转来。请处理用户话题：
 $TOPIC
 
-上游技能：$UPSTREAM
+上游技能：${UPSTREAM}（已由首行斜杠命令加载，不要再用 Skill 工具调它，也不要让用户手敲）
 $KIND_INSTRUCTIONS
 
 运行目录：$RUN_DIR

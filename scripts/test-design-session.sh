@@ -502,6 +502,11 @@ expect_file_has '--timeout needs a value' \
 run_design_session "$WORK/map.out" map 'Refactor authentication module' --timeout 1
 expect_exit 0 'map design session succeeds'
 expect_file_has 'mattpocock-skills:wayfinder' 'map prompt names wayfinder' "$PROMPT_LOG"
+if [ "$(head -n 1 "$PROMPT_LOG")" = /mattpocock-skills:wayfinder ]; then
+  record PASS 'map prompt leads with the wayfinder slash command'
+else
+  record FAIL 'map prompt leads with the wayfinder slash command'
+fi
 expect_file_has 'Refactor authentication module' 'map prompt carries the user topic' "$PROMPT_LOG"
 expect_file_has '先到这' 'map prompt allows an early handoff' "$PROMPT_LOG"
 expect_file_has '地图状态和下一步' 'early handoff describes map state' "$PROMPT_LOG"
