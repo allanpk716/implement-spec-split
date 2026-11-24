@@ -14,6 +14,9 @@ Only GitHub is supported. For other issue trackers, follow that repository's
 tracker documentation instead.
 
   --all                  Also list decision details, empty maps, stale claims, hygiene, and loose issues.
+                         Fresh wayfinder claims with no live Orca agent terminal naming the
+                         ticket (#N in title or preview) in this repository's worktrees are
+                         listed as orphan claims; without Orca they are left unchecked.
   --order                Print a deterministic development order for implementable Specs.
   --parallel K           With --order, plan for K concurrent Specs (default: 2).
   --workers N            With --order, split N total workers across K concurrent Specs.
@@ -34,6 +37,8 @@ tracker documentation instead.
                          without a map); next_wave (same object as --order --json).
 
 PIPELINE_STATUS_NOW may set an ISO-8601 current time for deterministic stale-claim tests.
+PIPELINE_STATUS_ORCA_TERMINALS_JSON may name a file holding `orca terminal list --json`
+output, and PIPELINE_STATUS_ORCA may override the orca executable, for orphan-claim tests.
 EOF
 }
 
@@ -694,6 +699,8 @@ if (mode === 'collect') {
   }
 
   const staleClaims = [];
+  const orphanClaims = [];
+  let orphanClaimsUnchecked = false;
   if (all) {
     const now = Date.parse(process.env.PIPELINE_STATUS_NOW || '');
     const nowMs = Number.isFinite(now)
@@ -701,16 +708,21 @@ if (mode === 'collect') {
       : Date.now();
     const cutoff = nowMs - STALE_CLAIM_MS;
     const seenStale = new Set();
+    const freshClaims = [];
     for (const map of stage.maps) {
       for (const decision of readEndpoint(endpointDir, 'map', map.number)) {
         if (!isOpen(decision) || !hasWayfinderLabel(decision)) continue;
         const assignees = Array.isArray(decision.assignees) ? decision.assignees : [];
         if (assignees.length === 0) continue;
         const updated = Date.parse(decision.updated_at || '');
-        if (!Number.isFinite(updated) || updated >= cutoff) continue;
         const number = Number(decision.number);
         if (seenStale.has(number)) continue;
         seenStale.add(number);
+        if (Number.isFinite(updated) && updated >= cutoff) {
+          freshClaims.push({decision, assignees, mapNumber: Number(map.number)});
+          continue;
+        }
+        if (!Number.isFinite(updated)) continue;
         staleClaims.push({
           number,
           title: decision.title || '',
@@ -724,6 +736,75 @@ if (mode === 'collect') {
       }
     }
     staleClaims.sort((a, b) => a.number - b.number);
+
+    // wayfinder claims only set the Assignee, so liveness comes from Orca: a
+    // fresh claim is orphaned when no live agent terminal in this repository's
+    // worktrees names the ticket in its title or screen preview.
+    const terminals = freshClaims.length > 0 ? liveAgentTerminals() : [];
+    if (terminals === null) {
+      orphanClaimsUnchecked = true;
+    } else {
+      const worktrees = repoWorktreePaths();
+      const local = terminals.filter((terminal) => worktrees.has(String(terminal.worktreePath || '')));
+      for (const {decision, assignees, mapNumber} of freshClaims) {
+        const number = Number(decision.number);
+        const mention = new RegExp(`#${number}(?![0-9])`);
+        const watched = local.some((terminal) => (
+          mention.test(`${terminal.title || ''}\n${terminal.preview || ''}`)
+        ));
+        if (watched) continue;
+        orphanClaims.push({
+          number,
+          title: decision.title || '',
+          label: issueLabels(decision).find((label) => label.startsWith('wayfinder:')) || '',
+          assignees: assignees.map((assignee) => (
+            typeof assignee === 'string' ? assignee : assignee.login
+          )).filter(Boolean),
+          updatedAt: decision.updated_at || '',
+          mapNumber,
+        });
+      }
+      orphanClaims.sort((a, b) => a.number - b.number);
+    }
+  }
+
+  function liveAgentTerminals() {
+    let text;
+    try {
+      const fixture = process.env.PIPELINE_STATUS_ORCA_TERMINALS_JSON;
+      text = fixture
+        ? fs.readFileSync(fixture, 'utf8')
+        : cp.execFileSync(process.env.PIPELINE_STATUS_ORCA || 'orca', ['terminal', 'list', '--json'], {
+          encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000,
+        });
+      const value = JSON.parse(text);
+      const list = value && value.result && Array.isArray(value.result.terminals)
+        ? value.result.terminals : null;
+      if (!list || value.ok === false) return null;
+      return list.filter((terminal) => (
+        terminal && terminal.connected && !terminal.orphaned && terminal.agentIdentity
+      ));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function repoWorktreePaths() {
+    const paths = new Set();
+    try {
+      const output = cp.execFileSync('git', ['worktree', 'list', '--porcelain'], {
+        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      for (const line of output.split('\n')) {
+        if (!line.startsWith('worktree ')) continue;
+        const worktree = line.slice('worktree '.length);
+        paths.add(worktree);
+        try { paths.add(fs.realpathSync(worktree)); } catch (_) { /* keep the listed path */ }
+      }
+    } catch (_) {
+      // Outside a git repository nothing counts as local.
+    }
+    return paths;
   }
 
   const blockerRequests = uniqueNumbers(implement.flatMap((spec) => (
@@ -739,6 +820,8 @@ if (mode === 'collect') {
     emptyMaps,
     exploring,
     staleClaims,
+    orphanClaims,
+    orphanClaimsUnchecked,
     blockerRequests,
     hygiene: all ? hygiene : [],
     loose: all ? loose : [],
@@ -945,6 +1028,21 @@ if (mode === 'render') {
         const assignees = (claim.assignees || []).join('、');
         lines.push(
           `- #${claim.number} [${claim.label}] ${clean(claim.title)}（地图 #${claim.mapNumber}，已认领：${assignees}，更新于 ${claim.updatedAt}） → 询问是否取消认领并纳入推进`
+        );
+      }
+    }
+
+    lines.push('');
+    lines.push('认领但没有活会话');
+    if (pipeline.orphanClaimsUnchecked) {
+      lines.push('（Orca 不可用，未判断）');
+    } else if ((pipeline.orphanClaims || []).length === 0) {
+      lines.push('（无）');
+    } else {
+      for (const claim of pipeline.orphanClaims) {
+        const assignees = (claim.assignees || []).join('、');
+        lines.push(
+          `- #${claim.number} [${claim.label}] ${clean(claim.title)}（地图 #${claim.mapNumber}，已认领：${assignees}，更新于 ${claim.updatedAt}，Orca 里没有提到它的活会话） → 询问是否取消认领并纳入推进`
         );
       }
     }

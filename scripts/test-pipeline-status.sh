@@ -170,6 +170,8 @@ const issues = [
   issue(115, 'Claim exactly at cutoff', 'open', ['wayfinder:grilling'], ''),
   issue(116, 'Stale claimed decision', 'open', ['wayfinder:research'], ''),
   issue(117, 'Fresh unclaimed decision', 'open', ['wayfinder:grilling'], ''),
+  issue(118, 'Fresh claim with live session', 'open', ['wayfinder:grilling'], ''),
+  issue(119, 'Fresh claim watched elsewhere', 'open', ['wayfinder:task'], ''),
   issue(140, 'Spec citing source map', 'closed', [], '## Problem Statement\n来源地图：#42（全部决策见其 Decisions so far 与 #2–#10）'),
   issue(141, 'Spec citing map line', 'closed', [], '## Problem Statement\n**地图: #43**'),
   issue(121, 'Loose bug issue', 'open', ['bug'], ''),
@@ -199,6 +201,14 @@ const responses = {
     }),
     issue(117, 'Fresh unclaimed decision', 'open', ['wayfinder:grilling'], '', sub(0), {
       updated_at: '2026-11-15T12:00:00Z',
+    }),
+    issue(118, 'Fresh claim with live session', 'open', ['wayfinder:grilling'], '', sub(0), {
+      assignees: [{login: 'allan'}],
+      updated_at: '2026-11-15T10:00:00Z',
+    }),
+    issue(119, 'Fresh claim watched elsewhere', 'open', ['wayfinder:task'], '', sub(0), {
+      assignees: [{login: 'allan'}],
+      updated_at: '2026-11-15T10:00:00Z',
     }),
   ],
   'sub-22': [
@@ -583,6 +593,22 @@ mkdir -p "$EMPTY_REPO/.git/implement-spec-split/claims"
 printf '%s\n' '{"spec":500,"branch":"spec-500","worktree":"/tmp/order-500","pid":777,"pid_start":"fake alive","claimed_at":"2026-11-12T09:10:00+08:00"}' \
   > "$EMPTY_REPO/.git/implement-spec-split/claims/spec-500.json"
 
+# Live Orca terminals for orphan-claim checks: #118 is named by an agent in this
+# repository; #119 only by an agent in another repository; "#1150" must not
+# count as #115; a plain shell and a disconnected agent naming #115 do not count.
+REPO_REAL=$(cd "$REPO" && pwd -P)
+cat > "$WORK/orca-terminals.json" <<JSON
+{"ok": true, "result": {"terminals": [
+  {"worktreePath": "$REPO_REAL", "title": "/wayfinder 21 #118", "preview": "", "connected": true, "orphaned": false, "agentIdentity": "claude"},
+  {"worktreePath": "/elsewhere/other-repo", "title": "#119 task", "preview": "", "connected": true, "orphaned": false, "agentIdentity": "claude"},
+  {"worktreePath": "$REPO_REAL", "title": "spec #1150", "preview": "", "connected": true, "orphaned": false, "agentIdentity": "codex"},
+  {"worktreePath": "$REPO_REAL", "title": "#115 shell", "preview": "", "connected": true, "orphaned": false},
+  {"worktreePath": "$REPO_REAL", "title": "#115 gone", "preview": "", "connected": false, "orphaned": false, "agentIdentity": "claude"}
+]}}
+JSON
+printf '%s\n' 'not json' > "$WORK/orca-broken.json"
+ORCA_TERMINALS=$WORK/orca-terminals.json
+
 run_status() {
   cwd=$1
   output=$2
@@ -591,6 +617,7 @@ run_status() {
     FIXTURE_DIR="$FIXTURE"
     PATH="$BIN:$PATH"
     PIPELINE_STATUS_NOW=2026-11-15T12:00:00Z
+    PIPELINE_STATUS_ORCA_TERMINALS_JSON="$ORCA_TERMINALS"
   )
   (
     cd "$cwd" || exit 125
@@ -681,6 +708,21 @@ expect_has '- #24 [wayfinder:grilling] Open grilling decision（地图 #21，已
 expect_has '- #116 [wayfinder:research] Stale claimed decision（地图 #21，已认领：codex，更新于 2026-11-10T12:00:00Z）' 'multi-day claimed decision is stale' "$WORK/all.out"
 expect_section_without '认领后不动（>3 天）' '#115 ' 'claim at exact three-day cutoff is not stale' "$WORK/all.out"
 expect_section_without '认领后不动（>3 天）' '#117 ' 'unclaimed decision is not stale' "$WORK/all.out"
+expect_has '认领但没有活会话' 'all output includes orphan-claim heading' "$WORK/all.out"
+expect_has '- #115 [wayfinder:grilling] Claim exactly at cutoff（地图 #21，已认领：allan，更新于 2026-11-12T12:00:00Z，Orca 里没有提到它的活会话）' \
+  'fresh claim named only by #1150, a shell and a disconnected agent is orphaned' "$WORK/all.out"
+expect_has '- #119 [wayfinder:task] Fresh claim watched elsewhere（地图 #21' 'claim named only in another repository is orphaned' "$WORK/all.out"
+expect_section_without '认领但没有活会话' '#118 ' 'claim named by a live local agent is not orphaned' "$WORK/all.out"
+expect_section_without '认领但没有活会话' '#116 ' 'stale claim is not repeated as orphaned' "$WORK/all.out"
+expect_section_without '认领但没有活会话' '#117 ' 'unclaimed decision is not orphaned' "$WORK/all.out"
+expect_without '认领但没有活会话' 'default output omits orphan claims' "$WORK/main.out"
+
+ORCA_TERMINALS=$WORK/orca-broken.json
+run_status "$REPO" "$WORK/all-no-orca.out" --all
+ORCA_TERMINALS=$WORK/orca-terminals.json
+expect_exit 0 "scan succeeds when Orca output is unusable"
+expect_has '（Orca 不可用，未判断）' 'unusable Orca leaves orphan claims unchecked' "$WORK/all-no-orca.out"
+expect_has '- #116 [wayfinder:research] Stale claimed decision' 'stale claims still listed without Orca' "$WORK/all-no-orca.out"
 
 run_status "$REPO" "$WORK/order-shelved.out" --order --parallel 20 --cmd-suffix ''
 expect_exit 0 "development order excludes shelved-only spec"
@@ -738,7 +780,7 @@ assert.strictEqual(map(42).status, 'converted');
 assert.deepStrictEqual(map(42).spec_numbers, [140]);
 assert.deepStrictEqual(map(46).spec_numbers, [195]);
 assert.deepStrictEqual(map(22).tickets.map((t) => t.number), [57, 58, 59]);
-assert.strictEqual(map(21).decisions_open, 4);
+assert.strictEqual(map(21).decisions_open, 6);
 assert.strictEqual(spec(140).map, 42);
 assert.strictEqual(spec(140).status, 'landed');
 assert.strictEqual(spec(195).map, 46);

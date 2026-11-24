@@ -95,6 +95,14 @@ The single action find-next recommends: a stage (to-tickets, to-spec, or a Decis
 find-next's default GitHub-tracker behaviour: repeatedly scan, auto-resolve clear research tickets, prepare decision questions, propose Fog graduation, triage loose tickets, work task and prototype tickets, draft Specs/Tickets, ask one combined round for real trade-offs, publish, and launch the first wave. `--suggest` requests the old read-only Next-step behaviour.
 _Avoid_: batch mode as a different mode (`--batch` is only an alias)
 
+**Unfinished advance run**:
+An Advance mode run directory whose `run-state.json` has no `finished_at` and whose owner process is dead, or a recent legacy run directory without the file that still points at this repository; the next Advance mode run lists it, reuses its still-valid worker outputs, resumes its half-done publishing, and then abandons it.
+_Avoid_: Recovery (that is continuing a Spec's implementation Run)
+
+**Orphan claim**:
+A wayfinder Map ticket that has an Assignee and was updated within 3 days, while no live Orca agent terminal in this repository's worktrees names it (`#N` in title or preview); Advance mode asks whether to unclaim it instead of waiting for the 3-day stale rule.
+_Avoid_: stale claim (older than 3 days, decided by update time alone)
+
 **Run**:
 One invocation of the skill, implementing one Spec from start to finish; several Runs may work on different Specs at the same time.
 

@@ -15,7 +15,7 @@ description: 默认进入推进模式：循环扫描当前 GitHub 仓库的 wayf
 - `/find-next --suggest [--worker codex|pi|self|agent] [--agent-model <model>]`：原先的默认行为，只读挑一个 Next step（见「建议模式流程」）；未给 `--worker` 时等同于 `codex`。支持 GitHub 和本地 markdown 跟踪器
 - `/find-next --list`：不挑一个，列出当前仓库的全部待办清单（见「清单模式」）。总是我自己做，不派 worker，`--worker` 被忽略
 - `/find-next --batch …`：推进模式别名，兼容旧用法
-- `--workers N` 可选，是全机 GLM worker 总数；每份规格的 `--parallel` = N ÷ K（至少 1）。没给时读 `~/.cache/implement-spec-split/max-workers`（`scripts/max-workers.sh` 用的同一文件）；文件也没有就把 worker 上限并入本轮最后一个问题问用户。`--specs K` 是同时开几份规格，默认 2。**同一仓库同一时间只在一个会话里运行推进模式**：起草、发布和地图更新没有全流程锁，两个会话同时跑会重复起草或重复关票
+- `--workers N` 可选，是全机 GLM worker 总数；每份规格的 `--parallel` = N ÷ K（至少 1）。没给时读 `~/.cache/implement-spec-split/max-workers`（`scripts/max-workers.sh` 用的同一文件）；文件也没有就把 worker 上限并入本轮最后一个问题问用户。`--specs K` 是同时开几份规格，默认 2。**同一仓库同一时间只在一个会话里运行推进模式**：推进模式全程持仓库级 `find-next-advance` 锁（见「推进模式」第 1 步），第二个会话会被拦下；持锁会话被意外关闭后锁自动失效
 - `--agent-model <sonnet|opus|haiku|fable>` 只在 `--worker agent` 时有效，默认 `sonnet`；给了 `--worker codex`/`pi`/`self`（或不给 `--worker`）却给 `--agent-model` 是参数冲突，报错让用户改。一个开关管全程：`--worker agent` 同时决定本技能自己的调研/决策/起草方式和生成的开发命令后端，不提供混搭。
 - **无人值守落地**（GLOSSARY.md）默认开启：本批规格（含之后自动开的波次）不停下问人，落地或停车都在规格 issue 下留报告。`--no-auto-land` 只在推进模式有效，用来让本批保留 push 前确认：第 10 步把它透传给 launch-wave.sh，`--apply` 会把 `auto_land: false` 写进启动状态，`--next-wave` 沿用；`--auto-land` 保留为兼容别名，等同默认。
 
@@ -81,7 +81,7 @@ description: 默认进入推进模式：循环扫描当前 GitHub 仓库的 wayf
 
 1. **机械扫描**：
    - 先运行 `~/.claude/skills/implement-spec-split/scripts/completion-report.sh <仓库>`（不带 `--spec`），它的「完成度结论」原样放在清单最上面；脚本非 0 时在同样位置写一行「完成度结论（查询失败）」，不阻塞清单。
-   - GitHub：`~/.claude/skills/implement-spec-split/scripts/pipeline-status.sh --all`。除默认段外还列出：「地图仍在探索」每张地图开着的决策票；「空地图（待 /wayfinder 画图）」（open、未搁置、没有子票的 `wayfinder:map`）；「认领后不动（>3 天）」（open、有 Assignee、`updated_at` 早于 3 天的 `wayfinder:*` 决策票）；「状态没收尾」（规格已关闭但执行票还开着、实现票只被已关闭的规格覆盖、规格未关执行票全是搁置票）；「散票」（不属于任何地图或规格的 open issue，带标签、来源地图和时机）。「地图迷雾待毕业」在默认输出和 `--all` 都有。「可以实现」会排除未关执行票全是搁置票的规格；混合规格的搁置票带 `(搁置)` 后缀。
+   - GitHub：`~/.claude/skills/implement-spec-split/scripts/pipeline-status.sh --all`。除默认段外还列出：「地图仍在探索」每张地图开着的决策票；「空地图（待 /wayfinder 画图）」（open、未搁置、没有子票的 `wayfinder:map`）；「认领后不动（>3 天）」（open、有 Assignee、`updated_at` 早于 3 天的 `wayfinder:*` 决策票）；「认领但没有活会话」（认领不到 3 天，但 Orca 里本仓库没有提到这张票的活 agent 会话；Orca 不可用时写「（Orca 不可用，未判断）」）；「状态没收尾」（规格已关闭但执行票还开着、实现票只被已关闭的规格覆盖、规格未关执行票全是搁置票）；「散票」（不属于任何地图或规格的 open issue，带标签、来源地图和时机）。「地图迷雾待毕业」在默认输出和 `--all` 都有。「可以实现」会排除未关执行票全是搁置票的规格；混合规格的搁置票带 `(搁置)` 后缀。
    - GitHub 另跑 `~/.claude/skills/implement-spec-split/scripts/grill-status.sh`，按 grill 题目列出每次 Design session 的规格与票完成数（中断的标「中断（无 handoff）」）。
    - 本地 markdown 跟踪器：`scan.py` 的 JSON 已含全部票、每张地图的 `has_fog`、`fog_maps` 候选和成员关系；按下面的分组自己归类。open、未搁置且 `members` 为空的地图归「空地图」。本地票头没有可信更新时间，不推断「认领后不动」，该组写「（本地跟踪器无 updated_at，不判断）」。
 2. **轻量判断**（我自己做，只看标题和标签，必要时 `gh issue view` 一两张）：
@@ -108,7 +108,7 @@ B. 有规格、未拆票 → /to-tickets
 C. 缺规格 → /to-spec（按地图分组）
 D. 待讨论的决策票 → /wayfinder <地图> <票>
 E. 地图迷雾待毕业 → /find-next --batch <地图>
-F. 认领后不动（>3 天） → /find-next --batch
+F. 认领后不动（>3 天）/ 认领但没有活会话 → /find-next --batch
 G. 空地图（待 /wayfinder 画图）
 H. 状态没收尾（核对后关票 / 只剩搁置票可关规格，由用户确认）
 I. 散票（bug / needs-triage 等；含等待时机、疑似重复和推进模式分流提示）
@@ -135,15 +135,25 @@ flash 模式下，本节所有原本由主会话审读或复核的结论都按�
 
 `--worker agent` 时的同构做法（适用于本节所有原本派 codex-worker.sh 的步骤）：照旧建运行目录和子目录、照旧写 `brief.md`，然后开一个 Agent 子代理，`model` 显式传 `--agent-model` 的值，prompt 固定为：「读 <该子目录>/brief.md 并照做，把最终报告写到 <该子目录>/result.md，同时作为你的最终回复」。Brief 里「wrapper 会把最终回复存成 result.md，不要自己写」这类话是对 codex worker 说的，agent 模式下以 prompt 为准：子代理自己写 `result.md`。没有 `status.json`，主会话以子代理的返回和 `result.md` 为准；失败时把原因补进 Brief、换新运行目录重派一次，再失败就停下报告，不自动改用 codex 或 self。
 
-推进模式只支持 GitHub 跟踪器。先读 `docs/agents/issue-tracker.md`；发现本地 markdown 跟踪器时，说明推进模式不支持，改按 `--suggest` 或 `--list` 执行。**同一仓库同一时间只在一个会话里运行推进模式**；开工前确认没有另一个本仓库推进器会话。
+推进模式只支持 GitHub 跟踪器。先读 `docs/agents/issue-tracker.md`；发现本地 markdown 跟踪器时，说明推进模式不支持，改按 `--suggest` 或 `--list` 执行。**同一仓库同一时间只在一个会话里运行推进模式**，由第 1 步的 `find-next-advance` 锁保证。
 
-1. **扫描**：
+下文 `run-state.sh` 指 `<本技能目录>/scripts/run-state.sh`。进入第 2、3、4、5、6、9、10 步时各运行一次 `run-state.sh step <运行目录> <步骤号>`，会话被意外关闭后下次能看出停在哪一步。
 
-   ```bash
-   ~/.claude/skills/implement-spec-split/scripts/pipeline-status.sh --all
-   ```
+1. **拿锁、接续上次中断的推进、扫描**：
+   1. 在仓库根运行 `~/.claude/skills/implement-spec-split/scripts/lock.sh acquire find-next-advance --scope repo --wait 0`。退出码非 0 就停止推进模式：用 `lock.sh status find-next-advance --scope repo` 告诉用户持锁会话的 pid 和开始时间，建议等它结束或改用 `--list`；不拿锁的 `--suggest`、`--list` 不受影响。持锁会话已死时 `acquire` 会自动接管，不用人工清理。
+   2. 建运行目录 `~/.cache/codex-runs/<仓库名>-<YYYYmmdd-HHMM>-find-next-advance/`，立即运行 `run-state.sh init <运行目录> --repo <owner/name> --repo-path <仓库根>`。
+   3. 运行 `run-state.sh pending --repo <owner/name> --repo-path <仓库根>`，列出本仓库没收尾的旧推进运行（原会话已死的新版运行；没有状态文件、7 天内、内容指向本仓库的旧版运行）。输出「（无）」就跳到第 4 小步。有就把这段输出原样放在本轮第一条输出里，再加 `--json` 取结构化数据，然后不问用户，逐个处理：
+      - 票级产出（research/decision/fog/task/loose/prototype 且 `has_result`）：`gh issue view <N> --json state,updatedAt`。票仍 open，且 `updatedAt` 早于 `result_mtime`，就**复用**：把旧子目录（多次尝试取有 `result.md` 的那个）复制到本次运行目录下的同名子目录 `<类型>-<N>/`（复制，不移动），后面的步骤视为这张票的 worker 已经跑完，直接进入复核，不再派 worker。否则作废，按正常流程重派。
+      - 规格组 `S<k>`：`published.exists` 且不完整的，在**旧运行目录**里重跑 `publish-batch.sh --apply --no-order <旧目录>/S*/manifest.json` 接着发（脚本支持中途失败后重跑）；有 `spec.md`/`manifest.json` 但完全没发布的，若对应实现票/地图仍满足起草条件，复制进本次运行目录，作为第 5 步的草稿，按 5.4 重新审稿后再用，不重新起草；只有 brief 或 note 的作废。
+      - 处理完一个旧运行就 `run-state.sh abandon <旧目录>`。
+      - 复用、作废、接着发布的结果都记下来，放进第 11 步收尾报告的「接续上次中断的推进」一段。
+   4. **扫描**：
 
-   保存为运行目录 `~/.cache/codex-runs/<仓库名>-<YYYYmmdd-HHMM>-find-next-advance/scan-<轮次>.txt`。带地图号、实现票号或规格号时，只推进参数指向的范围；不带时处理全仓库。
+      ```bash
+      ~/.claude/skills/implement-spec-split/scripts/pipeline-status.sh --all
+      ```
+
+      保存为运行目录下的 `scan-<轮次>.txt`。带地图号、实现票号或规格号时，只推进参数指向的范围；不带时处理全仓库。
 
 2. **research 票（自动，不问用户）**：从「地图仍在探索」每张地图的前沿里找出 open、阻塞全关、无 Assignee、标签为 `wayfinder:research` 的票。pipeline 输出已标注「有未关阻塞」「已认领」；漏信息时用 `gh issue view <n> --json assignees,labels` 和 tracker 文档的 blocker 查询补齐。每张票一个子目录 `research-<票号>/`，用 [templates/brief-research.md](templates/brief-research.md) 填 Brief，后台运行：
 
@@ -158,7 +168,7 @@ flash 模式下，本节所有原本由主会话审读或复核的结论都按�
 
    flash 模式下，本段审读和后续写票动作按「flash 模式」一节并入当轮 Opus review。
 
-3. **决策、迷雾、task 与 prototype 票（worker 准备，一轮问用户）**：research 票全部处置完后重新运行 `pipeline-status.sh --all`，看最新前沿、`fogMaps`、`emptyMaps` 和 `staleClaims`。
+3. **决策、迷雾、task 与 prototype 票（worker 准备，一轮问用户）**：research 票全部处置完后重新运行 `pipeline-status.sh --all`，看最新前沿、`fogMaps`、`emptyMaps`、`staleClaims`（「认领后不动（>3 天）」）和 `orphanClaims`（「认领但没有活会话」：认领不到 3 天，但 Orca 里本仓库各 worktree 没有标题或屏幕内容提到 `#N` 的活 agent 会话，多半是认领它的会话被意外关闭了）。
    - **决策票**：open、阻塞全关、无 Assignee、标签为 `wayfinder:grilling` 的票每张派一个只读 worker，子目录 `decision-<票号>/`，用 [templates/brief-decision.md](templates/brief-decision.md)。worker 读票、地图、相关 ADR、规格和代码，产出问题陈述、2–4 个选项及代价、推荐答案和理由，写在 `decision.md`；不写票、不关票、不改地图。命令同上（含 `--mcp all`）；`--worker agent` 时同样按本节开头的同构做法开子代理，prompt 指向 `<运行目录>/decision-<票号>/brief.md` 与 `result.md`。worker 判断「无需用户决策」（已有 ADR/地图决定）时，我复核依据，仍把它作为一条「建议直接关：<依据>」放进第 6 步那一轮，用户同意后再写 Resolution、关票：grilling 是 HITL，wayfinder 规定代理不能替人回答。
    - **地图迷雾**：扫描到 `fogMaps` 时，每张地图派一个只读 worker，子目录 `fog-<地图号>/`，用 [templates/brief-fog.md](templates/brief-fog.md)。worker 读地图、`Decisions so far` 和相关 Resolution，写 `fog.md`：建议新建的票（问题、`wayfinder:` 类型、阻塞对象）、应从 `Not yet specified` 移除的段落、建议判出范围或作废的票（附理由）、毕业后仍剩下的迷雾。这些变成第 6 步的「建议新建 / 建议判出范围」条目；未获用户同意前，主会话不改地图边界。
      地图迷雾的 codex 命令同决策票（含 `--mcp all`）。
@@ -218,7 +228,7 @@ flash 模式下，本节所有原本由主会话审读或复核的结论都按�
 
       flash 模式下，本段审稿按「flash 模式」一节并入当轮 Opus review。
 
-6. **一轮问用户（没有问题就跳过）**：把第 3 步决策题、迷雾毕业建议、task 人工清单、prototype 反应题、`staleClaims` 处理题、第 2 步转来的取舍题、第 4 步散票分流建议、第 5 步每组 `unresolved`、缺少的全机 worker 上限，合成一条手机友好的消息。编号全批连续（a、b、c…），每组只给一两行摘要和必要上下文，选项各占一行；最后一个问题可以是「全机 GLM worker 总数用 N 吗？」。**无人值守落地**（GLOSSARY.md）不再提问：launch-wave.sh 默认带 `--auto-land`，本批规格（含之后自动开的波次）会不停下问人；调用时带了 `--no-auto-land` 才保留 push 前确认，第 10 步原样透传。**单次运行累计最多问用户 3 轮**；第 3 轮结束后不再发起第 4 轮，剩余待拍板事项留到收尾，下次 `/find-next --batch` 接着推。结尾写：
+6. **一轮问用户（没有问题就跳过）**：把第 3 步决策题、迷雾毕业建议、task 人工清单、prototype 反应题、`staleClaims` 与 `orphanClaims` 处理题（后者问「#N 认领了但 Orca 里没有活会话在处理，取消认领并纳入推进吗？」）、第 2 步转来的取舍题、第 4 步散票分流建议、第 5 步每组 `unresolved`、缺少的全机 worker 上限，合成一条手机友好的消息。编号全批连续（a、b、c…），每组只给一两行摘要和必要上下文，选项各占一行；最后一个问题可以是「全机 GLM worker 总数用 N 吗？」。**无人值守落地**（GLOSSARY.md）不再提问：launch-wave.sh 默认带 `--auto-land`，本批规格（含之后自动开的波次）会不停下问人；调用时带了 `--no-auto-land` 才保留 push 前确认，第 10 步原样透传。**单次运行累计最多问用户 3 轮**；第 3 轮结束后不再发起第 4 轮，剩余待拍板事项留到收尾，下次 `/find-next --batch` 接着推。结尾写：
 
    flash 模式下，本步只直接转述选择题；「展开」处理见「flash 模式」一节。
 
@@ -258,7 +268,7 @@ flash 模式下，本节所有原本由主会话审读或复核的结论都按�
 
    flash 模式下，「展开」条目改开 Design session，见「flash 模式」一节。
 
-7. **应用答案、迷雾毕业与散票分流**：用户同意的决策票/取舍题，把答案写进 Resolution 评论、关票、更新地图 Decisions so far；「展开」条目按第 6 步的 grilling + domain-modeling 结果同样收票。task 票按用户完成的人工步骤或确认过的 AFK 结果写 Resolution、关票、更新地图；prototype 按用户反应写 Resolution、关票并链接原型资产。`staleClaims` 只有用户同意才取消认领；取消后它按前沿规则进入后续扫描，不自动视为已处理。草稿未决按原批量规则处理：对应草稿去掉「（待确认）」，出处写「（owner <日期> 推进器确认）」，清空该组 `unresolved`；小改动我直接改草稿，大改动重派该组；用户说「再想想」的那张票或那组草稿不发布、不再追问，保留给 `/wayfinder` 或后续推进。用户给出的 worker 数在启动时传给 `launch-wave.sh`，由脚本写入全机 worker 上限文件。
+7. **应用答案、迷雾毕业与散票分流**：用户同意的决策票/取舍题，把答案写进 Resolution 评论、关票、更新地图 Decisions so far；「展开」条目按第 6 步的 grilling + domain-modeling 结果同样收票。task 票按用户完成的人工步骤或确认过的 AFK 结果写 Resolution、关票、更新地图；prototype 按用户反应写 Resolution、关票并链接原型资产。`staleClaims`、`orphanClaims` 只有用户同意才取消认领；取消后它按前沿规则进入后续扫描，不自动视为已处理。草稿未决按原批量规则处理：对应草稿去掉「（待确认）」，出处写「（owner <日期> 推进器确认）」，清空该组 `unresolved`；小改动我直接改草稿，大改动重派该组；用户说「再想想」的那张票或那组草稿不发布、不再追问，保留给 `/wayfinder` 或后续推进。用户给出的 worker 数在启动时传给 `launch-wave.sh`，由脚本写入全机 worker 上限文件。
 
    flash 模式下，用户「再想想」后的地图入口按「flash 模式」一节改推荐 `/grill-map`。
 
@@ -294,7 +304,7 @@ flash 模式下，本节所有原本由主会话审读或复核的结论都按�
 
    flash 模式下，规格会话与默认实现后端的选择由 launch-wave.sh 处理，见「flash 模式」一节。
 
-11. **收尾**：先运行 `~/.claude/skills/implement-spec-split/scripts/completion-report.sh <仓库>`（不带 `--spec`），把输出原样放在收尾报告最上面（脚本非 0 时写「完成度结论（查询失败）」），下面才是本轮做了什么。原样转述启动结果，列出已启动、跳过、失败和需手动的规格。列出 `emptyMaps`（若有），逐张提示「用 `/wayfinder <地图号>` 画图」，不代画、不建第一批票。单列「等待时机」（#号、标题、条件、要现在开就回「开 #N」；条件是人要做的动作时已在顶部完成度结论里给出对应动作）与未结案的散票分流建议。列出因单次 2 张上限未处理的 prototype 票、因 3 轮问询上限或「先到这」留下的待拍板事项，提示下次运行 `/find-next --batch` 接着推。提醒用户：之后每份规格合入 main 时，implement-spec-split 会在第 9 步末尾只运行一条 `launch-wave.sh --next-wave --apply` 开新会话；本推进器会话可以 `/clear`。各规格会话默认无人值守落地：不在 push 前确认、不停下等人，落地或停车都在规格 issue 下留报告，早上看 GitHub 即可；只有显式 `--no-auto-land` 的批才保留 push 前确认。GLM 额度/auth/transient 出错、worker 连续失败时按无人值守规则处理或停车。
+11. **收尾**：先运行 `~/.claude/skills/implement-spec-split/scripts/completion-report.sh <仓库>`（不带 `--spec`），把输出原样放在收尾报告最上面（脚本非 0 时写「完成度结论（查询失败）」），下面才是本轮做了什么；第 1 步接续过旧推进运行时，先写一段「接续上次中断的推进」（复用了哪些票的产出、作废重派了哪些、在旧目录接着发布了哪些规格）。原样转述启动结果，列出已启动、跳过、失败和需手动的规格。列出 `emptyMaps`（若有），逐张提示「用 `/wayfinder <地图号>` 画图」，不代画、不建第一批票。单列「等待时机」（#号、标题、条件、要现在开就回「开 #N」；条件是人要做的动作时已在顶部完成度结论里给出对应动作）与未结案的散票分流建议。列出因单次 2 张上限未处理的 prototype 票、因 3 轮问询上限或「先到这」留下的待拍板事项，提示下次运行 `/find-next --batch` 接着推。提醒用户：之后每份规格合入 main 时，implement-spec-split 会在第 9 步末尾只运行一条 `launch-wave.sh --next-wave --apply` 开新会话；本推进器会话可以 `/clear`。各规格会话默认无人值守落地：不在 push 前确认、不停下等人，落地或停车都在规格 issue 下留报告，早上看 GitHub 即可；只有显式 `--no-auto-land` 的批才保留 push 前确认。GLM 额度/auth/transient 出错、worker 连续失败时按无人值守规则处理或停车。最后运行 `run-state.sh finish <运行目录>`，再 `lock.sh release find-next-advance --scope repo`。
 
    flash 模式下，空地图提示按「flash 模式」一节改推荐 `/grill-map`。
 
@@ -308,6 +318,7 @@ flash 模式下，本节所有原本由主会话审读或复核的结论都按�
 - 一轮扫描没有任何 research、决策、迷雾毕业、task、prototype、散票分流、起草、发布或启动可做：先放 `completion-report.sh <仓库>` 的完成度结论（脚本非 0 时写「完成度结论（查询失败）」），下面再输出当前最接近的阻塞点（含空地图、已认领不动的票、等待时机的散票）并结束。
 - 已问满 3 轮或用户回「先到这」：不再发下一轮问题，按第 11 步收尾并列出剩余待拍板事项。
 - 用户要求停止：不再发任何写请求；已在后台的 worker 等它结束后只读结果，不应用自动写操作。
+- 任何原因终止推进模式（含上面各条停下、用户要求停止）：运行 `run-state.sh finish <运行目录> --aborted <一句原因>`，再 `lock.sh release find-next-advance --scope repo`。会话被意外关闭来不及做这两步时，锁自动失效，下次推进由第 1 步接续。
 
 flash 模式下，Opus review 与 Design session 的失败处理见「flash 模式」一节。
 
