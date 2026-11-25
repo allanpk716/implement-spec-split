@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 # Completion conclusion for a repository's grill topics: the current topic's
 # progress, repository-wide topic status, a release recommendation, tickets a
-# release would unfreeze, and interrupted grill sessions. Read-only: it never
-# tags and never pushes.
+# release would unfreeze, and interrupted grill sessions. When --spec belongs
+# to no grill topic, the first line is that Spec's own landing conclusion and
+# repository-wide status comes from pipeline-status.sh --graph (open Specs and
+# the ready tickets that belong to no Spec or map). Read-only: it never tags
+# and never pushes.
 
 set -u
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 GRILL_STATUS=$HERE/grill-status.sh
+PIPELINE_STATUS=$HERE/pipeline-status.sh
 
 usage() {
   cat <<'USAGE'
@@ -16,9 +20,13 @@ Usage: completion-report.sh [<repo dir>] [--spec <n>] [--notify]
 Print a fixed-format Chinese completion conclusion: the current grill topic's
 progress (--spec), repository-wide topic status, whether to tag a release (with
 a suggested version and reasons), tickets that a release would unfreeze, and
-interrupted grill sessions. --notify sends exactly one notification when the
---spec topic is complete; COMPLETION_NOTIFY_CMD overrides the default
-osascript command and receives the title and body as two arguments.
+interrupted grill sessions. When --spec belongs to no grill topic, the first
+line states that Spec's own landing (landed, or partly landed with the tickets
+still waiting for other Specs), open Specs are listed one per line, and only
+ready tickets that belong to no Spec or map count as loose tickets; those
+relations come from pipeline-status.sh --graph. --notify sends exactly one
+notification when the --spec topic is complete; COMPLETION_NOTIFY_CMD overrides
+the default osascript command and receives the title and body as two arguments.
 USAGE
 }
 
@@ -172,6 +180,20 @@ for n in ${ALL_SPECS[@]+"${ALL_SPECS[@]}"}; do
   done
 done
 
+# A --spec outside every grill topic gets its own conclusion below; whether or
+# not the graph knows it, keep it and its tickets out of the loose tickets.
+if [ -n "$SPEC_ARG" ] && ! has_spec "$SPEC_ARG"; then
+  query_spec "$SPEC_ARG"
+  mark_excluded "$SPEC_ARG"
+  subs=$( (
+    cd "$REPO_ROOT" &&
+      gh api "repos/{owner}/{repo}/issues/$SPEC_ARG/sub_issues" --jq '.[].number'
+  ) 2>/dev/null) || subs=''
+  for s in $subs; do
+    mark_excluded "$s"
+  done
+fi
+
 RFA_FAILED=false
 RFA_RAW=$( (
   cd "$REPO_ROOT" &&
@@ -212,6 +234,126 @@ while IFS= read -r line; do
 done <<EOF
 $TIMING_RAW
 EOF
+
+# ---------------------------------------------------------------- graph data
+# Spec, ticket and map relations come from pipeline-status.sh --graph; this
+# script does not re-derive them. When the graph cannot be read the report
+# says （查询失败） for the parts that need it and carries on.
+
+read -r -d '' GRAPH_NODE <<'NODE' || true
+const fs = require('fs');
+let graph;
+try {
+  graph = JSON.parse(fs.readFileSync(0, 'utf8'));
+} catch (error) {
+  process.exit(1);
+}
+if (!graph || typeof graph !== 'object') process.exit(1);
+const clean = (value) => String(value == null ? '' : value).replace(/[\r\n\t]+/g, ' ').trim();
+const csv = (list) => (Array.isArray(list) ? list.map(Number).filter((n) => Number.isFinite(n)) : []).join(',');
+const lines = [];
+const partial = new Set();
+const wave = graph.next_wave && Array.isArray(graph.next_wave.wave) ? graph.next_wave.wave : [];
+for (const entry of wave) {
+  if (entry && /部分等/.test(String(entry.note || ''))) partial.add(Number(entry.spec));
+}
+for (const spec of Array.isArray(graph.specs) ? graph.specs : []) {
+  if (!spec) continue;
+  lines.push(['spec', Number(spec.number), spec.state, spec.status,
+    Number(spec.tickets_total || 0), Number(spec.tickets_closed || 0),
+    csv(spec.depends_on), csv(spec.extra_blockers),
+    partial.has(Number(spec.number)) ? 1 : 0, clean(spec.title)].join('\t'));
+  for (const ticket of Array.isArray(spec.tickets) ? spec.tickets : []) {
+    if (!ticket) continue;
+    lines.push(['ticket', Number(ticket.number), Number(spec.number), ticket.state,
+      ticket.shelved ? 1 : 0].join('\t'));
+  }
+}
+for (const map of Array.isArray(graph.maps) ? graph.maps : []) {
+  if (!map) continue;
+  for (const ticket of Array.isArray(map.tickets) ? map.tickets : []) {
+    if (ticket) lines.push(['mapticket', Number(ticket.number), Number(map.number)].join('\t'));
+  }
+}
+process.stdout.write(lines.length ? `${lines.join('\n')}\n` : '');
+NODE
+
+GRAPH_FAILED=false
+GRAPH_JSON=
+if [ -x "$PIPELINE_STATUS" ] && command -v node >/dev/null 2>&1; then
+  if ! GRAPH_JSON=$( (
+    cd "$REPO_ROOT" && bash "$PIPELINE_STATUS" --graph
+  ) 2>/dev/null); then
+    GRAPH_JSON=
+    GRAPH_FAILED=true
+  fi
+else
+  GRAPH_FAILED=true
+fi
+GRAPH_TSV=
+if [ "$GRAPH_FAILED" = false ]; then
+  if ! GRAPH_TSV=$(printf '%s\n' "$GRAPH_JSON" | node -e "$GRAPH_NODE" 2>/dev/null); then
+    GRAPH_TSV=
+    GRAPH_FAILED=true
+  fi
+fi
+GRAPH_JSON=
+
+TAB=$'\t'
+GRAPH_SPEC_ROWS=()
+GRAPH_TICKET_ROWS=()
+GRAPH_MAP_TICKET_ROWS=()
+if [ "$GRAPH_FAILED" = false ]; then
+  while IFS= read -r row; do
+    [ -n "$row" ] || continue
+    case "$row" in
+      "spec$TAB"*) GRAPH_SPEC_ROWS+=("${row#spec$TAB}") ;;
+      "ticket$TAB"*) GRAPH_TICKET_ROWS+=("${row#ticket$TAB}") ;;
+      "mapticket$TAB"*) GRAPH_MAP_TICKET_ROWS+=("${row#mapticket$TAB}") ;;
+    esac
+  done <<EOF
+$GRAPH_TSV
+EOF
+fi
+GRAPH_TSV=
+
+graph_spec_row() { # spec number → its graph row, or nothing
+  local n=$1 row
+  for row in ${GRAPH_SPEC_ROWS[@]+"${GRAPH_SPEC_ROWS[@]}"}; do
+    [ "$(line_field "$row" 1)" = "$n" ] && {
+      printf '%s' "$row"
+      return 0
+    }
+  done
+  return 1
+}
+
+graph_is_spec() {
+  graph_spec_row "$1" >/dev/null 2>&1
+}
+
+graph_ticket_owner() { # ticket number → the Spec that owns it, or nothing
+  local n=$1 row
+  for row in ${GRAPH_TICKET_ROWS[@]+"${GRAPH_TICKET_ROWS[@]}"}; do
+    [ "$(line_field "$row" 1)" = "$n" ] && {
+      printf '%s' "$(line_field "$row" 2)"
+      return 0
+    }
+  done
+  return 1
+}
+
+if [ "$GRAPH_FAILED" = false ]; then
+  for row in ${GRAPH_SPEC_ROWS[@]+"${GRAPH_SPEC_ROWS[@]}"}; do
+    mark_excluded "$(line_field "$row" 1)"
+  done
+  for row in ${GRAPH_TICKET_ROWS[@]+"${GRAPH_TICKET_ROWS[@]}"}; do
+    mark_excluded "$(line_field "$row" 1)"
+  done
+  for row in ${GRAPH_MAP_TICKET_ROWS[@]+"${GRAPH_MAP_TICKET_ROWS[@]}"}; do
+    mark_excluded "$(line_field "$row" 1)"
+  done
+fi
 
 STRAY_LINES=()
 while IFS= read -r line; do
@@ -355,6 +497,219 @@ topic_specs_after_tag() {
   return 1
 }
 
+format_numbers() { # "19,20" → "#19、#20"
+  printf '%s' "$1" | sed 's/^/#/; s/,/、#/g'
+}
+
+ticket_open_blockers() { # ticket number → comma-separated numbers of its open blockers
+  local t=$1 out
+  out=$( (
+    cd "$REPO_ROOT" &&
+      gh api "repos/{owner}/{repo}/issues/$t/dependencies/blocked_by" \
+        --jq '.[] | select(.state == "open") | .number'
+  ) 2>/dev/null) || return 1
+  [ -n "$out" ] || return 0
+  printf '%s' "$out" | tr '\n' ',' | sed 's/,$//'
+}
+
+blocker_owner() { # issue number → the Spec that owns it, else the number itself
+  local b=$1 owner
+  owner=$(graph_ticket_owner "$b" 2>/dev/null || true)
+  if [ -z "$owner" ] && graph_is_spec "$b"; then
+    owner=$b
+  fi
+  printf '%s' "${owner:-$b}"
+}
+
+# analyze_remaining <comma-separated open ticket numbers>: what those tickets
+# wait for, per ticket. Sets REMAINING_TEXT and returns 0 when every remaining
+# ticket waits on something outside its own Spec ("#28、#29 等 #19；#33 等
+# #20"), 1 when at least one can be worked on now (REMAINING_TEXT lists the
+# tickets), 2 when the blocker query failed.
+analyze_remaining() {
+  local tickets=$1 t blockers b owner owners key i found
+  local keys=() groups=() waiting=true parts=()
+  REMAINING_TEXT=
+  for t in $(printf '%s' "$tickets" | tr ',' ' '); do
+    [ -n "$t" ] || continue
+    if ! blockers=$(ticket_open_blockers "$t"); then
+      return 2
+    fi
+    owners=
+    for b in $(printf '%s' "$blockers" | tr ',' ' '); do
+      [ -n "$b" ] || continue
+      owner=$(blocker_owner "$b")
+      [ "$owner" = "$SPEC_ARG" ] && continue
+      owners="$owners $owner"
+    done
+    owners=$(printf '%s\n' $owners | sort -n | uniq | tr '\n' ',' | sed 's/,$//')
+    [ -n "$owners" ] || waiting=false
+    found=-1
+    i=0
+    for key in ${keys[@]+"${keys[@]}"}; do
+      if [ "$key" = "$owners" ]; then
+        found=$i
+        break
+      fi
+      i=$((i + 1))
+    done
+    if [ "$found" -lt 0 ]; then
+      keys+=("$owners")
+      groups+=("#$t")
+    else
+      groups[$found]="${groups[$found]}、#$t"
+    fi
+  done
+  if [ "$waiting" != true ]; then
+    REMAINING_TEXT=$(format_numbers "$tickets")
+    return 1
+  fi
+  i=0
+  for key in ${keys[@]+"${keys[@]}"}; do
+    parts+=("${groups[$i]} 等 $(format_numbers "$key")")
+    i=$((i + 1))
+  done
+  REMAINING_TEXT=$(printf '%s\n' "${parts[@]}" | join_lines '；')
+  return 0
+}
+
+# The first line of the report for a --spec that belongs to no grill topic.
+spec_conclusion() {
+  local n=$1 row= state= status= total=0 closed=0 deps= extras= title= gh_state
+  local progress= label= remaining= shelved= rc=0 wait_text=
+  row=$(graph_spec_row "$n" 2>/dev/null || true)
+  gh_state=$(spec_field "$n" 2)
+  if [ -n "$row" ]; then
+    state=$(line_field "$row" 2)
+    status=$(line_field "$row" 3)
+    total=$(line_field "$row" 4)
+    closed=$(line_field "$row" 5)
+    deps=$(line_field "$row" 6)
+    extras=$(line_field "$row" 7)
+    title=$(display_title "$(line_field "$row" 9)")
+  elif [ "$gh_state" = open ] || [ "$gh_state" = closed ]; then
+    state=$gh_state
+    total=$(spec_field "$n" 5)
+    closed=$(spec_field "$n" 4)
+    title=$(display_title "$(spec_field "$n" 3)")
+  else
+    printf '⚠️ 规格 #%s（查询失败）' "$n"
+    return 0
+  fi
+  case "$total" in ''|*[!0-9]*) total=0 ;; esac
+  case "$closed" in ''|*[!0-9]*) closed=0 ;; esac
+  label="规格 #$n $title"
+  [ "$total" -gt 0 ] && progress="票 $closed/$total"
+  [ "$status" = interrupted ] && [ -n "$progress" ] && progress="${progress}，实现中断待恢复"
+  if [ "$state" != closed ] && [ "$status" = shelved ]; then
+    printf '🟡 规格 #%s 已搁置%s' "$n" "${progress:+（${progress}）}"
+    return 0
+  fi
+  if [ "$state" = closed ]; then
+    printf '✅ %s 已落地%s' "$label" "${progress:+（${progress}）}"
+    return 0
+  fi
+  if [ "$total" -gt 0 ] && [ "$closed" -ge "$total" ]; then
+    printf '✅ %s 已落地（%s，issue 还没关）' "$label" "$progress"
+    return 0
+  fi
+  if [ "$total" -eq 0 ]; then
+    printf '🟡 规格 #%s 还没拆票' "$n"
+    return 0
+  fi
+  remaining=
+  shelved=
+  for row in ${GRAPH_TICKET_ROWS[@]+"${GRAPH_TICKET_ROWS[@]}"}; do
+    [ "$(line_field "$row" 2)" = "$n" ] || continue
+    [ "$(line_field "$row" 3)" = open ] || continue
+    if [ "$(line_field "$row" 4)" = 1 ]; then
+      shelved="$shelved,$(line_field "$row" 1)"
+    else
+      remaining="$remaining,$(line_field "$row" 1)"
+    fi
+  done
+  remaining=${remaining#,}
+  shelved=${shelved#,}
+  if [ -n "$shelved" ]; then
+    wait_text="剩 $(format_numbers "$shelved")（搁置）"
+    [ -n "$remaining" ] && wait_text="${wait_text}、$(format_numbers "$remaining") 待实现"
+    printf '🟡 规格 #%s 还开着（%s）：%s' "$n" "$progress" "$wait_text"
+    return 0
+  fi
+  if [ -z "$remaining" ]; then
+    # Without graph rows only the counts are known.
+    printf '🟡 规格 #%s 还开着（%s）：剩 %s 张票' "$n" "$progress" "$((total - closed))"
+    return 0
+  fi
+  analyze_remaining "$remaining"
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    if [ "$closed" -gt 0 ]; then
+      printf '🟡 规格 #%s 部分落地：剩 %s' "$n" "$REMAINING_TEXT"
+    else
+      printf '🟡 规格 #%s 还没开始（%s）：%s' "$n" "$progress" "$REMAINING_TEXT"
+    fi
+    return 0
+  fi
+  if [ "$rc" -eq 2 ]; then
+    # Ticket blockers unreadable: fall back to the Spec-level dependencies.
+    wait_text=
+    [ -n "$deps" ] && wait_text="，等 $(format_numbers "$deps")"
+    [ -n "$extras" ] && wait_text="${wait_text}，另需 $(format_numbers "$extras")"
+    printf '🟡 规格 #%s 还开着（%s）：剩 %s%s' "$n" "$progress" \
+      "$(format_numbers "$remaining")" "$wait_text"
+    return 0
+  fi
+  printf '🟡 规格 #%s 还开着（%s）：剩 %s 待实现' "$n" "$progress" "$REMAINING_TEXT"
+  return 0
+}
+
+# graph spec row → "#19 规格②…（实现中，票 4/5）" / "#20 规格③…（等 #19）"
+open_spec_text() {
+  local row=$1 n status total closed deps extras partial title progress= wait_text= text=
+  n=$(line_field "$row" 1)
+  status=$(line_field "$row" 3)
+  total=$(line_field "$row" 4)
+  closed=$(line_field "$row" 5)
+  deps=$(line_field "$row" 6)
+  extras=$(line_field "$row" 7)
+  partial=$(line_field "$row" 8)
+  title=$(display_title "$(line_field "$row" 9)")
+  [ "$total" -gt 0 ] && progress="票 $closed/$total"
+  if [ -n "$deps" ]; then
+    if [ "$partial" = 1 ]; then
+      wait_text="部分等 $(format_numbers "$deps")"
+    else
+      wait_text="等 $(format_numbers "$deps")"
+    fi
+  fi
+  if [ -n "$extras" ]; then
+    if [ -n "$wait_text" ]; then
+      wait_text="${wait_text}；另需 $(format_numbers "$extras")"
+    else
+      wait_text="另需 $(format_numbers "$extras")"
+    fi
+  fi
+  case "$status" in
+    running) text=实现中 ;;
+    interrupted) text=中断待恢复 ;;
+    needs_tickets) text=还没拆票 ;;
+    shelved) text=已搁置 ;;
+    *)
+      if [ -n "$wait_text" ]; then
+        text=$wait_text
+        wait_text=
+        progress=
+      else
+        text=待开始
+      fi
+      ;;
+  esac
+  [ -n "$progress" ] && text="${text}，${progress}"
+  [ -n "$wait_text" ] && text="${text}；${wait_text}"
+  printf '⏳ #%s %s（%s）' "$n" "$title" "$text"
+}
+
 # ------------------------------------------------------------------- output
 
 OUT=()
@@ -368,6 +723,11 @@ if [ -n "$SPEC_ARG" ]; then
     fi
     index=$((index + 1))
   done
+fi
+
+# A --spec outside every grill topic leads with its own conclusion.
+if [ -n "$SPEC_ARG" ] && [ "$CURRENT_INDEX" -lt 0 ]; then
+  OUT+=("$(spec_conclusion "$SPEC_ARG")")
 fi
 
 SHOW_REPO_BLOCK=true
@@ -421,6 +781,9 @@ fi
 
 ONGOING_PARTS=()
 CLAIMED=false
+HAS_OPEN_SPECS=false
+OPEN_SPEC_COUNT=0
+OPEN_SPEC_LINES=()
 if [ "$SHOW_REPO_BLOCK" = true ]; then
   index=0
   while [ "$index" -lt "$TOPIC_COUNT" ]; do
@@ -441,20 +804,56 @@ if [ "$SHOW_REPO_BLOCK" = true ]; then
     index=$((index + 1))
   done
 
+  # Open Specs that belong to no grill topic: one line each, at most ten.
+  if [ "$GRAPH_FAILED" = false ]; then
+    for row in ${GRAPH_SPEC_ROWS[@]+"${GRAPH_SPEC_ROWS[@]}"}; do
+      n=$(line_field "$row" 1)
+      [ "$(line_field "$row" 2)" = closed ] && continue
+      has_spec "$n" && continue
+      [ "$n" = "$SPEC_ARG" ] && continue
+      OPEN_SPEC_COUNT=$((OPEN_SPEC_COUNT + 1))
+      [ "$(line_field "$row" 3)" = running ] && CLAIMED=true
+      [ "$OPEN_SPEC_COUNT" -gt 10 ] && continue
+      OPEN_SPEC_LINES+=("$(open_spec_text "$row")")
+    done
+  fi
+  [ "$OPEN_SPEC_COUNT" -gt 0 ] && HAS_OPEN_SPECS=true
+
   stray_parts=()
   for line in ${STRAY_LINES[@]+"${STRAY_LINES[@]}"}; do
     stray_parts+=("#$(line_field "$line" 1) $(line_field "$line" 2)")
   done
 
-  if [ "${#ONGOING_PARTS[@]}" -gt 0 ] || [ "${#stray_parts[@]}" -gt 0 ] || [ "$RFA_FAILED" = true ]; then
+  if [ "${#ONGOING_PARTS[@]}" -gt 0 ] || [ "$HAS_OPEN_SPECS" = true ] ||
+    [ "${#stray_parts[@]}" -gt 0 ] || [ "$RFA_FAILED" = true ] || [ "$GRAPH_FAILED" = true ]; then
+    if [ "$TOPIC_COUNT" -eq 0 ]; then
+      OUT+=('（本仓库没有 grill 题目记录）')
+    elif [ "${#ONGOING_PARTS[@]}" -eq 0 ] && [ "$HAS_OPEN_SPECS" = true ]; then
+      OUT+=('✅ 仓库里所有 grill 的题目都已完成')
+    fi
     if [ "${#ONGOING_PARTS[@]}" -gt 0 ]; then
       OUT+=("   仓库里还有 ${#ONGOING_PARTS[@]} 个题目没完成：")
       for part in ${ONGOING_PARTS[@]+"${ONGOING_PARTS[@]}"}; do
         OUT+=("$part")
       done
     fi
+    if [ "$GRAPH_FAILED" = true ]; then
+      OUT+=('   ⚠️ 仓库里还在进行的规格（查询失败）')
+    elif [ "$HAS_OPEN_SPECS" = true ]; then
+      OUT+=("   仓库里还在进行的规格（$OPEN_SPEC_COUNT 个）：")
+      for part in ${OPEN_SPEC_LINES[@]+"${OPEN_SPEC_LINES[@]}"}; do
+        OUT+=("      $part")
+      done
+      if [ "$OPEN_SPEC_COUNT" -gt "${#OPEN_SPEC_LINES[@]}" ]; then
+        OUT+=("      另有 $((OPEN_SPEC_COUNT - ${#OPEN_SPEC_LINES[@]})) 个")
+      fi
+    fi
     if [ "${#stray_parts[@]}" -gt 0 ]; then
-      OUT+=("   还有 ${#stray_parts[@]} 张就绪票在实现队列：$(printf '%s\n' "${stray_parts[@]}" | join_lines '、')")
+      if [ "$GRAPH_FAILED" = true ]; then
+        OUT+=("   还有 ${#stray_parts[@]} 张就绪票（查询失败，未排除规格和子票）：$(printf '%s\n' "${stray_parts[@]}" | join_lines '、')")
+      else
+        OUT+=("   还有 ${#stray_parts[@]} 张不属于任何规格的散票：$(printf '%s\n' "${stray_parts[@]}" | join_lines '、')")
+      fi
     fi
     if [ "$RFA_FAILED" = true ]; then
       OUT+=('   就绪票状态（查询失败）')
@@ -478,6 +877,7 @@ if [ "$SHOW_RELEASE" = true ] && [ -n "$TAG" ]; then
     other_work=false
     [ "${#ONGOING_PARTS[@]}" -gt 0 ] && other_work=true
     [ "${#STRAY_LINES[@]}" -gt 0 ] && other_work=true
+    [ "$HAS_OPEN_SPECS" = true ] && other_work=true
 
     done_topics=()
     bump_minor=false
@@ -523,7 +923,7 @@ if [ "$SHOW_RELEASE" = true ] && [ -n "$TAG" ]; then
       else
         OUT+=('   A. 现在打新 tag（只带已完成的）')
       fi
-      if [ "${#ONGOING_PARTS[@]}" -eq 1 ]; then
+      if [ "${#ONGOING_PARTS[@]}" -eq 1 ] && [ "$HAS_OPEN_SPECS" != true ]; then
         wait_title=
         index=0
         while [ "$index" -lt "$TOPIC_COUNT" ]; do

@@ -70,6 +70,35 @@ expect_count() {
   fi
 }
 
+expect_line() { # line-number expected name file
+  local wanted=$1 expected=$2 name=$3 file=$4 actual
+  actual=$(sed -n "${wanted}p" "$file" 2>/dev/null)
+  if [ -n "$actual" ] && [ "$actual" = "$expected" ]; then
+    record PASS "$name"
+  else
+    record FAIL "$name" "line $wanted=[$actual], expected=[$expected]"
+  fi
+}
+
+expect_has_count() { # text expected-line-count name file
+  local text=$1 expected=$2 name=$3 file=$4 actual
+  actual=$(grep -Fc -- "$text" "$file" 2>/dev/null || true)
+  if [ "$actual" = "$expected" ]; then
+    record PASS "$name"
+  else
+    record FAIL "$name" "lines=[$actual], expected=$expected for [$text]"
+  fi
+}
+
+expect_not_has() {
+  local text=$1 name=$2 file=$3
+  if grep -Fq -- "$text" "$file" 2>/dev/null; then
+    record FAIL "$name" "unexpected [$text]"
+  else
+    record PASS "$name"
+  fi
+}
+
 mkdir -p "$BIN"
 
 cat > "$BIN/gh" <<'FAKE_GH'
@@ -83,20 +112,122 @@ issue_var() {
   printf '%s' "${value:-$3}"
 }
 issue_failed() { [ "$(issue_var "$1" FAIL 0)" = 1 ]; }
-if [ "${1:-}" = api ]; then
-  path=$2
-  jq_prog=${4:-}
-  number=${path##*/}
-  if [[ "$path" == */issues/$number/sub_issues ]]; then
-    if issue_failed "$number" || [ ! -f "$(issue_file "$number")" ]; then
-      printf 'fake gh: issue %s failed\n' "$number" >&2
-      exit 1
-    fi
-    subs=$(issue_var "$number" SUBS '')
-    IFS=',' read -ra sub_array <<<"$subs"
-    for sub in ${sub_array[@]+"${sub_array[@]}"}; do printf '%s\n' "$sub"; done
-    exit 0
+list_csv() { printf '%s' "$1" | tr ',' ' '; }
+json_str() {
+  local s=$1
+  s=${s//\\/\\\\}
+  s=${s//\"/\\\"}
+  s=${s//$'\t'/\\t}
+  s=${s//$'\n'/\\n}
+  printf '"%s"' "$s"
+}
+# One GitHub issue object as pipeline-status.sh reads it from the issues list.
+issue_json() {
+  local n=$1 state title body labels closed_at subs sub total=0 completed=0
+  local labels_json='[' first=true closed_json=null
+  if [ ! -f "$(issue_file "$n")" ]; then
+    printf '{"number":%s,"state":"open","title":"","labels":[],"body":""}' "$n"
+    return 0
   fi
+  state=$(issue_var "$n" STATE open)
+  title=$(issue_var "$n" TITLE '')
+  body=$(issue_var "$n" BODY '')
+  body=${body//\\n/$'\n'}
+  closed_at=$(issue_var "$n" CLOSED_AT '')
+  subs=$(issue_var "$n" SUBS '')
+  for sub in $(list_csv "$subs"); do
+    [ -n "$sub" ] || continue
+    total=$((total + 1))
+    [ "$(issue_var "$sub" STATE open)" = closed ] && completed=$((completed + 1))
+  done
+  for labels in $(list_csv "$(issue_var "$n" LABELS '')"); do
+    [ -n "$labels" ] || continue
+    if [ "$first" = true ]; then first=false; else labels_json="$labels_json,"; fi
+    labels_json="$labels_json{\"name\":\"$labels\"}"
+  done
+  labels_json="$labels_json]"
+  [ -n "$closed_at" ] && closed_json=$(json_str "$closed_at")
+  printf '{"number":%s,"title":%s,"state":"%s","body":%s,"labels":%s,"sub_issues_summary":{"total":%s,"completed":%s,"percent_completed":0},"issue_dependencies_summary":{"blocked_by":0,"total_blocked_by":0,"blocking":0,"total_blocking":0},"assignees":[],"updated_at":"2026-11-25T12:00:00Z","closed_at":%s}' \
+    "$n" "$(json_str "$title")" "$state" "$(json_str "$body")" "$labels_json" \
+    "$total" "$completed" "$closed_json"
+}
+json_array() { # numbers... → JSON array of those issues
+  local out='[' first=true n
+  for n in "$@"; do
+    [ -n "$n" ] || continue
+    if [ "$first" = true ]; then first=false; else out="$out,"; fi
+    out="$out$(issue_json "$n")"
+  done
+  printf '%s]\n' "$out"
+}
+if [ "${1:-}" = repo ] && [ "${2:-}" = view ]; then
+  if [ "${CR_GH_GRAPH_FAIL:-0}" = 1 ]; then
+    printf 'fake gh: simulated graph failure\n' >&2
+    exit 1
+  fi
+  printf 'completion-demo/proxy-hub\n'
+  exit 0
+fi
+if [ "${1:-}" = api ]; then
+  path= jq_prog= number=
+  shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --paginate) shift ;;
+      --jq) jq_prog=$2; shift 2 ;;
+      -*) shift ;;
+      *) [ -z "$path" ] && path=$1; shift ;;
+    esac
+  done
+  number=$(printf '%s' "$path" | sed -n 's#.*/issues/\([0-9][0-9]*\).*#\1#p')
+  case "$path" in
+    *'issues?state=all'*)
+      # The issue list pipeline-status.sh --graph starts from.
+      if [ "${CR_GH_GRAPH_FAIL:-0}" = 1 ]; then
+        printf 'fake gh: simulated graph failure\n' >&2
+        exit 1
+      fi
+      out='['
+      first=true
+      for file in "$CR_GH_DATA"/issue-*.env; do
+        [ -f "$file" ] || continue
+        n=${file##*/issue-}
+        n=${n%.env}
+        if [ "$first" = true ]; then first=false; else out="$out,"; fi
+        out="$out$(issue_json "$n")"
+      done
+      printf '%s]\n' "$out"
+      exit 0
+      ;;
+    */sub_issues)
+      if issue_failed "$number" || [ ! -f "$(issue_file "$number")" ]; then
+        printf 'fake gh: issue %s failed\n' "$number" >&2
+        exit 1
+      fi
+      subs=$(issue_var "$number" SUBS '')
+      if [ -n "$jq_prog" ]; then
+        for sub in $(list_csv "$subs"); do printf '%s\n' "$sub"; done
+        exit 0
+      fi
+      json_array $(list_csv "$subs")
+      exit 0
+      ;;
+    */dependencies/blocked_by)
+      if issue_failed "$number" || [ ! -f "$(issue_file "$number")" ]; then
+        printf 'fake gh: issue %s failed\n' "$number" >&2
+        exit 1
+      fi
+      blocked=$(issue_var "$number" BLOCKED_BY '')
+      if [ -n "$jq_prog" ]; then
+        for blocker in $(list_csv "$blocked"); do
+          [ "$(issue_var "$blocker" STATE open)" = open ] && printf '%s\n' "$blocker"
+        done
+        exit 0
+      fi
+      json_array $(list_csv "$blocked")
+      exit 0
+      ;;
+  esac
   if issue_failed "$number" || [ ! -f "$(issue_file "$number")" ]; then
     printf 'fake gh: issue %s failed\n' "$number" >&2
     exit 1
@@ -604,6 +735,127 @@ cat > "$WORK/s11.expected" <<'EOF'
    → 不用做什么，等剩下的规格落地后会再告诉你。
 EOF
 expect_same_file "$WORK/s11.expected" 'gh failure renders query-failed spec' "$WORK/s11.out"
+
+# ------------------------------------------------------------------ fixture I
+# proxy-hub shape: no grill topic, Specs that depend on each other, the Spec
+# that just landed (#22) with its tickets, and one real loose ticket (#60).
+# Issue relations (Spec bodies, sub-issues, blockers) are served to
+# pipeline-status.sh --graph by the same fake gh.
+
+PS='## Problem Statement'
+make_repo demo-i
+REPO_I=$WORK/repos/demo-i/main
+(
+  cd "$REPO_I"
+  commit_at 2026-11-20T00:00:00Z 'tagged base'
+  git tag v1.2.0
+  push_all .
+  commit_at 2026-11-24T00:00:00Z 'post one'
+  commit_at 2026-11-24T01:00:00Z 'post two'
+  push_all .
+)
+GH_I=$WORK/gh-i
+DESIGN_I=$WORK/design-i
+mkdir -p "$GH_I" "$DESIGN_I" "$REPO_I/.git/implement-spec-split/claims"
+make_issue "$GH_I" 19 STATE=open TITLE='规格② hub 路由' BODY="$PS" SUBS=28,29,30,31,32 LABELS=ready-for-agent
+make_issue "$GH_I" 28 STATE=closed TITLE='hub 路由 票1'
+make_issue "$GH_I" 29 STATE=closed TITLE='hub 路由 票2'
+make_issue "$GH_I" 30 STATE=closed TITLE='hub 路由 票3'
+make_issue "$GH_I" 31 STATE=closed TITLE='hub 路由 票4'
+make_issue "$GH_I" 32 STATE=open TITLE='hub 路由 票5' LABELS=ready-for-agent
+make_issue "$GH_I" 20 STATE=open TITLE='规格③ 认证' BODY="$PS" SUBS=33,34 LABELS=ready-for-agent
+make_issue "$GH_I" 33 STATE=open TITLE='认证 票1' LABELS=ready-for-agent BLOCKED_BY=32
+make_issue "$GH_I" 34 STATE=open TITLE='认证 票2' LABELS=ready-for-agent BLOCKED_BY=32
+make_issue "$GH_I" 21 STATE=open TITLE='规格④ 限流' BODY="$PS" SUBS=35 LABELS=ready-for-agent
+make_issue "$GH_I" 35 STATE=open TITLE='限流 票1' LABELS=ready-for-agent BLOCKED_BY=32,33
+make_issue "$GH_I" 22 STATE=closed TITLE='规格⑤ proxy-hub 收尾' BODY="$PS" SUBS=36,37,38 CLOSED_AT=2026-11-25T10:00:00Z LABELS=ready-for-agent
+make_issue "$GH_I" 36 STATE=closed TITLE='收尾 票1'
+make_issue "$GH_I" 37 STATE=closed TITLE='收尾 票2'
+make_issue "$GH_I" 38 STATE=closed TITLE='收尾 票3'
+make_issue "$GH_I" 60 STATE=open TITLE='补 README 的安装步骤' LABELS=ready-for-agent
+# A live handoff claim is what pipeline-status.sh reads as 实现中.
+printf '{"handoff":"fresh","handoff_until_epoch":4102444800,"branch":"spec-19"}' \
+  > "$REPO_I/.git/implement-spec-split/claims/spec-19.json"
+
+REPO=$REPO_I
+GH_DATA=$GH_I
+DESIGN_ROOT=$DESIGN_I
+
+# Scenario 12: --spec belongs to no grill topic and has just landed.
+run_report "$WORK/s12.out" "$WORK/s12.err" "$REPO" --spec 22
+expect_exit 0 'no-topic landed spec exits zero'
+expect_line 1 '✅ 规格 #22 规格⑤ proxy-hub 收尾 已落地（票 3/3）' \
+  'landed spec leads the report' "$WORK/s12.out"
+cat > "$WORK/s12.expected" <<'EOF'
+✅ 规格 #22 规格⑤ proxy-hub 收尾 已落地（票 3/3）
+（本仓库没有 grill 题目记录）
+   仓库里还在进行的规格（3 个）：
+      ⏳ #19 规格② hub 路由（实现中，票 4/5）
+      ⏳ #20 规格③ 认证（等 #19）
+      ⏳ #21 规格④ 限流（等 #19、#20）
+   还有 1 张不属于任何规格的散票：#60 补 README 的安装步骤
+👉 要你做：二选一（main 比 v1.2.0 多 2 个提交未发布）
+   A. 现在发版 v1.2.1（只带已完成的）
+   B. 等所有在做的工作完成一起发
+   推荐：B（它正在实现，等它）
+   回复「发版」我来打 tag 并推送（打之前会先跟你确认版本号）。
+EOF
+expect_same_file "$WORK/s12.expected" 'no-topic report lists specs, dependencies and the one loose ticket' "$WORK/s12.out"
+expect_has_count '#22' 1 'landed spec appears only in its conclusion' "$WORK/s12.out"
+expect_has_count '散票' 1 'exactly one loose-ticket line' "$WORK/s12.out"
+
+# Scenario 13: the landing ran before the Spec issue was closed; every ticket
+# is closed, so it still reads as landed and stays out of every other list.
+GH_I2=$WORK/gh-i2
+mkdir -p "$GH_I2"
+cp "$GH_I"/issue-*.env "$GH_I2/"
+make_issue "$GH_I2" 22 STATE=open TITLE='规格⑤ proxy-hub 收尾' BODY="$PS" SUBS=36,37,38 LABELS=ready-for-agent
+GH_DATA=$GH_I2
+run_report "$WORK/s13.out" "$WORK/s13.err" "$REPO" --spec 22
+expect_exit 0 'still-open landed spec exits zero'
+expect_line 1 '✅ 规格 #22 规格⑤ proxy-hub 收尾 已落地（票 3/3，issue 还没关）' \
+  'open issue with every ticket closed reads as landed' "$WORK/s13.out"
+expect_has_count '#22' 1 'open just-landed spec appears only in its conclusion' "$WORK/s13.out"
+expect_file_has '   仓库里还在进行的规格（3 个）：' 'open just-landed spec left out of ongoing specs' "$WORK/s13.out"
+expect_file_has '   还有 1 张不属于任何规格的散票：#60 补 README 的安装步骤' \
+  'open just-landed spec and its tickets are not loose tickets' "$WORK/s13.out"
+
+# Scenario 14: partial landing — #34 landed, #33 waits on #32 of Spec #19.
+GH_I3=$WORK/gh-i3
+mkdir -p "$GH_I3"
+cp "$GH_I"/issue-*.env "$GH_I3/"
+make_issue "$GH_I3" 34 STATE=closed TITLE='认证 票2'
+GH_DATA=$GH_I3
+run_report "$WORK/s14.out" "$WORK/s14.err" "$REPO" --spec 20
+expect_exit 0 'partial landing exits zero'
+expect_line 1 '🟡 规格 #20 部分落地：剩 #33 等 #19' \
+  'partial landing names the waiting ticket and the Spec it waits for' "$WORK/s14.out"
+expect_file_has '   仓库里还在进行的规格（2 个）：' 'partial spec is not repeated as ongoing' "$WORK/s14.out"
+expect_file_has '      ⏳ #21 规格④ 限流（等 #19、#20）' 'dependents still name the partial spec' "$WORK/s14.out"
+expect_file_has '   还有 1 张不属于任何规格的散票：#60 补 README 的安装步骤' \
+  'waiting ticket of the partial spec is not a loose ticket' "$WORK/s14.out"
+
+# Scenario 15: pipeline-status.sh --graph fails; the gh-based conclusion stays
+# first and each affected section says （查询失败）.
+export CR_GH_GRAPH_FAIL=1
+GH_DATA=$GH_I
+run_report "$WORK/s15.out" "$WORK/s15.err" "$REPO" --spec 22
+unset CR_GH_GRAPH_FAIL
+expect_exit 0 'graph failure exits zero'
+expect_line 1 '✅ 规格 #22 规格⑤ proxy-hub 收尾 已落地（票 3/3）' \
+  'graph failure keeps the gh-based conclusion first' "$WORK/s15.out"
+cat > "$WORK/s15.expected" <<'EOF'
+✅ 规格 #22 规格⑤ proxy-hub 收尾 已落地（票 3/3）
+（本仓库没有 grill 题目记录）
+   ⚠️ 仓库里还在进行的规格（查询失败）
+   还有 8 张就绪票（查询失败，未排除规格和子票）：#19 规格② hub 路由、#20 规格③ 认证、#21 规格④ 限流、#32 hub 路由 票5、#33 认证 票1、#34 认证 票2、#35 限流 票1、#60 补 README 的安装步骤
+👉 要你做：二选一（main 比 v1.2.0 多 2 个提交未发布）
+   A. 现在发版 v1.2.1（只带已完成的）
+   B. 等所有在做的工作完成一起发
+   推荐：A（没人在做，不该被它挡住）
+   回复「发版」我来打 tag 并推送（打之前会先跟你确认版本号）。
+EOF
+expect_same_file "$WORK/s15.expected" 'graph failure reports （查询失败） and continues' "$WORK/s15.out"
 
 # ---------------------------------------------------------------- usage errors
 
