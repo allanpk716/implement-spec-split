@@ -18,6 +18,14 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const {
+  tokenizeShell,
+  withoutHeredocBody,
+  isCommandSeparator,
+  isRedirectionToken,
+  baseNameOf,
+  forEachCommandPosition,
+} = require('./lib-shell');
 
 const LIMIT = 10;
 const TOOLS = new Set(['Edit', 'Write', 'NotebookEdit', 'Bash']);
@@ -152,115 +160,6 @@ function fileNameOf(filePath) {
   return parts[parts.length - 1] || '';
 }
 
-function tokenizeShell(command) {
-  const tokens = [];
-  let current = '';
-  let quoted = false;
-  let currentStartsAt = 0;
-
-  const flushWord = () => {
-    if (current !== '') {
-      tokens.push({
-        text: current,
-        quoted,
-        startsAt: currentStartsAt,
-        endsAt: currentStartsAt + current.length - 1,
-      });
-    }
-    current = '';
-    quoted = false;
-  };
-
-  for (let index = 0; index < command.length; index += 1) {
-    const character = command[index];
-    if (character === '\'' || character === '"') {
-      quoted = true;
-      const closingQuote = command.indexOf(character, index + 1);
-      if (closingQuote === -1) {
-        current += command.slice(index + 1);
-        break;
-      }
-      current += command.slice(index + 1, closingQuote);
-      index = closingQuote;
-      continue;
-    }
-
-    if (character === '\n' || character === '\r') {
-      flushWord();
-      tokens.push({ text: '\n', quoted: false });
-      if (character === '\r' && command[index + 1] === '\n') {
-        index += 1;
-      }
-      currentStartsAt = index + 1;
-      continue;
-    }
-
-    if (/\s/.test(character)) {
-      flushWord();
-      currentStartsAt = index + 1;
-      continue;
-    }
-
-    if ('<>|;&()'.includes(character)) {
-      flushWord();
-      currentStartsAt = index + 1;
-      const next = command[index + 1];
-      if (
-        (character === '>' && next === '>') ||
-        (character === '<' && next === '<') ||
-        (character === '&' && next === '&') ||
-        (character === '|' && next === '|')
-      ) {
-        tokens.push({
-          text: character + next,
-          quoted: false,
-          startsAt: index,
-          endsAt: index + 1,
-        });
-        index += 1;
-      } else {
-        tokens.push({
-          text: character,
-          quoted: false,
-          startsAt: index,
-          endsAt: index,
-        });
-      }
-      continue;
-    }
-
-    current += character;
-  }
-  flushWord();
-  return tokens;
-}
-
-function withoutHeredocBody(tokens) {
-  const heredocIndex = tokens.findIndex(token => token.text === '<<');
-  if (heredocIndex === -1) return tokens;
-
-  const marker = tokens[heredocIndex + 1];
-  if (!marker) return tokens;
-
-  const bodyStart = tokens.findIndex(
-    (token, index) =>
-      index > heredocIndex + 1 &&
-      token.text === '\n'
-  );
-  if (bodyStart === -1) return tokens;
-
-  const bodyEnd = tokens.findIndex(
-    (token, index) =>
-      index > bodyStart &&
-      token.text === marker.text &&
-      tokens[index - 1].text === '\n'
-  );
-  return [
-    ...tokens.slice(0, bodyStart + 1),
-    ...(bodyEnd === -1 ? [] : tokens.slice(bodyEnd)),
-  ];
-}
-
 function isSourceBashWrite(command) {
   const tokens = withoutHeredocBody(tokenizeShell(command));
   for (let index = 0; index < tokens.length; index += 1) {
@@ -376,16 +275,6 @@ function isSourceBashWrite(command) {
   return false;
 }
 
-const SHELL_COMMAND_SEPARATORS = new Set([
-  '|',
-  '||',
-  ';',
-  '&&',
-  '&',
-  '(',
-  ')',
-  '\n',
-]);
 const CODEX_VALUE_OPTIONS = new Set([
   '-C',
   '--cd',
@@ -396,20 +285,6 @@ const CODEX_VALUE_OPTIONS = new Set([
   '--profile',
   '--image-limit',
 ]);
-
-function isCommandSeparator(token) {
-  return !token.quoted && SHELL_COMMAND_SEPARATORS.has(token.text);
-}
-
-function isRedirectionToken(token) {
-  return !token.quoted && /^\d*[<>]+$/.test(token.text);
-}
-
-function baseNameOf(value) {
-  const normalized = String(value).replace(/\\/g, '/');
-  const parts = normalized.split('/');
-  return parts[parts.length - 1] || '';
-}
 
 function codexRunsExec(tokens, startIndex) {
   for (let index = startIndex; index < tokens.length; index += 1) {
@@ -434,64 +309,18 @@ function codexRunsExec(tokens, startIndex) {
 
 function isBareCodexExec(command) {
   const tokens = withoutHeredocBody(tokenizeShell(command));
-  let index = 0;
-  while (index < tokens.length) {
-    let cursor = index;
-    let commandToken;
-    while (cursor < tokens.length) {
-      const token = tokens[cursor];
-      if (isCommandSeparator(token)) break;
-      if (isRedirectionToken(token)) {
-        cursor += 1;
-        const target = tokens[cursor];
-        if (
-          target &&
-          !isCommandSeparator(target) &&
-          !isRedirectionToken(target) &&
-          !target.text.startsWith('&')
-        ) {
-          cursor += 1;
-        }
-        continue;
-      }
-      if (
-        !token.quoted &&
-        (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token.text) ||
-          token.text === 'env' ||
-          token.text === 'nohup' ||
-          token.text === 'time')
-      ) {
-        cursor += 1;
-        continue;
-      }
-      if (!token.quoted && token.text === 'timeout') {
-        cursor += 1;
-        if (
-          cursor < tokens.length &&
-          !isCommandSeparator(tokens[cursor]) &&
-          !isRedirectionToken(tokens[cursor])
-        ) {
-          cursor += 1;
-        }
-        continue;
-      }
-      commandToken = token;
-      break;
-    }
+  let found = false;
+  forEachCommandPosition(tokens, (commandToken, argsStart) => {
     if (
-      commandToken !== undefined &&
       baseNameOf(commandToken.text) === 'codex' &&
-      codexRunsExec(tokens, cursor + 1)
+      codexRunsExec(tokens, argsStart)
     ) {
-      return true;
+      found = true;
+      return false;
     }
-    let next = commandToken === undefined ? cursor : cursor + 1;
-    while (next < tokens.length && !isCommandSeparator(tokens[next])) {
-      next += 1;
-    }
-    index = next + 1;
-  }
-  return false;
+    return true;
+  });
+  return found;
 }
 
 function isSourceFileName(filePath) {

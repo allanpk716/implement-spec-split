@@ -143,6 +143,53 @@ macOS / Linux 用上面的绝对路径；Windows 把路径换成 `node C:/Users/
 node hooks/test-unattended-ask-guard.js
 ```
 
+## land-push-guard hook
+
+`land-push-guard.js` 是 Claude Code 的 `PreToolUse` hook，用于在会话里跑过 `/implement-spec-split` 之后拦住「没持本仓库 land 锁就 push 默认分支」的操作。起因是 2026-11-25 proxy-hub spec-22：落地时执行了 `lock.sh acquire land --scope repo`，实际返回 2（spec-19 正占着锁），但命令被包在一层 `echo` 里，外层退出码变成 0，被误读成拿到了锁，于是在没持锁的情况下执行了 `git push origin HEAD:main`。提示词管不住这种退出码误读，所以做成 hook，直接读锁目录和 `owner.json`。
+
+生效条件：hook 读取 payload 的 `transcript_path`，只要 transcript 里出现过 `<command-name>/implement-spec-split</command-name>`（带不带 `--auto-land` 都算）就生效；其他会话（包括人手动 push）一律放行。
+
+实现上把 shell 分词和命令位置识别抽到 `hooks/lib-shell.js`，transcript 扫描抽到 `hooks/lib-transcript.js`；`delegate-guard.js` 和 `unattended-ask-guard.js` 改为复用这两个模块，行为不变（各自的测试仍全绿）。
+
+判定方式：
+
+- **识别 push**：复用 delegate-guard 的 shell 分词和命令位置识别（先去掉 heredoc 正文，再剥掉重定向，避免 `2>&1` 里的 `&` 被当成命令分隔符），在命令位置上找 `git … push …`，允许 `git -C <dir>` 这类全局选项；不拿正则去匹配整串命令，所以 `echo "git push origin main"`、heredoc 正文里的 `git push` 都不会被误拦。
+- **目标仓库目录**：依次取 `git -C <dir>`、命令里前置的 `cd <dir> &&`（识别不了就用 payload 的 `cwd`）。
+- **默认分支**：`git -C <dir> symbolic-ref --short refs/remotes/origin/HEAD` 去掉 `origin/`；失败时 `main` 和 `master` 都算默认分支。
+- **视为落地 push**：refspec 的目标端（`src:dst` 里的 `dst`，或单写的 `<branch>`，允许 `refs/heads/` 前缀）是默认分支名；或者没写 refspec、而当前分支就是默认分支。`HEAD`/`@` 单写按当前分支算。推 `spec-<n>` 等其他分支、`--tags`、`--delete` 其他分支一律放行；`--all`、`--mirror`、`--branches` 和匹配 refspec `:` 会 push 默认分支，按落地 push 处理。
+- **检查锁**：`<git -C <dir> rev-parse --git-common-dir>/implement-spec-split/locks/land.lock/owner.json` 必须存在，其中的 `pid` 等于 hook 沿父进程向上找到的第一个 `claude` 进程 pid；`pid_start` 有记录时还要与 `scripts/pid-start.sh` 取到的启动时间一致。不满足就 deny，理由里给出 `<skill dir>/scripts/lock.sh acquire land --scope repo` 的完整命令，并提醒退出码 2 表示别的 Run 正持锁。
+
+逃生口：`LAND_PUSH_GUARD_DISABLE=1` 时直接放行。任何内部异常、`transcript_path` 缺失或不可读都 fail open（不输出、退出 0）；找不到 claude 祖先进程时也放行，并在 stderr 打一行 `land-push-guard: no claude ancestor process found; allowing the push`。`LAND_PUSH_GUARD_OWNER_PID` 仅供测试注入本会话 claude pid，与 `scripts/lib-owner.sh` 的 `ISS_OWNER_PID` 同理。
+
+注册：在 `~/.claude/settings.json` 的 `hooks.PreToolUse` 数组里**追加**一项（不要覆盖已有的 hook）：
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ~/.claude/skills/implement-spec-split/hooks/land-push-guard.js",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+macOS / Linux 用上面的绝对路径；Windows 把路径换成 `node C:/Users/<you>/.claude/skills/implement-spec-split/hooks/land-push-guard.js`。
+
+测试命令：
+
+```text
+node hooks/test-land-push-guard.js
+```
+
 ## 测试
 
 ```text

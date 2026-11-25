@@ -18,7 +18,7 @@ Stage 0 common foundation
  ├─ Stage 1 parallel spec implementation (works with --impl sonnet)
  │     └─ with Stage 2 added, --impl codex works too
  └─ Stage 2 codex backend
-       └─ Stage 3 global division (CLAUDE.md rules + delegate-guard / unattended-ask-guard hook)
+       └─ Stage 3 global division (CLAUDE.md rules + delegate-guard / unattended-ask-guard / land-push-guard hook)
 ```
 
 ---
@@ -209,13 +209,14 @@ For why this uses `exec --json` with a wrapper, why it uses bypass mode, and Win
 
 ## Stage 3: global Opus / codex division of labour
 
-This makes everyday sessions in **all projects** follow this division: Opus handles discussion, decisions, root-cause judgment, review, and approval, while coding and bulk code reading go to codex workers. It has three parts:
+This makes everyday sessions in **all projects** follow this division: Opus handles discussion, decisions, root-cause judgment, review, and approval, while coding and bulk code reading go to codex workers. It has four parts:
 
 | Part | Location | Purpose |
 |---|---|---|
 | Division rules | `~/.claude/CLAUDE.md` | Tell Claude what to do itself, what to delegate, how to call workers, and how to handle results |
 | delegate-guard hook | `~/.claude/settings.json` | Mechanically block direct source edits larger than 10 lines, without relying on the model remembering the rules |
 | unattended-ask-guard hook | `~/.claude/settings.json` | Deny `AskUserQuestion` in unattended `--auto-land` runs, without relying on the model remembering not to ask |
+| land-push-guard hook | `~/.claude/settings.json` | After a session has run `/implement-spec-split`, deny a push to the default branch unless this session holds the repo's land lock |
 
 **Install**
 
@@ -259,6 +260,23 @@ This makes everyday sessions in **all projects** follow this division: Opus hand
 
    On macOS / Linux, use the absolute path as well. The hook decides from whether the last `/implement-spec-split` invocation in the transcript carries `--auto-land`; set `UNATTENDED_ASK_GUARD_DISABLE=1` to turn it off temporarily. See [hooks/README.md](../hooks/README.md).
 
+   **Also register land-push-guard**: after a session has run `/implement-spec-split`, a push to the default branch (`main` / `master`, or the branch `origin/HEAD` points to) must first hold this repository's land lock. The hook reads the lock directory directly, so it does not depend on the model remembering to take the lock or on it interpreting `lock.sh`'s exit code. Append one more item to the same `hooks.PreToolUse` array:
+
+   ```json
+   {
+     "matcher": "Bash",
+     "hooks": [
+       {
+         "type": "command",
+         "command": "node C:/Users/<you>/.claude/skills/implement-spec-split/hooks/land-push-guard.js",
+         "timeout": 5
+       }
+     ]
+   }
+   ```
+
+   On macOS / Linux, use the absolute path as well. It only applies to sessions whose transcript contains an `/implement-spec-split` command invocation; set `LAND_PUSH_GUARD_DISABLE=1` to turn it off temporarily. See [hooks/README.md](../hooks/README.md).
+
 3. Start a new Claude Code session so both the hook and the rules take full effect.
 
 **Hook decision rules**
@@ -289,7 +307,10 @@ This makes everyday sessions in **all projects** follow this division: Opus hand
 # 1. Hook unit tests: should print Summary: 46 passed, 0 failed
 node ~/.claude/skills/implement-spec-split/hooks/test-delegate-guard.js
 
-# 2. Smoke test: should print a JSON object whose permissionDecision is deny
+# 2. land-push-guard unit tests: should print Summary: 24 passed, 0 failed
+node ~/.claude/skills/implement-spec-split/hooks/test-land-push-guard.js
+
+# 3. Smoke test: should print a JSON object whose permissionDecision is deny
 node -e 'console.log(JSON.stringify({tool_name:"Write",tool_input:{file_path:"C:/x/a.py",content:"l\n".repeat(15)}}))' \
   | node ~/.claude/skills/implement-spec-split/hooks/delegate-guard.js
 ```

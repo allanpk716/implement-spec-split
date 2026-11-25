@@ -121,6 +121,14 @@
     - 逃生口 `UNATTENDED_ASK_GUARD_DISABLE=1`；`transcript_path` 缺失、不可读、坏行或内部异常一律 fail open（不输出、退出 0）。按块流式读，几 MB 的 transcript 远低于 1 秒（测试断言 < 1 秒）。
     - 和 `ask-sanitize.js` 各自注册，两个 hook 都命中时 deny 覆盖 ask。
 
+32. **2026-11-25：落地 push 前硬检查 land 锁（`hooks/land-push-guard.js`）。** proxy-hub spec-22 的 flash 会话在落地时执行了 `lock.sh acquire land --scope repo`，实际返回 2（spec-19 正占着锁），但会话在外面包了一层 `echo`，外层退出码变成 0，被误读成拿到了锁，于是在没持锁的情况下执行了 `git push origin HEAD:main`。决定：
+    - 只在 transcript 里出现过 `/implement-spec-split` 命令调用（`<command-name>/implement-spec-split</command-name>`）的会话生效，带不带 `--auto-land` 都算；其他会话（包括人手动 push）一律放行。
+    - 识别推送复用 delegate-guard 的 shell 分词和命令位置识别（先去掉 heredoc 正文，再剥掉重定向），在命令位置上找 `git … push …`，允许 `git -C <dir>` 这类全局选项，不用正则匹配整串命令；目标仓库目录依次取 `-C` 参数、命令里前置的 `cd <dir> &&`、payload 的 `cwd`。默认分支取 `git -C <dir> symbolic-ref --short refs/remotes/origin/HEAD` 去掉 `origin/`，失败时 `main` 和 `master` 都算。refspec 的目标端（`src:dst` 的 `dst`，或单写的 `<branch>`）是默认分支名，或没写 refspec 而当前分支就是默认分支，才视为落地 push；推 `spec-<n>` 等其他分支、`--tags`、`--delete` 其他分支一律放行，`--all`/`--mirror`/`--branches` 和匹配 refspec `:` 按 push 默认分支处理。
+    - 实现上把 shell 分词和命令位置识别抽到 `hooks/lib-shell.js`，transcript 扫描抽到 `hooks/lib-transcript.js`；`delegate-guard.js` 和 `unattended-ask-guard.js` 改为复用这两个模块，行为不变。
+    - 检查锁：`<git -C <dir> rev-parse --git-common-dir>/implement-spec-split/locks/land.lock/owner.json` 必须存在，`pid` 等于 hook 沿父进程向上找到的第一个 `claude` 进程 pid，`pid_start` 有记录时还要与 `scripts/pid-start.sh` 取到的启动时间一致；不满足就 deny。
+    - 为什么做成 hook 而不只改提示词：这次不是模型不知道规则，而是外层 `echo` 把 `lock.sh` 的退出码 2 吃掉了；提示词写得再清楚，也挡不住退出码误读。hook 直接读锁目录和 `owner.json`，不依赖模型理解退出码，也不依赖它主动检查。
+    - 逃生口 `LAND_PUSH_GUARD_DISABLE=1`；任何内部异常、`transcript_path` 缺失或不可读、找不到 claude 祖先进程都 fail open（后者在 stderr 打一行说明）。`LAND_PUSH_GUARD_OWNER_PID` 仅供测试注入本会话 claude pid，与 `scripts/lib-owner.sh` 的 `ISS_OWNER_PID` 同理。
+
 ## flash 模式设计要点（2026-11-20 规格定稿，ADR 0001）
 
 三档分工：flash 主会话/规格会话（`claude-flash` = glm-5.3-flash，只执行与转述）、glm-5.4 子代理（全部源码修改与大量阅读）、官方 Opus（一切结论性判断）。要点：
@@ -254,6 +262,7 @@
 - **编排看门狗**：`bash scripts/test-run-watchdog.sh`。用临时 git 仓库和小间隔测 `run-watchdog.sh` 的卡死（STALLED/退出码 3）、后台持续提交判活到 max（ALIVE/退出码 2）、worktree 消失判结束（DONE/退出码 0）、多对象混合输出、worker run dir 进展计入指纹和参数错误（退出码 64），不访问网络。
 - **delegate-guard**：`node hooks/test-delegate-guard.js`。测普通阈值、flash 源码拦截与子代理放行、Bash 各类源码写入形态、裸调 `codex exec` 在所有会话（含子代理、非 flash、`DELEGATE_GUARD_DISABLE=1`）被拦而 wrapper/非 exec 子命令/字符串与 heredoc 字样放行、`gofmt -w`/`goimports -w`/`go fmt` 放行、项目配置与例外开关，不访问网络。
 - **unattended-ask-guard**：`node hooks/test-unattended-ask-guard.js`。用临时 transcript 测字符串和数组 content 的 `--auto-land` 拒绝、不带时放行、以最后一次调用为准、`--auto-landing` 不算、普通对话里提到不算、缺 `transcript_path`/文件不存在/坏 JSON 行 fail open、非 AskUserQuestion 放行、子代理 payload 同样判定、`UNATTENDED_ASK_GUARD_DISABLE=1` 放行，以及 6MB transcript 在 1 秒内判定，不访问网络。
+- **land-push-guard**：`node hooks/test-land-push-guard.js`。用临时 bare origin、clone、伪造 transcript 和 `land.lock/owner.json`，测无锁时 `git push origin HEAD:main` / `git push origin main` / `git -C <dir> push origin HEAD:refs/heads/main` / `cd <dir> && git push` / `git push origin HEAD` / `git push <仓库路径>` / 带 `2>&1` 或重定向的 push 被 deny，锁属于别的 pid 被 deny，锁属于本会话放行，`pid_start` 不一致 deny、为空只看 pid，推 `spec-7`/`--tags`/`--delete spec-7` 放行，会话没调用过技能放行，`echo`/heredoc 正文放行，逃生口放行，transcript 缺失放行，找不到 claude 祖先进程放行并在 stderr 说明，`origin/HEAD` 缺失时按 `main`/`master` 兜底，`--all` 和匹配 refspec `:` 被 deny，不访问网络。
 - **锁与领取记录**：`bash scripts/test-locks.sh`。测 `lock.sh` 的互斥、重入、等待超时、死持有者接管、槽位排队，`claim.sh` 的领取、并发领取、恢复与释放权限、交接预留与接手，worker 上限配置文件，以及两个 `codex-worker.sh` 在 `ISS_MAX_WORKERS=1` 下排队，不访问网络。
 - **Design session**：`bash scripts/test-design-session.sh`。用假 orca 测 feature/map prompt、`--agent claude`、`orchestration check --wait` 超时、会话退出、launch/check 失败、handoff 缺失、启动前未交接 session 提醒（7 天内、无 handoff、同仓库名前缀才提醒；过期、已交接、其他仓库不提醒且退出码不变）和两个薄技能文本（含提醒转述），不调用真实 Orca。
 - **完成度结论**：`bash scripts/test-completion-report.sh`。用临时 Design session 目录、带 tag 与提交的临时 git 仓库、假 `gh` 和假通知命令，测情形 1/2（推荐 A/B）/3、无 tag、未发布提交为 0、minor/patch/非语义化 tag 版本号、发版解冻与普通等待时机、中断 grill、`--notify` 仅完成时通知一次且失败不改变退出码、gh 失败写「（查询失败）」和用法错误退出 64，不访问网络。
