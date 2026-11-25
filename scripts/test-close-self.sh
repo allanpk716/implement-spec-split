@@ -79,11 +79,29 @@ write_orca_fixture() { # file worktreePath [tabId] [leafId]
   ' "$@"
 }
 
+write_progress_fixture() { # file worktreePath
+  node -e '
+    const fs = require("fs");
+    const [file, worktreePath] = process.argv.slice(1);
+    const value = {ok: true, result: {terminals: [
+      {handle: "term_self", tabId: "tab-1", leafId: "leaf-1",
+       worktreeId: "wt-self", worktreePath, title: "/implement-spec-split 7"},
+      {handle: "term_prog", tabId: "tab-2", worktreeId: "wt-self", title: "spec-7 t3"},
+      {handle: "term_self_title", tabId: "tab-1", leafId: "leaf-9",
+       worktreeId: "wt-self", title: "spec-7 fix"},
+      {handle: "term_other_wt", tabId: "tab-3", worktreeId: "wt-other", title: "spec-7 t9"},
+      {handle: "term_done", tabId: "tab-4", worktreeId: "wt-self", title: "spec-7 ✓"}
+    ]}};
+    fs.writeFileSync(file, JSON.stringify(value));
+  ' "$@"
+}
+
 run_close() { # OUT [arguments]
   out=$1
   shift
   env ORCA_TAB_ID="$TAB_ID" ORCA_AGENT_PANE="$PANE" ORCA_LOG="$ORCA_LOG" \
-      ORCA_FIXTURE="$ORCA_FIXTURE" PATH="$BIN:$PATH" \
+      ORCA_FIXTURE="$ORCA_FIXTURE" ORCA_WORKTREE_ID="${ORCA_WORKTREE_ID:-}" \
+      PATH="$BIN:$PATH" \
       bash "$SCRIPT" "$@" > "$out" 2> "$out.err"
   RUN_EXIT=$?
 }
@@ -243,6 +261,39 @@ expect_has 'main worktree' "pointing at the main worktree warns" "$WORK/keep-mai
 expect_has 'terminal close --terminal term_self --tab' "pointing at the main worktree still closes its own tab" "$ORCA_LOG"
 expect_without 'worktree rm' "pointing at the main worktree removes nothing" "$ORCA_LOG"
 expect_dir "$MAIN" "the main worktree still exists"
+
+# --- progress tabs of this worktree close before this session's tab ----------
+write_progress_fixture "$WORK/orca-progress.json" "$WT_CLEAN"
+rm -f "$ORCA_LOG"
+ORCA_FIXTURE=$WORK/orca-progress.json
+ORCA_WORKTREE_ID=wt-self
+run_close "$WORK/progress.out"
+ORCA_WORKTREE_ID=
+expect_exit 0 "closing the progress tabs exits 0"
+expect_has 'terminal close --terminal term_prog --tab' "closes the Run's progress tab" "$ORCA_LOG"
+expect_has 'terminal close --terminal term_self --tab' "still closes its own tab" "$ORCA_LOG"
+expect_without 'terminal close --terminal term_self_title --tab' "never closes a matching title on its own tab" "$ORCA_LOG"
+expect_without 'terminal close --terminal term_other_wt --tab' "does not close another worktree's progress tab" "$ORCA_LOG"
+expect_without 'terminal close --terminal term_done --tab' "does not close the retitled spec tab" "$ORCA_LOG"
+first_close=$(grep -nF 'terminal close --terminal' "$ORCA_LOG" | head -n 1 | cut -d: -f1)
+self_close=$(grep -nF 'terminal close --terminal term_self --tab' "$ORCA_LOG" | head -n 1 | cut -d: -f1)
+if [ -n "$first_close" ] && [ -n "$self_close" ] && [ "$first_close" -lt "$self_close" ]; then
+  ok "progress tabs close before this session's tab"
+else
+  bad "progress tabs close before this session's tab" "first=$first_close self=$self_close"
+fi
+
+rm -f "$ORCA_LOG"
+ORCA_WORKTREE_ID=wt-self
+run_close "$WORK/progress-dry.out" --dry-run
+ORCA_WORKTREE_ID=
+expect_exit 0 "closing the progress tabs in --dry-run exits 0"
+expect_has 'dry-run: orca terminal close --terminal term_prog --tab' \
+  "--dry-run prints the progress tab close" "$WORK/progress-dry.out"
+expect_has 'dry-run: orca terminal close --terminal term_self --tab' \
+  "--dry-run still prints its own close" "$WORK/progress-dry.out"
+expect_without 'terminal close --terminal' "--dry-run executes no close" "$ORCA_LOG"
+ORCA_FIXTURE=$WORK/orca-clean.json
 
 # --- usage --------------------------------------------------------------------
 run_close "$WORK/no-args.out" --bogus

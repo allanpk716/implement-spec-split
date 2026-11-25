@@ -3,9 +3,12 @@
 # session that runs this script. A Spec session calls it as its last step, so
 # that it does not leave an idle tab behind.
 #
-# Safety: this script only ever closes the one terminal named by
-# ORCA_TAB_ID/ORCA_AGENT_PANE. It never closes another terminal, never passes
-# --all to orca, and never removes the main worktree.
+# Before its own terminal it closes this Run's read-only progress tabs through
+# progress-tab.sh close-all (no record: the title scan is the safety net).
+#
+# Safety: apart from those progress tabs, this script only ever closes the one
+# terminal named by ORCA_TAB_ID/ORCA_AGENT_PANE. It never closes another
+# terminal, never passes --all to orca, and never removes the main worktree.
 #
 # Usage:
 #   close-self.sh [--remove-worktree <path>] [--dry-run]
@@ -36,6 +39,7 @@
 set -u
 
 SCRIPT_NAME=${0##*/}
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || exit 1
 
 usage() {
   cat <<EOF
@@ -88,6 +92,16 @@ if [ -z "${ORCA_TAB_ID:-}" ] || [ -z "${ORCA_AGENT_PANE:-}" ] ||
    ! command -v orca >/dev/null 2>&1; then
   printf 'skip: not in Orca\n'
   exit 0
+fi
+
+# Close the progress tabs of this Run before this session's own tab. A failure
+# here is a warning only and never changes this script's exit code.
+if [ "$DRY" -eq 1 ]; then
+  "$SCRIPT_DIR/progress-tab.sh" close-all --dry-run ||
+    warn "progress-tab.sh close-all failed"
+else
+  "$SCRIPT_DIR/progress-tab.sh" close-all ||
+    warn "progress-tab.sh close-all failed"
 fi
 
 case "$ORCA_AGENT_PANE" in
