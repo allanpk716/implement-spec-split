@@ -319,6 +319,72 @@ function numberLines(values) {
   return values.join('\n');
 }
 
+// Git helpers shared by the render and order modes, so both judge a Spec's
+// branches the same way; keep a single copy and change the rule here only.
+const gitState = {checked: false, inside: false};
+function insideGit() {
+  if (!gitState.checked) {
+    try {
+      const result = cp.execFileSync('git', ['rev-parse', '--is-inside-work-tree'], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }).trim();
+      gitState.inside = result === 'true';
+    } catch (_) {
+      gitState.inside = false;
+    }
+    gitState.checked = true;
+  }
+  return gitState.inside;
+}
+
+function gitSucceeds(args) {
+  try {
+    cp.execFileSync('git', args, {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']});
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+// A leftover spec-<n>-* branch only proves in-flight work while it still
+// holds commits the main branch lacks. One that has landed completely is
+// debris from a (partial) landing and leaves the Spec free, exactly like the
+// deleted integration branch does (GLOSSARY.md, Partial landing).
+const mainBranchState = {checked: false, ref: ''};
+function mainBranchRef() {
+  if (!mainBranchState.checked) {
+    mainBranchState.ref = [
+      'refs/remotes/origin/HEAD', 'refs/remotes/origin/main', 'refs/heads/main',
+    ].find((ref) => gitSucceeds(['rev-parse', '--verify', '--quiet', ref])) || '';
+    mainBranchState.checked = true;
+  }
+  return mainBranchState.ref;
+}
+
+function mergedIntoMain(branch) {
+  const main = mainBranchRef();
+  // Without a main branch to compare against, the branch keeps counting.
+  return main !== '' && gitSucceeds(['merge-base', '--is-ancestor', branch, main]);
+}
+
+function integrationBranch(number) {
+  if (!insideGit()) return null;
+  try {
+    const exact = `spec-${number}`;
+    const output = cp.execFileSync('git', [
+      'branch', '--list', exact, `${exact}-*`, '--format=%(refname:short)',
+    ], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']})
+      .split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+    if (output.includes(exact)) return exact;
+    return output.find((branch) => (
+      branch.startsWith(`${exact}-`) && !mergedIntoMain(branch)
+    )) || null;
+  } catch (_) {
+    return null;
+  }
+}
+
 if (mode === 'map-requests') {
   const issues = readJson(args[0]).filter((issue) => !issue.pull_request);
   const maps = issues.filter(isMap).map((issue) => issue.number).sort((a, b) => a - b);
@@ -841,38 +907,6 @@ if (mode === 'render') {
     return String(value || '').replace(/[\r\n\t]+/g, ' ').trim();
   }
 
-  const gitState = {checked: false, inside: false};
-  function insideGit() {
-    if (!gitState.checked) {
-      try {
-        const result = cp.execFileSync('git', ['rev-parse', '--is-inside-work-tree'], {
-          encoding: 'utf8',
-          stdio: ['ignore', 'pipe', 'pipe'],
-        }).trim();
-        gitState.inside = result === 'true';
-      } catch (_) {
-        gitState.inside = false;
-      }
-      gitState.checked = true;
-    }
-    return gitState.inside;
-  }
-
-  function integrationBranch(number) {
-    if (!insideGit()) return null;
-    try {
-      const exact = `spec-${number}`;
-      const output = cp.execFileSync('git', [
-        'branch', '--list', exact, `${exact}-*`, '--format=%(refname:short)',
-      ], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']})
-        .split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
-      if (output.includes(exact)) return exact;
-      return output.find((branch) => branch.startsWith(`${exact}-`)) || null;
-    } catch (_) {
-      return null;
-    }
-  }
-
   function lastCommit(branch) {
     if (!branch) return '';
     try {
@@ -1114,38 +1148,6 @@ if (mode === 'order') {
 
   function clean(value) {
     return String(value || '').replace(/[\r\n\t]+/g, ' ').trim();
-  }
-
-  const gitState = {checked: false, inside: false};
-  function insideGit() {
-    if (!gitState.checked) {
-      try {
-        const result = cp.execFileSync('git', ['rev-parse', '--is-inside-work-tree'], {
-          encoding: 'utf8',
-          stdio: ['ignore', 'pipe', 'pipe'],
-        }).trim();
-        gitState.inside = result === 'true';
-      } catch (_) {
-        gitState.inside = false;
-      }
-      gitState.checked = true;
-    }
-    return gitState.inside;
-  }
-
-  function integrationBranch(number) {
-    if (!insideGit()) return null;
-    try {
-      const exact = `spec-${number}`;
-      const output = cp.execFileSync('git', [
-        'branch', '--list', exact, `${exact}-*`, '--format=%(refname:short)',
-      ], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']})
-        .split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
-      if (output.includes(exact)) return exact;
-      return output.find((branch) => branch.startsWith(`${exact}-`)) || null;
-    } catch (_) {
-      return null;
-    }
   }
 
   function exactIntegrationBranchExists(number) {

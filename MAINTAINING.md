@@ -114,6 +114,7 @@
     - 无人值守 Run 最后一条命令是 `scripts/close-self.sh`：只关本会话自己的终端（按 `ORCA_TAB_ID` + `ORCA_AGENT_PANE` 找句柄），落地后连 worktree 一起删（干净且已并入 origin 才删）；会话开在主 worktree 的标签里时绝不删主 worktree、不用 `--all`。
     - find-next 推进模式收尾后不再让用户 `/clear` 和看 GitHub，而是进入「总控」（也可 `/find-next --watch` 单独进入，持 `find-next-supervise` 仓库锁）：后台跑只读的 `find-next/scripts/watch-specs.sh`，有落地/部分落地/停车/会话死掉才唤醒会话；停车的待决事项合成一轮问用户，答案写成规格 issue 的 `## 拍板` 评论后 `launch-wave --only <n> --apply` 恢复；Recovery 读最新的 `## 拍板` 执行。监控用脚本阻塞而不是 ScheduleWakeup 轮询，平时不花 token。
     - 选择不在 launch-wave 里禁止「部分被挡」的规格进第 1 波：先做能做的票能并行，代价只是多开一次会话；现在它能干净收尾、自动续上，就不再是问题。
+30. **2026-11-25：遗留的 `spec-<n>-*` 分支只有还带着没进主分支的提交时才算已接手；主分支按 origin/HEAD → origin/main → main 的顺序找，都找不到就不过滤。** 局限：squash/rebase 方式合入的遗留分支不是 main 的祖先，仍会被判为未合入。
 
 ## flash 模式设计要点（2026-11-20 规格定稿，ADR 0001）
 
@@ -240,7 +241,7 @@
 
 - **批量发布**：`bash find-next/scripts/test-publish-batch.sh`。用假 `gh` 测校验、试运行、发布顺序、占位符回填、未决、交接留言、只拆票的已有规格组、发布后调用开发顺序脚本、发布后核对、`--only` 与中途失败后重跑，不访问网络。
 - **批量 Brief 生成**：`bash find-next/scripts/test-make-batch-briefs.sh`。用假 `gh` 测变量替换、上游技能版本选择与参数校验。
-- **流水线状态**：`bash scripts/test-pipeline-status.sh`。它用假 `gh` 和临时 git 仓库测独立规格、单票规格、原版父规格、旧父 issue 形状、缺规格分组、探索中的地图、分支接手、外部阻塞、`--order` 开发顺序（状态、排序、波次、`--apart`、循环依赖）和 gh 失败，不访问网络。
+- **流水线状态**：`bash scripts/test-pipeline-status.sh`。它用假 `gh` 和临时 git 仓库测独立规格、单票规格、原版父规格、旧父 issue 形状、缺规格分组、探索中的地图、分支接手、已合入的遗留分支、外部阻塞、`--order` 开发顺序（状态、排序、波次、`--apart`、循环依赖）和 gh 失败，不访问网络。
 - **进度看板**：`bash scripts/test-board.sh`。用假 orca、假 pipeline-status、临时 git 仓库和临时 Run/Worker 目录测仓库登记、刷新节奏、关系图快照、认领状态、Run 阶段、Worker 异常、终端/网页输出、EPIPE、Board pruning 和帮助文本，不访问网络。
 - **Run 阶段记录**：`bash scripts/test-run-phase.sh`。用临时 HOME/ISS_STATE_DIR 测各阶段写入、覆盖、省略字段、最新 Run 目录选择、状态目录覆盖、写失败只警告和参数校验。
 - **票进度标签**：`bash scripts/test-ticket-watch.sh`。用临时 git 仓库测 `ticket-watch.sh --once` 的 worktree、分支、领先提交、脏文件、最近提交和外部 worker run dir 输出，worktree 清理后的零退出提示，以及缺失参数和非法 interval 的报错，不访问网络。

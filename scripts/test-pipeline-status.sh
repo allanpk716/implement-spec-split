@@ -373,7 +373,13 @@ printf '%s\n' 'test repository' > "$REPO/README.md"
 git -C "$REPO" add README.md
 git -C "$REPO" commit --quiet -m 'initial commit'
 git -C "$REPO" branch spec-89
-git -C "$REPO" branch spec-80-old
+# A legacy spec-<n>-<suffix> branch only counts as taken while the main branch
+# lacks its commits, so this one carries unlanded work of its own.
+git -C "$REPO" checkout --quiet -b spec-80-old
+printf '%s\n' 'legacy integration work' > "$REPO/legacy.txt"
+git -C "$REPO" add legacy.txt
+git -C "$REPO" commit --quiet -m 'legacy integration work'
+git -C "$REPO" checkout --quiet -
 
 ORDER_FIXTURE=$WORK/order-fixture
 ORDER_REPO=$WORK/order-git-repo
@@ -592,6 +598,95 @@ git -C "$EMPTY_REPO" branch spec-500
 mkdir -p "$EMPTY_REPO/.git/implement-spec-split/claims"
 printf '%s\n' '{"spec":500,"branch":"spec-500","worktree":"/tmp/order-500","pid":777,"pid_start":"fake alive","claimed_at":"2026-11-12T09:10:00+08:00"}' \
   > "$EMPTY_REPO/.git/implement-spec-split/claims/spec-500.json"
+
+LEFTOVER_FIXTURE=$WORK/leftover-fixture
+LEFTOVER_REPO=$WORK/leftover-git-repo
+mkdir -p "$LEFTOVER_FIXTURE" "$LEFTOVER_REPO" || exit 1
+
+LEFTOVER_FIXTURE=$LEFTOVER_FIXTURE node > /dev/null <<'NODE'
+const fs = require('fs');
+const directory = process.env.LEFTOVER_FIXTURE;
+
+function sub(total, completed = total) {
+  return {total, completed, percent_completed: total ? Math.round(100 * completed / total) : 0};
+}
+
+function issue(number, title, state, labels, body, children = sub(0), extras = {}) {
+  return Object.assign({
+    number,
+    title,
+    state,
+    labels: labels.map((name) => ({name})),
+    body,
+    sub_issues_summary: children,
+    issue_dependencies_summary: {blocked_by: 0, total_blocked_by: 0, blocking: 0, total_blocking: 0},
+    assignees: [],
+  }, extras);
+}
+
+function spec(number, title) {
+  return issue(number, title, 'open', [], '## Problem Statement\nLeftover fixture.', sub(1, 0));
+}
+
+const issues = [
+  spec(600, 'Merged leftover spec'),
+  issue(601, 'Merged leftover ticket', 'open', [], ''),
+  spec(610, 'Unmerged leftover spec'),
+  issue(611, 'Unmerged leftover ticket', 'open', [], ''),
+  spec(620, 'Mixed leftover spec'),
+  issue(621, 'Mixed leftover ticket', 'open', [], ''),
+  spec(630, 'Landed exact branch spec'),
+  issue(631, 'Landed exact branch ticket', 'open', [], ''),
+];
+
+const responses = {
+  'sub-600': [issues[1]],
+  'sub-610': [issues[3]],
+  'sub-620': [issues[5]],
+  'sub-630': [issues[7]],
+  'blocker-601': [issues[3]],
+  'blocker-611': [],
+  'blocker-621': [],
+  'blocker-631': [],
+};
+
+fs.writeFileSync(`${directory}/issues.json`, JSON.stringify(issues, null, 2));
+for (const [name, value] of Object.entries(responses)) {
+  fs.writeFileSync(`${directory}/${name}.json`, JSON.stringify(value, null, 2));
+}
+NODE
+
+git -C "$LEFTOVER_REPO" init --quiet -b main
+git -C "$LEFTOVER_REPO" config user.name 'Pipeline Status Leftover Test'
+git -C "$LEFTOVER_REPO" config user.email 'pipeline-status-leftover-test@example.invalid'
+git -C "$LEFTOVER_REPO" config commit.gpgsign false
+printf '%s\n' 'leftover repository' > "$LEFTOVER_REPO/README.md"
+git -C "$LEFTOVER_REPO" add README.md
+git -C "$LEFTOVER_REPO" commit --quiet -m 'initial commit'
+leftover_branch() {
+  git -C "$LEFTOVER_REPO" checkout --quiet -b "$1" main
+  printf '%s\n' "$1 work" > "$LEFTOVER_REPO/$1.txt"
+  git -C "$LEFTOVER_REPO" add "$1.txt"
+  git -C "$LEFTOVER_REPO" commit --quiet -m "$1 work"
+  git -C "$LEFTOVER_REPO" checkout --quiet main
+}
+leftover_land() {
+  git -C "$LEFTOVER_REPO" merge --quiet --no-ff -m "merge $1" "$1"
+}
+# Ticket branches stay behind after their work lands. #600 has only landed ones,
+# no spec-600 and no claim, so nothing is in flight; #610 and #620 hold unlanded
+# ticket work (#620's landed branch sorts first) and #630 the landed exact
+# integration branch.
+leftover_branch spec-600-t1
+leftover_land spec-600-t1
+leftover_branch spec-600-t2
+leftover_land spec-600-t2
+leftover_branch spec-610-t1
+leftover_branch spec-620-t1
+leftover_land spec-620-t1
+leftover_branch spec-620-t2
+leftover_branch spec-630
+leftover_land spec-630
 
 # Live Orca terminals for orphan-claim checks: #118 is named by an agent in this
 # repository; #119 only by an agent in another repository; "#1150" must not
@@ -1038,6 +1133,52 @@ RUN_EXIT=$?
 expect_exit 0 "blocked-capacity order succeeds"
 expect_has '第 1 波：（无，都在等前置规格合入）' 'available capacity with fully blocked candidates reports dependencies' "$WORK/order-blocked-capacity.out"
 expect_has ' 1. #510 Idle blocked spec（等 #500）' 'direct spec blocker remains a dependency after source starts' "$WORK/order-blocked-capacity.out"
+
+run_leftover_status() {
+  output=$1
+  shift
+  (
+    cd "$LEFTOVER_REPO" || exit 125
+    env FIXTURE_DIR="$LEFTOVER_FIXTURE" PATH="$BIN:$PATH" \
+      bash "$SCRIPT" --repo test/repo "$@"
+  ) > "$output" 2> "${output}.err"
+  RUN_EXIT=$?
+}
+
+run_leftover_status "$WORK/leftover.out" --all
+expect_exit 0 "leftover branch scan succeeds"
+expect_has '- #600 0/1 空闲；被卡住：#611 Merged leftover spec' \
+  'merged leftover ticket branches leave the spec idle' "$WORK/leftover.out"
+expect_has '- #610 0/1 已接手（分支 spec-610-t1，最后提交 ' \
+  'unmerged leftover ticket branch keeps the spec taken' "$WORK/leftover.out"
+expect_has '- #620 0/1 已接手（分支 spec-620-t2，最后提交 ' \
+  'merged leftover branch is skipped for the unmerged one' "$WORK/leftover.out"
+expect_has '- #630 0/1 已接手（分支 spec-630，最后提交 ' \
+  'landed exact integration branch still counts as taken' "$WORK/leftover.out"
+
+run_leftover_status "$WORK/leftover-order.out" --order --parallel 20
+expect_exit 0 "leftover branch order succeeds"
+expect_has '先恢复：#610 #620 #630' \
+  'only specs holding unlanded work are listed for recovery' "$WORK/leftover-order.out"
+expect_has ' 1. #600 Merged leftover spec（等 #610）' \
+  'merged leftover spec is ordered as idle instead of resumed' "$WORK/leftover-order.out"
+
+git -C "$LEFTOVER_REPO" update-ref refs/remotes/origin/main main
+git -C "$LEFTOVER_REPO" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+run_leftover_status "$WORK/leftover-origin.out" --all
+expect_exit 0 "leftover branch scan succeeds through origin/HEAD"
+expect_has '- #600 0/1 空闲；被卡住：#611 Merged leftover spec' \
+  'merged leftovers are judged against origin/HEAD' "$WORK/leftover-origin.out"
+
+# Without a main branch to compare against the old rule stands: a leftover
+# branch keeps the Spec taken.
+git -C "$LEFTOVER_REPO" symbolic-ref --delete refs/remotes/origin/HEAD
+git -C "$LEFTOVER_REPO" update-ref -d refs/remotes/origin/main
+git -C "$LEFTOVER_REPO" branch --quiet -m main master
+run_leftover_status "$WORK/leftover-no-main.out" --all
+expect_exit 0 "leftover branch scan succeeds without a main branch"
+expect_has '- #600 0/1 已接手（分支 spec-600-t1，最后提交 ' \
+  'leftover branch keeps the spec taken without a main branch' "$WORK/leftover-no-main.out"
 
 run_status "$NOT_REPO" "$WORK/not-repo.out"
 expect_exit 0 "outside a git repository still scans issues"
