@@ -210,7 +210,7 @@ No other wording for the next step ("回 find-next 选『先恢复』" and the l
 
 **Resuming after parking**: in Recovery, read the Spec issue's comments; the newest `## 拍板` comment after the newest `## 停车报告` holds the user's answers. Apply them (one fix role for all answers, then step 7's review only of that fix; open and close its progress tab as Progress tabs says) and continue to landing. The `## 拍板` answers count as authorised for this Run: do not park on the same items again.
 
-**Landing report**: after a successful unattended landing, post the final report (below) on the Spec issue as `## 落地报告`, condensed: when `completion.txt` exists, put its contents verbatim at the very top of the comment, then tickets landed, review findings and how each was resolved, `### 自动拍板（可推翻）` (omit when empty), tickets left waiting for another Spec (`剩余：#<t> 等 #<spec>`, one line each), and the Specs step 9.5 started. The user reads it through find-next's supervisor or GitHub, not by reopening this session.
+**Landing report**: after a successful unattended landing, post the final report (below) on the Spec issue as `## 落地报告`, condensed but in the same order as "Report at the end" (completion.txt verbatim, then the `## 结论` block with 要你做的, then details): tickets landed, review findings and how each was resolved, `### 自动拍板（可推翻）` (omit when empty), tickets left waiting for another Spec (`剩余：#<t> 等 #<spec>`, one line each), and the Specs step 9.5 started. The user reads it through find-next's supervisor or GitHub, not by reopening this session.
 
 ## Flash mode (`FLASH_ORCHESTRATOR=1`)
 
@@ -298,7 +298,13 @@ If any check fails, re-brief once with what is missing; if it still fails, ask t
 
 ## Report at the end
 
-- If `<Spec Run root>/completion.txt` exists, put its contents verbatim at the very top of the final report, before everything else.
+The reader is the user, who did not watch the Run and reads Chinese. Write the report, and the `## 落地报告` / `## 停车报告` comments, in plain Chinese, **conclusion first**: on 2026-11-25 a spec-22 report opened with a 22-item issue list and buried the only human action (a deploy ticket) mid-way, so the user could not tell what happened.
+
+1. If `<Spec Run root>/completion.txt` exists, put its contents verbatim at the very top.
+2. Then a `## 结论` block of at most 5 lines, in this order: 结果 (landed / partially landed with `剩余：#<t> 等 #<spec>` / parked and why, one line); **要你做的** — every action only a human can take (e.g. a deploy or ops ticket left open, a parking decision), with the issue number and one line on what to do, or `无`; 自动拍板 count with a pointer to `### 自动拍板（可推翻）` (omit when none); 下一步 — what happens next without the user (Specs step 9.5 started, or `无可启动：#<n> 等 #<m>`); and any 事故 that broke a rule (e.g. pushing without the landing lock), one line each.
+3. Only after that, under `## 细节`, the technical part below. Do not use internal terms in the `## 结论` block (fixed point, smell, role tables, run dirs); say it in user terms.
+
+`## 细节`:
 - Which backend and model ran each role (implement / merge / fix / review), and any role that ran on a different backend than configured, and why.
 - For External workers: one line per run with ticket, status, segments (`status.json`; more than 1 means it was Resumed), duration and run directory; whether the run overlapped GLM peak hours.
 - The review findings per axis, and how they were resolved.
