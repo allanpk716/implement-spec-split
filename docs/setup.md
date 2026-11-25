@@ -17,7 +17,7 @@ English: [setup.en.md](setup.en.md)
  ├─ 阶段 1 spec 并行实现（--impl sonnet 即可用）
  │     └─ 加上阶段 2 后可用 --impl codex
  └─ 阶段 2 codex 后端
-       └─ 阶段 3 全局分工（CLAUDE.md 规则 + delegate-guard / unattended-ask-guard / land-push-guard hook）
+       └─ 阶段 3 全局分工（CLAUDE.md 规则 + delegate-guard / unattended-ask-guard / unattended-stop-guard / land-push-guard hook）
 ```
 
 ---
@@ -215,13 +215,14 @@ scripts/selftest-codex.sh --only L1   # 真连一次 GLM，花极少 token；失
 
 ## 阶段 3：全局 Opus / codex 分工
 
-让**所有项目**的日常会话都按这个分工走：Opus 负责讨论、定方案、做根因判断、审查和放行，写代码和读大量代码交给 codex worker。由四部分组成：
+让**所有项目**的日常会话都按这个分工走：Opus 负责讨论、定方案、做根因判断、审查和放行，写代码和读大量代码交给 codex worker。由五部分组成：
 
 | 部分 | 放在哪 | 作用 |
 |---|---|---|
 | 分工规则 | `~/.claude/CLAUDE.md` | 告诉 Claude 什么自己做、什么交出去、怎么调 worker、怎么处理结果 |
 | delegate-guard hook | `~/.claude/settings.json` | 机械地拦下对源码超过 10 行的直接修改，不依赖模型记得规则 |
 | unattended-ask-guard hook | `~/.claude/settings.json` | 无人值守的 `--auto-land` Run 里拒绝 `AskUserQuestion`，不依赖模型记得不问人 |
+| unattended-stop-guard hook | `~/.claude/settings.json` | 无人值守的 `--auto-land` Run 结束前，没自关不许结束，也不许以问人结束 |
 | land-push-guard hook | `~/.claude/settings.json` | 会话跑过 `/implement-spec-split` 后，没持本仓库 land 锁就不许 push 默认分支 |
 
 **安装**
@@ -283,6 +284,28 @@ scripts/selftest-codex.sh --only L1   # 真连一次 GLM，花极少 token；失
 
    macOS / Linux 同样换成绝对路径。它只在 transcript 里出现过 `/implement-spec-split` 命令调用的会话生效；`LAND_PUSH_GUARD_DISABLE=1` 可临时关闭；详见 [hooks/README.md](../hooks/README.md)。
 
+   **同时注册 unattended-stop-guard**：无人值守的 `--auto-land` Run 结束前，这个 hook 拦住两种情况：Run 已 `done` / `waiting` / `parked` 却没运行 `scripts/close-self.sh`（会话空转着不关），以及最后一条回复在问人（纯文本提问，`unattended-ask-guard` 拦不到的那条路）。它注册在 `Stop` 事件上，不是 `PreToolUse`，所以在 `~/.claude/settings.json` 里新增（已有就追加）`hooks.Stop` 数组：
+
+   ```json
+   {
+     "hooks": {
+       "Stop": [
+         {
+           "hooks": [
+             {
+               "type": "command",
+               "command": "node C:/Users/<you>/.claude/skills/implement-spec-split/hooks/unattended-stop-guard.js",
+               "timeout": 10
+             }
+           ]
+         }
+       ]
+     }
+   }
+   ```
+
+   macOS / Linux 同样换成绝对路径。它和 `unattended-ask-guard` 一样按 transcript 里最后一次 `/implement-spec-split` 调用是否带 `--auto-land` 判定；`UNATTENDED_STOP_GUARD_DISABLE=1` 可临时关闭；详见 [hooks/README.md](../hooks/README.md)。
+
 3. 新开一个 Claude Code 会话，hook 和规则才会完整生效。
 
 **hook 的判定规则**
@@ -316,7 +339,10 @@ node ~/.claude/skills/implement-spec-split/hooks/test-delegate-guard.js
 # 2. land-push-guard 单元测试：应输出 Summary: 24 passed, 0 failed
 node ~/.claude/skills/implement-spec-split/hooks/test-land-push-guard.js
 
-# 3. 冒烟：应输出一段 permissionDecision 为 deny 的 JSON
+# 3. unattended-stop-guard 单元测试：应输出 Summary: 37 passed, 0 failed
+node ~/.claude/skills/implement-spec-split/hooks/test-unattended-stop-guard.js
+
+# 4. 冒烟：应输出一段 permissionDecision 为 deny 的 JSON
 node -e 'console.log(JSON.stringify({tool_name:"Write",tool_input:{file_path:"C:/x/a.py",content:"l\n".repeat(15)}}))' \
   | node ~/.claude/skills/implement-spec-split/hooks/delegate-guard.js
 ```

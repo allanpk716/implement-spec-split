@@ -8,11 +8,10 @@
 'use strict';
 
 const fs = require('fs');
-const { readLastCommandArgs } = require('./lib-transcript');
+const { readLastCommandArgs, hasAutoLandFlag } = require('./lib-transcript');
 
 const TOOL_NAME = 'AskUserQuestion';
 const DISABLE_ENV = 'UNATTENDED_ASK_GUARD_DISABLE';
-const AUTO_LAND_FLAG = '--auto-land';
 const DENY_REASON =
   '无人值守 Run（--auto-land）不能问人，没人会来答。' +
   'Opus 标了『可自动采纳：是』且有推荐的取舍，按推荐做并记进落地报告的『### 自动拍板（可推翻）』；' +
@@ -30,11 +29,6 @@ function deny(reason) {
       },
     }) + '\n'
   );
-}
-
-function hasAutoLandFlag(args) {
-  if (typeof args !== 'string') return false;
-  return args.split(/\s+/).some(token => token === AUTO_LAND_FLAG);
 }
 
 function main() {

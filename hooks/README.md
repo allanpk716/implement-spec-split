@@ -143,6 +143,53 @@ macOS / Linux 用上面的绝对路径；Windows 把路径换成 `node C:/Users/
 node hooks/test-unattended-ask-guard.js
 ```
 
+## unattended-stop-guard hook
+
+`unattended-stop-guard.js` 是 Claude Code 的 `Stop` hook，是无人值守 `/implement-spec-split --auto-land` 会话的最后一道兜底：会话要结束时，它检查这个 Run 是不是真的收尾了。起因是 2026-11-20 至 11-25 的排查：19 个无人值守 Run 里调用过 `close-self.sh` 的是 0 个，其中 10 个以「可以 /clear 了」结尾空转着不关；spec-18 还有一次用纯文本发问后停住。`unattended-ask-guard` 只拦得住 `AskUserQuestion` 工具，拦不住纯文本提问和「不自关就结束」。
+
+生效条件：与 `unattended-ask-guard` 相同。hook 读取 payload 的 `transcript_path`，取**最后一次** `/implement-spec-split` 调用的 `<command-args>`，其中恰好有 `--auto-land` 这个词才生效；其他会话一律放行。
+
+Run 状态：从 command-args 取第一个数字参数作为 `<n>`，再从 `ISS_STATE_DIR`（默认 `~/.cache/implement-spec-split`）下的 `runs/<repo>-<n>-*/run.json` 取 `phase`。`<repo>` 依次尝试 payload `cwd` 所在 git 仓库的 origin 仓库名（`<name>` 部分）、worktree 路径 `.../workspaces/<repo>/spec-<n>` 里的 `<repo>`，以及主 checkout 的目录名（SKILL.md 告诉 `run-phase.sh` 用的那个）；取 `run.json` mtime 最新的匹配目录。找不到 `run.json` 时只执行规则 B。
+
+两条规则：
+
+- **规则 A（自关）**：`phase` 为 `done`、`waiting` 或 `parked`，且 transcript 里没有任何 Bash tool_use 的 command 包含 `close-self.sh` 时，block。理由提醒先确认落地/停车报告评论已发出，最后一条命令运行 `<skill dir>/scripts/close-self.sh`（落地后加 `--remove-worktree <集成 worktree>`，停车不加），见 SKILL.md 第 10 步。
+- **规则 B（问人）**：`phase` 不是 `parked`、`done`、`waiting`，且最后一条 assistant 消息的文本（取最后一个 text block 的最后 300 个字符）以 `？` / `?` 结尾，或包含 `请确认`、`等你`、`需要你`、`要不要`、`是否继续`、`你来决定`、`请选择`、`回复我` 时，block。理由告诉模型：可自动采纳的按推荐做，合并冲突交 merger + Opus 审查，真要人决定的写停车报告后停车并自关；只是在等后台任务就继续等通知，不要问人。
+
+`phase` 为 `split`、`implement`、`integrate`、`review`、`land` 且最后一条消息不是在问人时放行，所以等后台任务通知时正常结束一轮不会被拦。
+
+防死循环：payload 的 `stop_hook_active` 为 true（会话已经在 Stop hook 的续跑里）时，同一条规则最多再 block 1 次，之后放行并在 stderr 打一行警告。计数按 transcript 路径的哈希写到 `<os.tmpdir()>/unattended-stop-guard/<hash>.json`，两条规则各算各的；`stop_hook_active` 为 false 的一次新停止会把计数清零，所以一次循环事故不会让本会话余下的时间都失去保护。
+
+逃生口：`UNATTENDED_STOP_GUARD_DISABLE=1` 时直接放行。`transcript_path` 缺失、不可读、JSON 损坏、`run.json` 损坏或任何内部异常都 fail open（不输出、退出 0）。
+
+注册：`Stop` 事件没有 matcher。在 `~/.claude/settings.json` 的 `hooks.Stop` 数组里**追加**一项（不要覆盖已有的 hook）：
+
+```json
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ~/.claude/skills/implement-spec-split/hooks/unattended-stop-guard.js",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+macOS / Linux 用上面的绝对路径；Windows 把路径换成 `node C:/Users/<you>/.claude/skills/implement-spec-split/hooks/unattended-stop-guard.js`。claude-flash 和 openclaude 是用 `--settings` 叠加启动的，用户级 `~/.claude/settings.json` 照样生效，不需要在各自的 settings 里重复注册。
+
+测试命令：
+
+```text
+node hooks/test-unattended-stop-guard.js
+```
+
 ## land-push-guard hook
 
 `land-push-guard.js` 是 Claude Code 的 `PreToolUse` hook，用于在会话里跑过 `/implement-spec-split` 之后拦住「没持本仓库 land 锁就 push 默认分支」的操作。起因是 2026-11-25 proxy-hub spec-22：落地时执行了 `lock.sh acquire land --scope repo`，实际返回 2（spec-19 正占着锁），但命令被包在一层 `echo` 里，外层退出码变成 0，被误读成拿到了锁，于是在没持锁的情况下执行了 `git push origin HEAD:main`。提示词管不住这种退出码误读，所以做成 hook，直接读锁目录和 `owner.json`。

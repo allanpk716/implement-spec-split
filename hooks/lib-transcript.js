@@ -12,6 +12,7 @@ const { StringDecoder } = require('string_decoder');
 const COMMAND_NAME = '/implement-spec-split';
 const COMMAND_NAME_TAG = `<command-name>${COMMAND_NAME}</command-name>`;
 const COMMAND_MARKER = `${COMMAND_NAME}</command-name>`;
+const AUTO_LAND_FLAG = '--auto-land';
 const CHUNK_SIZE = 1024 * 1024;
 
 // Extract the text of a user message from one transcript line. Returns null
@@ -46,6 +47,51 @@ function userTextFromLine(line) {
     return parts.join('\n');
   }
   return null;
+}
+
+// Extract the text of an assistant message from one transcript line: the
+// message content when it is a plain string, otherwise the last text block.
+// Entries copied from a subagent (isSidechain) are skipped so a subagent's
+// question does not count as the main agent's last message. Returns null when
+// the line is not an assistant entry or has no text block at all.
+function assistantTextFromLine(line) {
+  if (!line.includes('assistant')) return null;
+  let entry;
+  try {
+    entry = JSON.parse(line);
+  } catch (_error) {
+    return null;
+  }
+  if (entry === null || typeof entry !== 'object') return null;
+  if (entry.type !== 'assistant') return null;
+  if (entry.isSidechain === true) return null;
+
+  const message = entry.message;
+  if (message === null || typeof message !== 'object') return null;
+
+  const content = message.content;
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return null;
+
+  let text = null;
+  for (const item of content) {
+    if (
+      item !== null &&
+      typeof item === 'object' &&
+      item.type === 'text' &&
+      typeof item.text === 'string'
+    ) {
+      text = item.text;
+    }
+  }
+  return text;
+}
+
+// True when the command-args of an /implement-spec-split call contain the
+// --auto-land flag as a whole word.
+function hasAutoLandFlag(args) {
+  if (typeof args !== 'string') return false;
+  return args.split(/\s+/).some(token => token === AUTO_LAND_FLAG);
 }
 
 // From one transcript line, return the <command-args> of an
@@ -145,7 +191,72 @@ function hasCommandInvocation(transcriptPath) {
   return found;
 }
 
+// Return the text of the last assistant message in the transcript, or null
+// when the transcript has no assistant text. The last assistant entry decides,
+// even when it only contains tool_use or thinking blocks (then the answer is
+// null: that message is not talking to the user).
+function readLastAssistantText(transcriptPath) {
+  let lastText = null;
+  let sawAssistant = false;
+  scanTranscript(transcriptPath, line => {
+    if (!line.includes('assistant')) return true;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch (_error) {
+      return true;
+    }
+    if (entry === null || typeof entry !== 'object') return true;
+    if (entry.type !== 'assistant' || entry.isSidechain === true) return true;
+    sawAssistant = true;
+    lastText = assistantTextFromLine(line);
+    return true;
+  });
+  return sawAssistant ? lastText : null;
+}
+
+// True when the transcript contains at least one Bash tool_use whose command
+// contains `needle`. Stops at the first match; a missing or unreadable
+// transcript answers false. Subagent (isSidechain) entries are skipped.
+function hasBashCommandContaining(transcriptPath, needle) {
+  if (typeof needle !== 'string' || needle === '') return false;
+  let found = false;
+  scanTranscript(transcriptPath, line => {
+    if (!line.includes('Bash')) return true;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch (_error) {
+      return true;
+    }
+    if (entry === null || typeof entry !== 'object') return true;
+    if (entry.type !== 'assistant' || entry.isSidechain === true) return true;
+    const content = entry.message && entry.message.content;
+    if (!Array.isArray(content)) return true;
+    for (const item of content) {
+      if (
+        item === null ||
+        typeof item !== 'object' ||
+        item.type !== 'tool_use' ||
+        item.name !== 'Bash'
+      ) {
+        continue;
+      }
+      const command = item.input && item.input.command;
+      if (typeof command === 'string' && command.includes(needle)) {
+        found = true;
+        return false;
+      }
+    }
+    return true;
+  });
+  return found;
+}
+
 module.exports = {
+  hasAutoLandFlag,
   readLastCommandArgs,
+  readLastAssistantText,
+  hasBashCommandContaining,
   hasCommandInvocation,
 };
