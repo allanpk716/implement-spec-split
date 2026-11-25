@@ -106,6 +106,43 @@ flash 模式不使用这个例外开关：flash 会话一行源码都不写（�
 node hooks/test-ask-sanitize.js
 ```
 
+## unattended-ask-guard hook
+
+`unattended-ask-guard.js` 是 Claude Code 的 `PreToolUse` hook，用于在无人值守的 `/implement-spec-split --auto-land` 会话（含其子代理）里拒绝 `AskUserQuestion`：没人会来回答，提问只会把会话卡到第二天有人来答。提示词已经要求不问人，这个 hook 是不依赖模型理解提示词的硬兜底。
+
+判定方式：hook 读取 payload 里的 `transcript_path`（JSONL，每行一个 JSON），按块流式读取，只对包含 `/implement-spec-split</command-name>` 的行做 JSON 解析，取**最后一次** `/implement-spec-split` 调用的 `<command-args>`，按空白切分；其中恰好有 `--auto-land` 这个词就拒绝，`--auto-landing` 之类不算。以最后一次调用为准：先带后不带放行，先不带后带拒绝。子代理 payload 的 `transcript_path` 可能指向主会话 transcript，规则相同，不特判 `agent_id`。hook 只处理 `tool_name === "AskUserQuestion"`，其他工具直接无输出退出；`transcript_path` 缺失、不可读、某行 JSON 解析失败或 hook 内部异常都 fail open（不输出、退出 0）。
+
+逃生口：环境变量 `UNATTENDED_ASK_GUARD_DISABLE=1` 时直接放行。
+
+注册：在 `~/.claude/settings.json` 的 `hooks.PreToolUse` 数组里**追加**一项（不要覆盖已有的 hook）。它和 delegate-guard、ask-sanitize 各自注册、互不替代；两个 hook 都命中 `AskUserQuestion` 时 deny 覆盖 ask。
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ~/.claude/skills/implement-spec-split/hooks/unattended-ask-guard.js",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+macOS / Linux 用上面的绝对路径；Windows 把路径换成 `node C:/Users/<you>/.claude/skills/implement-spec-split/hooks/unattended-ask-guard.js`。claude-flash 和 openclaude 是用 `--settings` 叠加启动的，用户级 `~/.claude/settings.json` 照样生效，不需要在各自的 settings 里重复注册。
+
+测试命令：
+
+```text
+node hooks/test-unattended-ask-guard.js
+```
+
 ## 测试
 
 ```text

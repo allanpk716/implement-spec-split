@@ -17,7 +17,7 @@ English: [setup.en.md](setup.en.md)
  ├─ 阶段 1 spec 并行实现（--impl sonnet 即可用）
  │     └─ 加上阶段 2 后可用 --impl codex
  └─ 阶段 2 codex 后端
-       └─ 阶段 3 全局分工（CLAUDE.md 规则 + delegate-guard hook）
+       └─ 阶段 3 全局分工（CLAUDE.md 规则 + delegate-guard / unattended-ask-guard hook）
 ```
 
 ---
@@ -215,12 +215,13 @@ scripts/selftest-codex.sh --only L1   # 真连一次 GLM，花极少 token；失
 
 ## 阶段 3：全局 Opus / codex 分工
 
-让**所有项目**的日常会话都按这个分工走：Opus 负责讨论、定方案、做根因判断、审查和放行，写代码和读大量代码交给 codex worker。由两部分组成：
+让**所有项目**的日常会话都按这个分工走：Opus 负责讨论、定方案、做根因判断、审查和放行，写代码和读大量代码交给 codex worker。由三部分组成：
 
 | 部分 | 放在哪 | 作用 |
 |---|---|---|
 | 分工规则 | `~/.claude/CLAUDE.md` | 告诉 Claude 什么自己做、什么交出去、怎么调 worker、怎么处理结果 |
 | delegate-guard hook | `~/.claude/settings.json` | 机械地拦下对源码超过 10 行的直接修改，不依赖模型记得规则 |
+| unattended-ask-guard hook | `~/.claude/settings.json` | 无人值守的 `--auto-land` Run 里拒绝 `AskUserQuestion`，不依赖模型记得不问人 |
 
 **安装**
 
@@ -246,6 +247,23 @@ scripts/selftest-codex.sh --only L1   # 真连一次 GLM，花极少 token；失
    ```
 
    macOS / Linux 把路径换成 `node ~/.claude/skills/implement-spec-split/hooks/delegate-guard.js` 的绝对路径。改之前先备份 `settings.json`。
+
+   **同时注册 unattended-ask-guard**：无人值守的 `/implement-spec-split --auto-land` 会话里没人会来回答，这个 hook 会拒绝 `AskUserQuestion`，并提示模型改走自动拍板或停车报告。在同一个 `hooks.PreToolUse` 数组里再追加一项：
+
+   ```json
+   {
+     "matcher": "AskUserQuestion",
+     "hooks": [
+       {
+         "type": "command",
+         "command": "node C:/Users/<you>/.claude/skills/implement-spec-split/hooks/unattended-ask-guard.js",
+         "timeout": 5
+       }
+     ]
+   }
+   ```
+
+   macOS / Linux 同样换成绝对路径。它按 transcript 里最后一次 `/implement-spec-split` 调用是否带 `--auto-land` 判定，`UNATTENDED_ASK_GUARD_DISABLE=1` 可临时关闭；详见 [hooks/README.md](../hooks/README.md)。
 
 3. 新开一个 Claude Code 会话，hook 和规则才会完整生效。
 

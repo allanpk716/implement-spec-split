@@ -18,7 +18,7 @@ Stage 0 common foundation
  ├─ Stage 1 parallel spec implementation (works with --impl sonnet)
  │     └─ with Stage 2 added, --impl codex works too
  └─ Stage 2 codex backend
-       └─ Stage 3 global division (CLAUDE.md rules + delegate-guard hook)
+       └─ Stage 3 global division (CLAUDE.md rules + delegate-guard / unattended-ask-guard hook)
 ```
 
 ---
@@ -209,12 +209,13 @@ For why this uses `exec --json` with a wrapper, why it uses bypass mode, and Win
 
 ## Stage 3: global Opus / codex division of labour
 
-This makes everyday sessions in **all projects** follow this division: Opus handles discussion, decisions, root-cause judgment, review, and approval, while coding and bulk code reading go to codex workers. It has two parts:
+This makes everyday sessions in **all projects** follow this division: Opus handles discussion, decisions, root-cause judgment, review, and approval, while coding and bulk code reading go to codex workers. It has three parts:
 
 | Part | Location | Purpose |
 |---|---|---|
 | Division rules | `~/.claude/CLAUDE.md` | Tell Claude what to do itself, what to delegate, how to call workers, and how to handle results |
 | delegate-guard hook | `~/.claude/settings.json` | Mechanically block direct source edits larger than 10 lines, without relying on the model remembering the rules |
+| unattended-ask-guard hook | `~/.claude/settings.json` | Deny `AskUserQuestion` in unattended `--auto-land` runs, without relying on the model remembering not to ask |
 
 **Install**
 
@@ -240,6 +241,23 @@ This makes everyday sessions in **all projects** follow this division: Opus hand
    ```
 
    On macOS / Linux, replace the path with the absolute path of `node ~/.claude/skills/implement-spec-split/hooks/delegate-guard.js`. Back up `settings.json` before changing it.
+
+   **Also register unattended-ask-guard**: nobody answers questions in an unattended `/implement-spec-split --auto-land` session, so this hook denies `AskUserQuestion` and tells the model to use automatic decisions or a parking report instead. Append one more item to the same `hooks.PreToolUse` array:
+
+   ```json
+   {
+     "matcher": "AskUserQuestion",
+     "hooks": [
+       {
+         "type": "command",
+         "command": "node C:/Users/<you>/.claude/skills/implement-spec-split/hooks/unattended-ask-guard.js",
+         "timeout": 5
+       }
+     ]
+   }
+   ```
+
+   On macOS / Linux, use the absolute path as well. The hook decides from whether the last `/implement-spec-split` invocation in the transcript carries `--auto-land`; set `UNATTENDED_ASK_GUARD_DISABLE=1` to turn it off temporarily. See [hooks/README.md](../hooks/README.md).
 
 3. Start a new Claude Code session so both the hook and the rules take full effect.
 

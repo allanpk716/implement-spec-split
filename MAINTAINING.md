@@ -115,6 +115,11 @@
     - find-next 推进模式收尾后不再让用户 `/clear` 和看 GitHub，而是进入「总控」（也可 `/find-next --watch` 单独进入，持 `find-next-supervise` 仓库锁）：后台跑只读的 `find-next/scripts/watch-specs.sh`，有落地/部分落地/停车/会话死掉才唤醒会话；停车的待决事项合成一轮问用户，答案写成规格 issue 的 `## 拍板` 评论后 `launch-wave --only <n> --apply` 恢复；Recovery 读最新的 `## 拍板` 执行。监控用脚本阻塞而不是 ScheduleWakeup 轮询，平时不花 token。
     - 选择不在 launch-wave 里禁止「部分被挡」的规格进第 1 波：先做能做的票能并行，代价只是多开一次会话；现在它能干净收尾、自动续上，就不再是问题。
 30. **2026-11-25：遗留的 `spec-<n>-*` 分支只有还带着没进主分支的提交时才算已接手；主分支按 origin/HEAD → origin/main → main 的顺序找，都找不到就不过滤。** 局限：squash/rebase 方式合入的遗留分支不是 main 的祖先，仍会被判为未合入。
+31. **2026-11-25：无人值守 Run 硬禁 AskUserQuestion（`hooks/unattended-ask-guard.js`）。** proxy-hub spec-19 的会话以 `/implement-spec-split 19 --impl agent --agent-model sonnet --auto-land --parallel 2` 启动，属于无人值守落地，规则要求不能等人；但会话按旧提示词弹了 5 次 AskUserQuestion，每次都卡到第二天有人来答。提示词已经改了（第 29 条：可自动采纳的取舍自动拍板），这个 hook 是不依赖模型理解提示词的硬兜底。决定：
+    - 只处理 `tool_name === "AskUserQuestion"`，其他工具无输出退出。判定从 transcript（payload 的 `transcript_path`，JSONL）读：只对含 `/implement-spec-split</command-name>` 的行做 JSON 解析，取最后一次调用的 `<command-args>`，按空白切分，恰好有 `--auto-land` 才拒绝；以最后一次为准（先带后不带放行）。content 是字符串或 `[{type:"text", text}]` 数组都支持。
+    - 为什么从 transcript 判定而不靠环境变量：会话由 `orca worktree create --agent … --prompt` 启动，没法给这一层注入环境变量；手动输入 `/implement-spec-split … --auto-land` 也要覆盖。子代理的 `transcript_path` 可能指向主会话 transcript，规则一样，不特判 `agent_id`。
+    - 逃生口 `UNATTENDED_ASK_GUARD_DISABLE=1`；`transcript_path` 缺失、不可读、坏行或内部异常一律 fail open（不输出、退出 0）。按块流式读，几 MB 的 transcript 远低于 1 秒（测试断言 < 1 秒）。
+    - 和 `ask-sanitize.js` 各自注册，两个 hook 都命中时 deny 覆盖 ask。
 
 ## flash 模式设计要点（2026-11-20 规格定稿，ADR 0001）
 
@@ -248,6 +253,7 @@
 - **进度标签开关**：`bash scripts/test-progress-tab.sh`。用假 orca 测 `progress-tab.sh open` 只认 `result.terminal.handle` 且以 `term_` 开头、同标题不重复开、没有 `ORCA_WORKTREE_ID` 时什么都不做、`--command` 里带空格的路径转义；`close` 只关指定标题并删掉对应行；`close-all` 兼容字面量 `<TAB>`、跳过非 `term_` handle，并按标题和 worktree 兜底扫描（不关 `spec-<n> ✓`、`Claude Code`、其他 spec 号、其他 worktree、自己的 tabId）；`--dry-run` 只打印不执行 close，不调用真实 orca。
 - **编排看门狗**：`bash scripts/test-run-watchdog.sh`。用临时 git 仓库和小间隔测 `run-watchdog.sh` 的卡死（STALLED/退出码 3）、后台持续提交判活到 max（ALIVE/退出码 2）、worktree 消失判结束（DONE/退出码 0）、多对象混合输出、worker run dir 进展计入指纹和参数错误（退出码 64），不访问网络。
 - **delegate-guard**：`node hooks/test-delegate-guard.js`。测普通阈值、flash 源码拦截与子代理放行、Bash 各类源码写入形态、裸调 `codex exec` 在所有会话（含子代理、非 flash、`DELEGATE_GUARD_DISABLE=1`）被拦而 wrapper/非 exec 子命令/字符串与 heredoc 字样放行、`gofmt -w`/`goimports -w`/`go fmt` 放行、项目配置与例外开关，不访问网络。
+- **unattended-ask-guard**：`node hooks/test-unattended-ask-guard.js`。用临时 transcript 测字符串和数组 content 的 `--auto-land` 拒绝、不带时放行、以最后一次调用为准、`--auto-landing` 不算、普通对话里提到不算、缺 `transcript_path`/文件不存在/坏 JSON 行 fail open、非 AskUserQuestion 放行、子代理 payload 同样判定、`UNATTENDED_ASK_GUARD_DISABLE=1` 放行，以及 6MB transcript 在 1 秒内判定，不访问网络。
 - **锁与领取记录**：`bash scripts/test-locks.sh`。测 `lock.sh` 的互斥、重入、等待超时、死持有者接管、槽位排队，`claim.sh` 的领取、并发领取、恢复与释放权限、交接预留与接手，worker 上限配置文件，以及两个 `codex-worker.sh` 在 `ISS_MAX_WORKERS=1` 下排队，不访问网络。
 - **Design session**：`bash scripts/test-design-session.sh`。用假 orca 测 feature/map prompt、`--agent claude`、`orchestration check --wait` 超时、会话退出、launch/check 失败、handoff 缺失、启动前未交接 session 提醒（7 天内、无 handoff、同仓库名前缀才提醒；过期、已交接、其他仓库不提醒且退出码不变）和两个薄技能文本（含提醒转述），不调用真实 Orca。
 - **完成度结论**：`bash scripts/test-completion-report.sh`。用临时 Design session 目录、带 tag 与提交的临时 git 仓库、假 `gh` 和假通知命令，测情形 1/2（推荐 A/B）/3、无 tag、未发布提交为 0、minor/patch/非语义化 tag 版本号、发版解冻与普通等待时机、中断 grill、`--notify` 仅完成时通知一次且失败不改变退出码、gh 失败写「（查询失败）」和用法错误退出 64，不访问网络。
