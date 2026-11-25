@@ -106,6 +106,14 @@
     - 退出用 `--no-auto-land`；`--auto-land` 保留为可接受参数（等同默认，向后兼容），不报错。`--apply` 写启动状态时总是显式写 `auto_land: true` 或 `false`（`--no-auto-land` 时为 false）。
     - `--next-wave` 读状态：只有 `auto_land === false` 才关闭；字段缺失（旧状态文件）或状态文件不存在时视为开启。`--next-wave` 仍不接受 `--auto-land` / `--no-auto-land`，报错说明两者都要在初始 `--apply` 时给。
     - find-next 第 6 步不再问「本批无人值守落地吗？」；调用时带 `--no-auto-land` 才不落地并透传给 launch-wave，`--auto-land` 保留为兼容别名。手动敲 `/implement-spec-split <n>` 不带 `--auto-land` 仍保持 push 前确认，SKILL.md 第 9 步逻辑不改。无人值守落地本身的行为（合入/合 PR、CI 红自动修两轮、停车报告、落地报告）不变。
+    - 2026-11-25 补充：见第 29 条，无人值守时带推荐的取舍改为自动拍板，部分落地不再算停车。
+29. **2026-11-25：停车只留给真要人决定的事；find-next 会话常驻做总控；规格会话做完自关。** proxy-hub 一夜实测：规格 #18 全部做完、测试全绿，却因 Opus 的 8 条「需要人取舍」停车，只写在 issue 评论里没人看见；规格 #21 做完 2 张票后，剩下 4 张等规格②③也被标成停车，保留的 `spec-21` 分支让它显示为「中断」、占波次名额，而 `--next-wave` 从不恢复中断的规格，所以②③落地后也不会有人接着做；做完的会话一直挂在 Orca。用户对 11 条取舍里 10 条选了 Opus 推荐，剩下 1 条本就没有推荐。owner 定：
+    - `opus-review.sh` 三类提示词在每条取舍的 `推荐：` 后加 `可自动采纳：是|否 — <原因>`；只有 `推荐：无`、不可撤回或对外（删数据、发布、外部服务、生产部署）、需要人动手或只有人知道的事才写「否」。无人值守 Run 对「是」按推荐落地并在落地报告列 `### 自动拍板（可推翻）`；「否」、`推荐：无` 或缺这一行才停车。flash 仍不自己判断，只照 Opus 的标记执行。
+    - 停车报告第一节固定为 `### 需要你决定`（问题轮格式），不再写「回 find-next 选『先恢复』」之类让人猜的话。
+    - 部分落地不是停车：落地后删 `spec-<n>` 分支（已全部进 main），规格回到空闲，阻塞它的规格落地后由 `--next-wave` 当新规格开起来；阶段记 `waiting`。部分落地也跑第 9.5 步的 `--next-wave`。
+    - 无人值守 Run 最后一条命令是 `scripts/close-self.sh`：只关本会话自己的终端（按 `ORCA_TAB_ID` + `ORCA_AGENT_PANE` 找句柄），落地后连 worktree 一起删（干净且已并入 origin 才删）；会话开在主 worktree 的标签里时绝不删主 worktree、不用 `--all`。
+    - find-next 推进模式收尾后不再让用户 `/clear` 和看 GitHub，而是进入「总控」（也可 `/find-next --watch` 单独进入，持 `find-next-supervise` 仓库锁）：后台跑只读的 `find-next/scripts/watch-specs.sh`，有落地/部分落地/停车/会话死掉才唤醒会话；停车的待决事项合成一轮问用户，答案写成规格 issue 的 `## 拍板` 评论后 `launch-wave --only <n> --apply` 恢复；Recovery 读最新的 `## 拍板` 执行。监控用脚本阻塞而不是 ScheduleWakeup 轮询，平时不花 token。
+    - 选择不在 launch-wave 里禁止「部分被挡」的规格进第 1 波：先做能做的票能并行，代价只是多开一次会话；现在它能干净收尾、自动续上，就不再是问题。
 
 ## flash 模式设计要点（2026-11-20 规格定稿，ADR 0001）
 
@@ -117,7 +125,7 @@
 - **Design session 承担讨论**：`/grill-feature`、`/grill-map` 由 Orca 开官方 Opus 会话，用户直接谈；讨论完当场 to-spec/to-tickets/commit/push（文档推送预授权），写 `handoff.md` 通知 flash。flash 在等待期间阻塞、不轮询不耗 token。
 - **结论必须带出处**：flash 汇报的每个结论注明支撑它的 findings/result 文件路径，拿不出出处的结论不许说。防止 flash 把自己当判断者。
 - **拿不准默认上交 Opus**，不自己在两个上交对象之间挑。
-- **停车条件收紧**：flash 只对 Opus 标注「需要人取舍」的条目停车，不许自创取舍；但 Opus 脚本错误照常硬停车。「需要人取舍」的每一条都原样转给用户，flash 不许以「规格已写明」为由自己裁掉（2026-11-21 human-res-cost 规格 #49 实测：5 条里 flash 自判了 2 条）。
+- **停车条件收紧**（2026-11-25 起无人值守时只对 Opus 标「可自动采纳：否」或「推荐：无」的条目停车，见第 29 条）：flash 只对 Opus 标注「需要人取舍」的条目停车，不许自创取舍；但 Opus 脚本错误照常硬停车。「需要人取舍」的每一条都原样转给用户，flash 不许以「规格已写明」为由自己裁掉（2026-11-21 human-res-cost 规格 #49 实测：5 条里 flash 自判了 2 条）。
 - **实现只能走 `/implement-spec-split`（2026-11-21 加）**：同一次实测里，flash 读完 Design session 的 handoff（Opus 写了「单 worker 串行即可」）后没调技能，自己建 worktree、手写 brief、直接跑 `codex-worker.sh`，认领、阶段标记、agent 后端、落地锁全被跳过。修法三层：grill-feature/grill-map 第 5 步规定实现待办必须走技能；design-session.sh 要求 handoff 只写「实现规格 #N」、不写执行方式；`codex-worker.sh` / `pi-worker.sh` 在 `FLASH_ORCHESTRATOR=1` 时拒跑，只有显式 `--impl codex|pi` 的 Run 带 `WORKER_ALLOW_FLASH=1` 放行——措辞拦不住 flash，和「一行源码不写」一样靠硬拦。
 - **Opus 审查要能读 issue（2026-11-21 修）**：`opus-review.sh` 用 `--permission-prompts none`，原先白名单只有 git，`gh issue view` 被自动拒绝，Spec 轴只能拿 CONTEXT.md 和 commit message 凑数，等于没对照规格。现放行 `gh issue view` / `gh pr view` / `gh pr diff`（只读）。
 - **「需要人取舍」必须带推荐（2026-11-21 修）**：flash 不许自补推荐理由，推荐只能来自 Opus；原先三类提示词只要求把取舍放进该节，Opus 便只写中性权衡，find-next 问题轮里 a–c 全无「建议」行（ssh-manager-mcp #348 散票分流实测）。现要求每条列选项与代价并写 `推荐：<选项> — <理由>`，实在无法推荐写 `推荐：无 — <原因>`；find-next 把它照抄为「建议」行。

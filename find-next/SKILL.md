@@ -1,6 +1,6 @@
 ---
 name: find-next
-description: 默认进入推进模式：循环扫描当前 GitHub 仓库的 wayfinder 地图与票，自动调查并关闭可关的 research 票、为决策票准备选项、推进没讨论完的地图（迷雾毕业、task/prototype 票）、分流地图外散票（等待时机 / 开地图 / 单个决策 / 重复或过时）、批量起草规格和执行票，把所有需要人拍板的问题合成一轮，答完后自动发布并启动第 1 波 implement-spec-split 会话；规格合入 main 后可由 implement-spec-split 调 --next-wave 自动开下一波。--suggest 保留原先只推荐一个下一步的只读行为；--list 列出待办清单；--batch 是推进模式别名。用户问"下一步做什么""推进仓库""该推哪张票""哪个该 to-spec / to-tickets / grill 了""还有什么没做完""给我待办清单""批量写规格 / 批量拆票""接下来开发哪几份规格""开发顺序"，或输入 /find-next 时使用。参数 --suggest、--list、--batch、--workers N（可选）、--specs K、--worker codex|pi|self|agent、--agent-model sonnet|opus|haiku|fable（仅 agent）、--no-auto-land（本批不做无人值守落地；默认无人值守，适合通宵运行）、--auto-land（兼容别名，等同默认）。
+description: 默认进入推进模式：循环扫描当前 GitHub 仓库的 wayfinder 地图与票，自动调查并关闭可关的 research 票、为决策票准备选项、推进没讨论完的地图（迷雾毕业、task/prototype 票）、分流地图外散票（等待时机 / 开地图 / 单个决策 / 重复或过时）、批量起草规格和执行票，把所有需要人拍板的问题合成一轮，答完后自动发布并启动第 1 波 implement-spec-split 会话；规格合入 main 后可由 implement-spec-split 调 --next-wave 自动开下一波。--suggest 保留原先只推荐一个下一步的只读行为；--list 列出待办清单；--batch 是推进模式别名。用户问"下一步做什么""推进仓库""该推哪张票""哪个该 to-spec / to-tickets / grill 了""还有什么没做完""给我待办清单""批量写规格 / 批量拆票""接下来开发哪几份规格""开发顺序"，或输入 /find-next 时使用。参数 --suggest、--list、--batch、--workers N（可选）、--specs K、--worker codex|pi|self|agent、--agent-model sonnet|opus|haiku|fable（仅 agent）、--no-auto-land（本批不做无人值守落地；默认无人值守，适合通宵运行）、--auto-land（兼容别名，等同默认）、--watch（只进入总控：汇报各规格落地进度、集中问停车规格要拍板的事、全部完成时给总结；推进模式收尾后也自动进入）。用户问"进度怎样""盯着开发""总控"时也用 --watch。
 ---
 
 # find-next
@@ -15,9 +15,10 @@ description: 默认进入推进模式：循环扫描当前 GitHub 仓库的 wayf
 - `/find-next --suggest [--worker codex|pi|self|agent] [--agent-model <model>]`：原先的默认行为，只读挑一个 Next step（见「建议模式流程」）；未给 `--worker` 时等同于 `codex`。支持 GitHub 和本地 markdown 跟踪器
 - `/find-next --list`：不挑一个，列出当前仓库的全部待办清单（见「清单模式」）。总是我自己做，不派 worker，`--worker` 被忽略
 - `/find-next --batch …`：推进模式别名，兼容旧用法
+- `/find-next --watch`：只进入**总控**（见「总控」一节），不推进、不起草；推进模式第 11 步收尾后自动进入同一节。grill-feature / grill-map 启动规格后，本仓库没有总控在跑时也走这里
 - `--workers N` 可选，是全机 GLM worker 总数；每份规格的 `--parallel` = N ÷ K（至少 1）。没给时读 `~/.cache/implement-spec-split/max-workers`（`scripts/max-workers.sh` 用的同一文件）；文件也没有就把 worker 上限并入本轮最后一个问题问用户。`--specs K` 是同时开几份规格，默认 2。**同一仓库同一时间只在一个会话里运行推进模式**：推进模式全程持仓库级 `find-next-advance` 锁（见「推进模式」第 1 步），第二个会话会被拦下；持锁会话被意外关闭后锁自动失效
 - `--agent-model <sonnet|opus|haiku|fable>` 只在 `--worker agent` 时有效，默认 `sonnet`；给了 `--worker codex`/`pi`/`self`（或不给 `--worker`）却给 `--agent-model` 是参数冲突，报错让用户改。一个开关管全程：`--worker agent` 同时决定本技能自己的调研/决策/起草方式和生成的开发命令后端，不提供混搭。
-- **无人值守落地**（GLOSSARY.md）默认开启：本批规格（含之后自动开的波次）不停下问人，落地或停车都在规格 issue 下留报告。`--no-auto-land` 只在推进模式有效，用来让本批保留 push 前确认：第 10 步把它透传给 launch-wave.sh，`--apply` 会把 `auto_land: false` 写进启动状态，`--next-wave` 沿用；`--auto-land` 保留为兼容别名，等同默认。
+- **无人值守落地**（GLOSSARY.md）默认开启：本批规格（含之后自动开的波次）不停下问人；Opus 审查里带推荐、标「可自动采纳：是」的取舍按推荐落地并记为「自动拍板（可推翻）」，只有真要人决定的事才停车。落地、部分落地、停车都在规格 issue 下留报告，由本会话的总控汇总给用户。`--no-auto-land` 只在推进模式有效，用来让本批保留 push 前确认：第 10 步把它透传给 launch-wave.sh，`--apply` 会把 `auto_land: false` 写进启动状态，`--next-wave` 沿用；`--auto-land` 保留为兼容别名，等同默认。
 
 只扫当前仓库，不跨仓库汇总。
 
@@ -304,9 +305,33 @@ flash 模式下，本节所有原本由主会话审读或复核的结论都按�
 
    flash 模式下，规格会话与默认实现后端的选择由 launch-wave.sh 处理，见「flash 模式」一节。
 
-11. **收尾**：先运行 `~/.claude/skills/implement-spec-split/scripts/completion-report.sh <仓库>`（不带 `--spec`），把输出原样放在收尾报告最上面（脚本非 0 时写「完成度结论（查询失败）」），下面才是本轮做了什么；第 1 步接续过旧推进运行时，先写一段「接续上次中断的推进」（复用了哪些票的产出、作废重派了哪些、在旧目录接着发布了哪些规格）。原样转述启动结果，列出已启动、跳过、失败和需手动的规格。列出 `emptyMaps`（若有），逐张提示「用 `/wayfinder <地图号>` 画图」，不代画、不建第一批票。单列「等待时机」（#号、标题、条件、要现在开就回「开 #N」；条件是人要做的动作时已在顶部完成度结论里给出对应动作）与未结案的散票分流建议。列出因单次 2 张上限未处理的 prototype 票、因 3 轮问询上限或「先到这」留下的待拍板事项，提示下次运行 `/find-next --batch` 接着推。提醒用户：之后每份规格合入 main 时，implement-spec-split 会在第 9 步末尾只运行一条 `launch-wave.sh --next-wave --apply` 开新会话；本推进器会话可以 `/clear`。各规格会话默认无人值守落地：不在 push 前确认、不停下等人，落地或停车都在规格 issue 下留报告，早上看 GitHub 即可；只有显式 `--no-auto-land` 的批才保留 push 前确认。GLM 额度/auth/transient 出错、worker 连续失败时按无人值守规则处理或停车。最后运行 `run-state.sh finish <运行目录>`，再 `lock.sh release find-next-advance --scope repo`。
+11. **收尾**：先运行 `~/.claude/skills/implement-spec-split/scripts/completion-report.sh <仓库>`（不带 `--spec`），把输出原样放在收尾报告最上面（脚本非 0 时写「完成度结论（查询失败）」），下面才是本轮做了什么；第 1 步接续过旧推进运行时，先写一段「接续上次中断的推进」（复用了哪些票的产出、作废重派了哪些、在旧目录接着发布了哪些规格）。原样转述启动结果，列出已启动、跳过、失败和需手动的规格。列出 `emptyMaps`（若有），逐张提示「用 `/wayfinder <地图号>` 画图」，不代画、不建第一批票。单列「等待时机」（#号、标题、条件、要现在开就回「开 #N」；条件是人要做的动作时已在顶部完成度结论里给出对应动作）与未结案的散票分流建议。列出因单次 2 张上限未处理的 prototype 票、因 3 轮问询上限或「先到这」留下的待拍板事项，提示下次运行 `/find-next --batch` 接着推。不要让用户 `/clear` 或去看 GitHub：本会话接着做总控。最后运行 `run-state.sh finish <运行目录>`，再 `lock.sh release find-next-advance --scope repo`，然后进入「总控」一节（本轮启动了规格、或仓库里还有开着的规格时；都没有就到此结束）。
 
    flash 模式下，空地图提示按「flash 模式」一节改推荐 `/grill-map`。
+
+## 总控（`--watch`；推进模式收尾后自动进入）
+
+用途：用户只看这一个会话。规格会话做完就自己关掉（implement-spec-split 第 10 步），落地进度、要拍板的事、全部完成，都在这里说。
+
+1. **拿锁**：仓库根运行 `~/.claude/skills/implement-spec-split/scripts/lock.sh acquire find-next-supervise --scope repo --wait 0`。非 0 说明已有活的总控会话：用 `lock.sh status find-next-supervise --scope repo` 告诉用户它的 pid 和开始时间，到此结束。
+2. **挂监控**：状态文件固定为 `~/.cache/implement-spec-split/supervise/<owner>__<name>.json`。Bash `run_in_background: true`、`timeout` 7200000 运行：
+
+   ```bash
+   <本技能目录>/scripts/watch-specs.sh --repo <owner/name> --repo-path <仓库根> \
+     --state ~/.cache/implement-spec-split/supervise/<owner>__<name>.json --interval 300 --max 6600
+   ```
+
+   这个脚本只读、不唤醒会话，有事件才退出。不要另外轮询、不要 sleep、不要用 ScheduleWakeup。
+3. **收到通知就处理**，先立即重新挂上第 2 步的监控（处理期间的变化不会丢，下次退出时一起报），再按事件行处理：
+   - 退出码 2（到 `--max` 无事件）：只重新挂，不对用户说话。
+   - `LANDED` / `PARTIAL`：读该评论（`gh api` 取 url 对应评论正文），给用户一行：`✅ #<n> <标题> 已落地（票 a/b）` 或 `◐ #<n> 部分落地，剩 <票> 等 #<规格>，依赖落地后自动接着做`；评论里有 `### 自动拍板（可推翻）` 时逐条一行列出，末尾写「要推翻就回『推翻 #<n> <条目>』」。然后运行一次 `launch-wave.sh --repo <owner/name> --next-wave --apply` 补开下一波（规格会话自己也会开；脚本持锁、预留认领，重复调用无害），有新启动的规格时一行转述。
+   - `PARKED`：读该停车报告的 `### 需要你决定`，按推进模式第 6 步的问题轮格式问用户（编号 a、b…，选项各一行，建议照抄）；同时停车的多份合成一轮。用户回答后，把答案写成规格 issue 的评论 `## 拍板`（逐条「<条目>：选 <X>（owner <日期> 总控）」），再运行 `launch-wave.sh --repo <owner/name> --only <n> --apply` 让规格接着做（中断的规格由它恢复），一行转述结果。用户说「先放着」就不动，下次总结里仍列出。
+   - `DIED`（会话没留报告就没了）：运行一次 `launch-wave.sh --repo <owner/name> --only <n> --apply` 恢复，并告诉用户一行；同一规格第二次 `DIED` 不再自动恢复，作为要拍板事项问用户。
+   - `STARTED` / `NEW_SPEC`：不单独说话，合进下一次给用户的进度行。
+   - 每次对用户说话都以 `SUMMARY` 行带一行总进度：`进度：已落地 x · 进行中 y · 等依赖 z · 待你拍板 w`。
+   - `ALL_DONE`：运行 `~/.claude/skills/implement-spec-split/scripts/completion-report.sh <仓库>`，原样放在最上面，下面列本次总控期间落地的规格、全部自动拍板条目、仍需人做的票（如 `ready-for-human` 的上线票）。然后 `lock.sh release find-next-supervise --scope repo`，结束总控。
+4. **用户插话**：用户在总控期间问进度，就用 `watch-specs.sh ... --once`（同一状态文件）加 `pipeline-status.sh` 回答；要推翻某条自动拍板：规格还开着（部分落地）时，在规格 issue 下评论 `## 拍板`（写明推翻哪条、改选什么），下次 Run 先按它补改；规格已关闭时，新建一张 `ready-for-agent` 的散票「推翻 #<n> 自动拍板：<条目> 改选 <X>」，正文引用落地报告，下次推进模式会把它分流。用户说「停止总控」：停掉后台监控，释放锁，告诉用户之后用 `/find-next --watch` 重新进入。
+5. 会话被意外关闭：锁随进程失效；状态文件保留，下次 `/find-next --watch` 从上次快照接着报。
 
 ## 推进模式出错处理与终止
 

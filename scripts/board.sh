@@ -973,8 +973,9 @@ function refreshGraph(job) {
       if (!spec.run && !spec.claim) continue;
       const state = spec.claim ? spec.claim.state : spec.status;
       const tickets = spec.run?.tickets;
+      const phaseLabel = {waiting: "等依赖"}[spec.run?.phase] || spec.run?.phase;
       const runText = spec.run
-        ? `实现 ${spec.run.phase}${spec.run.wave ? `（第 ${spec.run.wave} 波）` : ""}｜Run：已合 ${tickets?.merged ?? "?"} · 进行中 ${tickets?.in_progress ?? "?"} · 待做 ${tickets?.todo ?? "?"}`
+        ? `实现 ${phaseLabel}${spec.run.wave ? `（第 ${spec.run.wave} 波）` : ""}｜Run：已合 ${tickets?.merged ?? "?"} · 进行中 ${tickets?.in_progress ?? "?"} · 待做 ${tickets?.todo ?? "?"}`
         : "没有 Run 目录";
       process.stdout.write(`#${spec.number} ${spec.title}［${state}｜${runText}］\n`);
       const anomalousWorkers = spec.workers.filter((worker) => worker.anomalous);

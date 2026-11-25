@@ -119,12 +119,20 @@ The repo-wide lock (`scripts/lock.sh acquire land --scope repo`) a Run holds fro
 _Avoid_: merge lock (mergers inside one Run are already serialised)
 
 **Unattended landing**:
-A Run landing its Spec without asking the user first, because find-next's `launch-wave.sh` started it with `--auto-land` (the default; `--no-auto-land` opts a batch out); a Run that would otherwise stop to ask posts a Parking report instead.
+A Run landing its Spec without asking the user first, because find-next's `launch-wave.sh` started it with `--auto-land` (the default; `--no-auto-land` opts a batch out). Review trade-offs that carry a recommendation marked auto-applicable are applied as recommended and listed as auto-decisions (自动拍板（可推翻）); only what really needs a human parks the Run. The session closes itself when the Run ends.
 _Avoid_: auto-push, auto-merge, permanent authorisation (it covers one batch only)
 
 **Parking report**:
-The comment an unattended Run leaves on its Spec issue when it cannot land, saying why and what to do next; the Run then releases its claim and ends, so the Spec shows as interrupted until someone resumes it.
-_Avoid_: failure report, blocking question
+The comment an unattended Run leaves on its Spec issue when a human must act before the Spec can go on; its first section `### 需要你决定` lists exactly that, in question-round form. The Run then releases its claim and ends, so the Spec shows as interrupted until the Supervisor writes the user's answers back as a `## 拍板` comment and resumes it. Tickets merely waiting for another Spec are a Partial landing, never a Parking report.
+_Avoid_: failure report, blocking question, 停车 for "waiting on another Spec"
+
+**Partial landing**:
+A Run landing every ticket it can while the rest wait for another Spec: the landed tickets close, the Spec stays open, the integration branch is deleted, and the Spec becomes free again, so `--next-wave` starts it afresh once its blockers land. Its landing report lists `剩余：#<t> 等 #<spec>`.
+_Avoid_: parked, interrupted
+
+**Supervisor**:
+The find-next session after it launched a wave (or `/find-next --watch`): holding the repo lock `find-next-supervise`, it waits on `find-next/scripts/watch-specs.sh` in the background and, only when a Spec lands, parks, or its session dies, tells the user one line of progress, asks the parked decisions in one round, resumes Specs, and gives the final summary. It is the one place the user reads; Spec sessions close themselves.
+_Avoid_: dashboard (that is the Progress board), find-next advance
 
 **Handoff reservation**:
 A Claim record that `find-next/scripts/launch-wave.sh` writes with `claim.sh reserve` before it starts a session in Orca; it counts as active until `handoff_until_epoch` even though no live process holds it, and `claim.sh take` run inside that Spec's worktree adopts it (exit 4 when it was a resume).

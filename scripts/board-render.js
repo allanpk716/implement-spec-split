@@ -203,6 +203,9 @@ ${parts.join("\n\n")}
 const MAP_LABEL = {closed: "关", converted: "已转", fog_pending: "迷雾", unconverted: "未转", exploring: "探索", empty: "空", shelved: "搁置"};
 const SPEC_LABEL = {landed: "落地", running: "实现中", ready: "待做", needs_tickets: "没拆票", interrupted: "中断", shelved: "搁置"};
 const PHASES = ["split", "implement", "integrate", "review", "land"];
+// Phases that are not a step of the linear stage bar get a Chinese label.
+const PHASE_LABEL = {waiting: "等依赖"};
+const phaseLabel = (phase) => PHASE_LABEL[phase] || phase;
 
 function leaf(text, small) {
   return `<div class="leaf"><span>${text}</span>${small ? `<small>${esc(small)}</small>` : ""}</div>`;
@@ -232,12 +235,12 @@ function runCard(spec) {
   const total = t ? (t.merged || 0) + (t.in_progress || 0) + (t.todo || 0) : 0;
   const stages = run ? `<div class="stages">${PHASES.map((p, i) => `<span class="stage${i < idx ? " complete" : i === idx ? " current" : ""}"><i></i><em>${p}</em></span>`).join("")}</div>` : "";
   const meter = t && total ? `<div class="ticket-meter" title="merged ${esc(t.merged)} / in progress ${esc(t.in_progress)} / todo ${esc(t.todo)}"><i style="flex:${Number(t.merged) || 0}"></i><i class="progress" style="flex:${Number(t.in_progress) || 0}"></i><i class="todo" style="flex:${Number(t.todo) || 0}"></i></div><div class="meter-note"><span>Run：已合 ${esc(t.merged)} · 进行中 ${esc(t.in_progress)} · 待做 ${esc(t.todo)}</span></div>` : "";
-  return `<div class="stage-card"><div class="stage-top"><span>Run 阶段 <b>${esc(run?.phase || "无 Run")}</b>${run?.wave ? ` · 第 ${esc(run.wave)} 波` : ""}</span><span>claim <b>${esc(claim?.state || "无")}</b></span></div>${stages}${meter}</div>`;
+  return `<div class="stage-card"><div class="stage-top"><span>Run 阶段 <b>${esc(phaseLabel(run?.phase) || "无 Run")}</b>${run?.wave ? ` · 第 ${esc(run.wave)} 波` : ""}</span><span>claim <b>${esc(claim?.state || "无")}</b></span></div>${stages}${meter}</div>`;
 }
 function specHtml(spec) {
   const run = spec.run, t = run?.tickets;
   const merged = t ? `Run 已合 ${t.merged ?? 0}/${(t.merged || 0) + (t.in_progress || 0) + (t.todo || 0)}` : `Ticket 已关 ${spec.tickets_closed}/${spec.tickets_total}`;
-  const sub = [spec.claim ? `claim ${spec.claim.state}` : (SPEC_LABEL[spec.status] || spec.status), run ? run.phase : null, run?.wave ? `wave ${run.wave}` : null, merged].filter(Boolean).join(" · ");
+  const sub = [spec.claim ? `claim ${spec.claim.state}` : (SPEC_LABEL[spec.status] || spec.status), run ? phaseLabel(run.phase) : null, run?.wave ? `wave ${run.wave}` : null, merged].filter(Boolean).join(" · ");
   const label = spec.claim?.state || spec.status;
   const pill = spec.claim?.state === "interrupted" ? "interrupted" : spec.claim ? "status s-active" : "needs";
   const inner = [];

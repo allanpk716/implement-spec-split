@@ -6,7 +6,7 @@ usage() {
   cat <<'USAGE'
 Usage: run-phase.sh <phase> (--run-dir DIR | --repo NAME --spec N) [--wave W] [--merged A] [--in-progress B] [--todo C]
 
-phase: split | implement | integrate | review | land | parked | done
+phase: split | implement | integrate | review | land | waiting | parked | done
 Run directory: DIR as given, or with --repo/--spec the newest
   ${ISS_STATE_DIR:-~/.cache/implement-spec-split}/runs/<repo>-<n>-*/ (created,
   stamped now, if none exists).
@@ -18,7 +18,7 @@ USAGE
 case "${1:-}" in -h|--help) usage; exit 0 ;; esac
 phase=${1:-}; shift 2>/dev/null
 case "$phase" in
-  split|implement|integrate|review|land|parked|done) ;;
+  split|implement|integrate|review|land|waiting|parked|done) ;;
   *) echo "run-phase: invalid phase '$phase'" >&2; usage >&2; exit 2 ;;
 esac
 

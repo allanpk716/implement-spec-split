@@ -17,7 +17,7 @@ check() { # name file expr expected
 }
 
 # every phase writes phase/wave/tickets/updated
-for p in split implement integrate review land parked done; do
+for p in split implement integrate review land waiting parked done; do
   d=$WORK/p-$p; mkdir -p "$d"
   out=$("$RP" "$p" --run-dir "$d" --wave 2 --merged 3 --in-progress 1 --todo 4 2>&1); rc=$?
   [ $rc -eq 0 ] || bad "phase $p exit" "rc=$rc $out"

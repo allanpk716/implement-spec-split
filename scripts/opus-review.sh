@@ -176,6 +176,7 @@ Output requirements:
 - End with a section headed exactly \`## 需要人取舍\`.
 - Put every finding that needs a human decision or tradeoff in that section. If there are none, put only \`无\` in it.
 - For each item in that section, list the mutually exclusive options with their costs, then a line \`推荐：<option> — <reason>\`; if you genuinely cannot recommend one, write \`推荐：无 — <why>\` instead of omitting the line.
+- After that line, add \`可自动采纳：是\` when an unattended Run may simply apply your recommendation and land, or \`可自动采纳：否 — <why>\` when it must stop for a human: only when you wrote \`推荐：无\`, the choice is irreversible or outward-facing (data deletion, publishing, external services, production deployment), or it needs a human action or knowledge only a human has. A recommendation that merely changes code, wording, or an internal contract is \`是\`.
 - This entire final response is saved verbatim as the findings file; do not add conversational wrapper text."
     ;;
   draft)
@@ -196,6 +197,7 @@ Output requirements:
 - End with a section headed exactly \`## 需要人取舍\`.
 - Put every unresolved judgment call that needs a human tradeoff in that section. If there are none, put only \`无\` in it.
 - For each item in that section, list the mutually exclusive options with their costs, then a line \`推荐：<option> — <reason>\`; if you genuinely cannot recommend one, write \`推荐：无 — <why>\` instead of omitting the line.
+- After that line, add \`可自动采纳：是\` when an unattended Run may simply apply your recommendation and land, or \`可自动采纳：否 — <why>\` when it must stop for a human: only when you wrote \`推荐：无\`, the choice is irreversible or outward-facing (data deletion, publishing, external services, production deployment), or it needs a human action or knowledge only a human has. A recommendation that merely changes code, wording, or an internal contract is \`是\`.
 - This entire final response is saved verbatim as the findings file; do not add conversational wrapper text."
     ;;
   diagnose)
@@ -217,6 +219,7 @@ Output requirements:
 - End with a section headed exactly \`## 需要人取舍\`.
 - Put every diagnosis or remedy that requires a human tradeoff in that section. If there are none, put only \`无\` in it.
 - For each item in that section, list the mutually exclusive options with their costs, then a line \`推荐：<option> — <reason>\`; if you genuinely cannot recommend one, write \`推荐：无 — <why>\` instead of omitting the line.
+- After that line, add \`可自动采纳：是\` when an unattended Run may simply apply your recommendation and land, or \`可自动采纳：否 — <why>\` when it must stop for a human: only when you wrote \`推荐：无\`, the choice is irreversible or outward-facing (data deletion, publishing, external services, production deployment), or it needs a human action or knowledge only a human has. A recommendation that merely changes code, wording, or an internal contract is \`是\`.
 - This entire final response is saved verbatim as the findings file; do not add conversational wrapper text."
     ;;
 esac
