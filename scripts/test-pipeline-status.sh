@@ -1184,6 +1184,133 @@ run_status "$NOT_REPO" "$WORK/not-repo.out"
 expect_exit 0 "outside a git repository still scans issues"
 expect_has '未知（不在 git 仓库）' 'branch state is unknown outside git' "$WORK/not-repo.out"
 
+# A `ready-for-human` execution ticket is never waiting for an implementer:
+# like a shelved ticket it stays out of 可以实现, the order and the waves, but
+# unlike a shelved one --all must say a human still has to do it.
+HUMAN_FIXTURE=$WORK/human-fixture
+mkdir -p "$HUMAN_FIXTURE" || exit 1
+
+HUMAN_FIXTURE=$HUMAN_FIXTURE node > /dev/null <<'NODE'
+const fs = require('fs');
+const directory = process.env.HUMAN_FIXTURE;
+
+function sub(total, completed = total) {
+  return {total, completed, percent_completed: total ? Math.round(100 * completed / total) : 0};
+}
+
+function issue(number, title, state, labels, body = '', children = sub(0)) {
+  return {
+    number,
+    title,
+    state,
+    labels: labels.map((name) => ({name})),
+    body,
+    sub_issues_summary: children,
+    issue_dependencies_summary: {blocked_by: 0, total_blocked_by: 0, blocking: 0, total_blocking: 0},
+    assignees: [],
+  };
+}
+
+const issues = [
+  issue(600, 'Mixed human spec', 'open', [], '## Problem Statement\nMixed.', sub(2, 0)),
+  issue(601, 'Ready ticket', 'open', []),
+  issue(602, 'Human ticket', 'open', ['ready-for-human']),
+  issue(610, 'Human-only spec', 'open', [], '## Problem Statement\nHuman only.', sub(1, 0)),
+  issue(611, 'Only human ticket', 'open', ['ready-for-human']),
+  issue(620, 'Closed plus human spec', 'open', [], '## Problem Statement\nClosed plus human.', sub(2, 1)),
+  issue(621, 'Done ticket', 'closed', []),
+  issue(622, 'Remaining human ticket', 'open', ['ready-for-human']),
+  issue(630, 'Legacy human spec', 'open', [], 'Old parent shape', sub(1, 0)),
+  issue(631, 'Legacy human ticket', 'open', ['ready-for-human']),
+];
+
+const responses = {
+  'sub-600': [issues[1], issues[2]],
+  'sub-610': [issues[4]],
+  'sub-620': [issues[6], issues[7]],
+  'sub-630': [issues[9]],
+  'blocker-601': [],
+  'blocker-602': [],
+  'blocker-611': [],
+  'blocker-622': [],
+  'blocker-631': [],
+};
+
+fs.writeFileSync(`${directory}/issues.json`, JSON.stringify(issues, null, 2));
+for (const [name, value] of Object.entries(responses)) {
+  fs.writeFileSync(`${directory}/${name}.json`, JSON.stringify(value, null, 2));
+}
+NODE
+
+run_human_status() {
+  output=$1
+  shift
+  (
+    cd "$REPO" || exit 125
+    env FIXTURE_DIR="$HUMAN_FIXTURE" PATH="$BIN:$PATH" \
+      bash "$SCRIPT" --repo test/repo "$@"
+  ) > "$output" 2> "${output}.err"
+  RUN_EXIT=$?
+}
+
+run_human_status "$WORK/human.out" --all
+expect_exit 0 "human-ticket scan succeeds"
+expect_has '- #600 0/2' 'mixed spec with a human ticket is still implementable' "$WORK/human.out"
+expect_has '[票：#601 #602(人工)]' 'human execution ticket is marked (人工)' "$WORK/human.out"
+expect_section_without '可以实现' '#610' 'human-only spec is not implementable' "$WORK/human.out"
+expect_section_without '可以实现' '#620' 'spec with only a human ticket left is not implementable' "$WORK/human.out"
+expect_has '- 规格 #610 Human-only spec：人工票待做：#611' \
+  'human-only spec is reported under 状态没收尾' "$WORK/human.out"
+expect_has '- 规格 #620 Closed plus human spec：人工票待做：#622' \
+  'spec whose last open ticket is human is reported under 状态没收尾' "$WORK/human.out"
+expect_has '- 规格 #630 Legacy human spec：人工票待做：#631' \
+  'legacy spec with only a human ticket is reported under 状态没收尾' "$WORK/human.out"
+
+run_human_status "$WORK/human-order.out" --order --parallel 20
+expect_exit 0 "human-ticket order succeeds"
+expect_without '#610' 'human-only spec is absent from the order' "$WORK/human-order.out"
+expect_without '#620' 'spec with only a human ticket left is absent from the order' "$WORK/human-order.out"
+
+run_human_status "$WORK/human-order.json" --order --parallel 20 --json
+expect_exit 0 "human-ticket order JSON succeeds"
+node - "$WORK/human-order.json" > "$WORK/human-order-check.txt" 2>&1 <<'NODE'
+const fs = require('fs');
+const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const numbers = [
+  ...plan.resume.map((item) => item.spec),
+  ...plan.active.map((item) => item.spec),
+  ...plan.wave1.map((item) => item.spec),
+  ...plan.later.map((item) => item.spec),
+];
+if (!numbers.includes(600)) throw new Error('mixed spec with a human ticket left the order');
+for (const number of [610, 620]) {
+  if (numbers.includes(number)) throw new Error(`human-only spec ${number} entered the order`);
+}
+NODE
+RUN_EXIT=$?
+expect_exit 0 "order JSON keeps the mixed spec and drops the human-only specs"
+
+run_human_status "$WORK/human-graph.json" --graph
+expect_exit 0 "human-ticket graph succeeds"
+node - "$WORK/human-graph.json" > "$WORK/human-graph-check.txt" 2>&1 <<'NODE'
+const fs = require('fs');
+const assert = require('assert');
+const graph = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const spec = (n) => graph.specs.find((item) => item.number === n);
+assert.strictEqual(spec(600).status, 'ready');
+assert.strictEqual(spec(610).status, 'human');
+assert.strictEqual(spec(620).status, 'human');
+assert.strictEqual(spec(610).human_only, true);
+assert.strictEqual(spec(600).human_only, false);
+assert.strictEqual(spec(630).status, 'human');
+assert.strictEqual(spec(630).kind, 'legacy');
+assert.strictEqual(spec(600).tickets.find((t) => t.number === 602).human, true);
+assert.strictEqual(spec(600).tickets.find((t) => t.number === 601).human, false);
+assert.deepStrictEqual(spec(610).tickets.map((t) => [t.number, t.human]), [[611, true]]);
+NODE
+RUN_EXIT=$?
+expect_exit 0 "graph marks human-only specs and human tickets"
+
 (
   cd "$REPO" || exit 125
   env FIXTURE_DIR="$FIXTURE" FAKE_GH_FAIL=1 PATH="$BIN:$PATH" \

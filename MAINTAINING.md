@@ -129,6 +129,28 @@
     - 为什么做成 hook 而不只改提示词：这次不是模型不知道规则，而是外层 `echo` 把 `lock.sh` 的退出码 2 吃掉了；提示词写得再清楚，也挡不住退出码误读。hook 直接读锁目录和 `owner.json`，不依赖模型理解退出码，也不依赖它主动检查。
     - 逃生口 `LAND_PUSH_GUARD_DISABLE=1`；任何内部异常、`transcript_path` 缺失或不可读、找不到 claude 祖先进程都 fail open（后者在 stderr 打一行说明）。`LAND_PUSH_GUARD_OWNER_PID` 仅供测试注入本会话 claude pid，与 `scripts/lib-owner.sh` 的 `ISS_OWNER_PID` 同理。
 
+33. **2026-11-26：Opus review 输出后校验「## 需要人取舍」的标记，缺了先用同一模型补标一次。** 11-20 至 11-25 排查：旧审查结果里这一节的条目没有 `可自动采纳` 行，flash 会话按第 29 条只能停车，3 次停车共等了 7.5 小时。决定：
+    - 解析 `## 需要人取舍` 一节，每个顶层条目（编号或 `-`/`*` 开头）都必须有 `推荐：` 行和 `可自动采纳：是|否` 行；这一节不存在或只写「无」时通过。
+    - 缺失时把原输出和缺失清单发回同一模型补标一次，要求只补这两行、其余原样保留；补完仍缺失就以新退出码 **7** 退出，stderr 列出缺失条目，头注释登记这个码。不降级、不跳过。
+    - 测试在 `scripts/test-opus-review.sh`：缺标 → 补标成功、缺标 → 补标仍失败（退出码 7）、标记齐全（不重试）、一节写「无」、没有这一节。
+
+34. **2026-11-26：同一 Run 的「review → fix → 复审」最多 3 轮。** 证据：spec-19 走了 4 轮（fix-review → fix-conflict → fix-conflict2 → fix-conflict3），每轮复审又出新 findings，循环没有下限。决定：全规格审查与冲突复审各自计数（一次冲突复审另起一个计数器，所以一个 Run 最多 3 轮全规格 + 3 轮冲突）。第 3 轮复审后仍有 findings 时：只剩机械项或「可以不改」的，直接落地并在落地报告列为已知遗留；还有正确性问题的，停车，类别 `error`。写在 Steps 第 8 步、Unattended landing 和 Flash mode 三处，后两处各一句并指回第 8 步。
+
+35. **2026-11-26：新增 `scripts/frontier.sh`，前沿只从它的输出来。** 证据：spec-21 的会话凭读代码自己画依赖表，把被阻塞的票做掉了。决定：
+    - `frontier.sh --repo <o/n> --spec <n>`：票集按第 0 步 Spec-to-Ticket 规则取，直接复用 `pipeline-status.sh --graph`，再逐张未关执行票查 `dependencies/blocked_by`；没有 open 阻塞票、不是搁置票、不是 `ready-for-human` 的才是前沿，一行一个票号。
+    - 输出另起 `# blocked`（被挡的票及其 open 阻塞票）、`# human`（人工票）、`# shelved`（搁置票）。任一 gh 查询失败以非 0 退出、stderr 说明、stdout 不打印任何东西（fail closed）。
+    - SKILL 第 1 步和第 6 步：前沿只能来自这个脚本，禁止自行判断，也不要自己查 `blocked_by` 去推翻它；脚本失败等 30 秒重试一次，再失败停车，类别 `transient`。
+    - 测试 `scripts/test-frontier.sh` 用假 `gh` 跑真实 `pipeline-status.sh`。
+
+36. **2026-11-26：`ready-for-human` 执行票与搁置票同等对待，并新增运维票规则。** 证据：proxy-hub #49 是上线票，原标 `ready-for-human`；用户决定改由 agent 经 ssh-manager 自动上线，票面带「## 护栏」一节。`pipeline-status.sh` 原来不认这个标签，一旦解除阻塞就会把真正的人工票派给实现者。决定：
+    - `pipeline-status.sh`：带 `ready-for-human` 的执行票算「非待实现」，在票列表里加 `(人工)` 后缀；规格未关执行票只剩人工票（可混搁置票）时，不进「可以实现」、`--order` 和波次，改在 `--all` 的「状态没收尾」提示 `人工票待做：#n`。`--order --json` 现有字段不变，`--graph` 只新增 `tickets[].human`、`specs[].human_only` 和 `status: human`。
+    - SKILL 新增 **Ops tickets**：票面写明经 ssh-manager 执行、带「## 护栏」或带 `ops` 标签的票是运维票；agent 后端在提示词里允许 `mcp__ssh-manager__*`（先 `list_servers`）并原文照抄护栏，codex 后端给 worker 加 `--mcp ssh-manager`、Brief 同样照抄护栏；违反护栏或验收不过时实现者只报告、不硬推，主会话停车，类别 `error`，停车报告附回滚步骤；运维票不走 TDD、不要求 commit，没有代码改动时验证闸门改为「票面验收标准逐条有证据」。
+    - `ready-for-human` 票一律不派发。
+
+37. **2026-11-26：落地时补开的后续票必须挂到规格下并登记 `blocked_by`。** 证据：spec-22 落地时补开收尾票 #50/#51/#52，只把依赖写在标题里（「依赖规格②」），没有挂到规格下，也没有登记 `blocked_by`，之后还把规格关了；三张票成了散票，按跟踪器的阻塞关系计算前沿时还会被误判为可以开工。决定：同时做到三件事——`gh api -X POST .../issues/<spec>/sub_issues -F sub_issue_id=<id>` 挂到本规格下；对它依赖的每张票 `gh api -X POST .../issues/<t>/dependencies/blocked_by -F issue_id=<id>`；规格保持开着，按部分落地处理。`<id>` 是 issue 的 `id` 字段（`gh issue view <n> --json id --jq .id`），不是编号。只写标题或正文不算依赖。
+
+38. **2026-11-26：停车报告加两行机器可读的类别与可恢复时间。** 证据：另一个 worker 正在写守护程序 `scripts/keeper.sh`，要靠停车报告判断能否在额度重置后自动恢复。决定：`## 停车报告` 标题之后紧跟两行，写在 `### 需要你决定` 之前：`停车类别：quota|transient|decision|error|other`、`可恢复时间：<ISO 8601 含时区>|无`。`quota` 填额度重置时刻（不知道就当前时间 + 5 小时），`transient` 填当前时间 + 30 分钟，其余填 `无`。keeper 在可恢复时间之后自动恢复 `quota` 和 `transient`，所以「额度用尽」不再写成「等人恢复」。Opus review 退出码为 3（额度或 429）时按 `quota` 停车，其余退出码仍按原规则。
+
 ## flash 模式设计要点（2026-11-20 规格定稿，ADR 0001）
 
 三档分工：flash 主会话/规格会话（`claude-flash` = glm-5.3-flash，只执行与转述）、glm-5.4 子代理（全部源码修改与大量阅读）、官方 Opus（一切结论性判断）。要点：
@@ -254,7 +276,8 @@
 
 - **批量发布**：`bash find-next/scripts/test-publish-batch.sh`。用假 `gh` 测校验、试运行、发布顺序、占位符回填、未决、交接留言、只拆票的已有规格组、发布后调用开发顺序脚本、发布后核对、`--only` 与中途失败后重跑，不访问网络。
 - **批量 Brief 生成**：`bash find-next/scripts/test-make-batch-briefs.sh`。用假 `gh` 测变量替换、上游技能版本选择与参数校验。
-- **流水线状态**：`bash scripts/test-pipeline-status.sh`。它用假 `gh` 和临时 git 仓库测独立规格、单票规格、原版父规格、旧父 issue 形状、缺规格分组、探索中的地图、分支接手、已合入的遗留分支、外部阻塞、`--order` 开发顺序（状态、排序、波次、`--apart`、循环依赖）和 gh 失败，不访问网络。
+- **流水线状态**：`bash scripts/test-pipeline-status.sh`。它用假 `gh` 和临时 git 仓库测独立规格、单票规格、原版父规格、旧父 issue 形状、缺规格分组、探索中的地图、分支接手、已合入的遗留分支、外部阻塞、`--order` 开发顺序（状态、排序、波次、`--apart`、循环依赖）、`ready-for-human` 执行票（`(人工)` 后缀、只剩人工票的规格不进「可以实现」/`--order`/波次、`--all` 提示「人工票待做」、`--graph` 的 `human`/`human_only`/`status: human`）和 gh 失败，不访问网络。
+- **前沿计算**：`bash scripts/test-frontier.sh`。用假 `gh` 和临时夹具跑真实 `pipeline-status.sh --graph`，测未阻塞票、只有已关闭阻塞的票、被挡票及其阻塞票、`ready-for-human` 票、搁置票的分节输出，前沿行在前且升序，未知规格、pipeline-status 失败、`blocked_by` 查询失败都 fail closed（stdout 为空），以及参数错误，不访问网络。
 - **进度看板**：`bash scripts/test-board.sh`。用假 orca、假 pipeline-status、临时 git 仓库和临时 Run/Worker 目录测仓库登记、刷新节奏、关系图快照、认领状态、Run 阶段、Worker 异常、终端/网页输出、EPIPE、Board pruning 和帮助文本，不访问网络。
 - **Run 阶段记录**：`bash scripts/test-run-phase.sh`。用临时 HOME/ISS_STATE_DIR 测各阶段写入、覆盖、省略字段、最新 Run 目录选择、状态目录覆盖、写失败只警告和参数校验。
 - **票进度标签**：`bash scripts/test-ticket-watch.sh`。用临时 git 仓库测 `ticket-watch.sh --once` 的 worktree、分支、领先提交、脏文件、最近提交和外部 worker run dir 输出，worktree 清理后的零退出提示，以及缺失参数和非法 interval 的报错，不访问网络。
@@ -275,7 +298,7 @@
 
   改了 `codex-worker.sh` 或 `progress.sh`，或者升级了 codex，都要把 V1、V2、V3 全部重跑一遍。用 `--impl codex` 跑技能时，第 0 步会跑 L1。
 - **codex worker home 生成**：`bash scripts/test-setup-worker-home.sh`。用临时目录里的假源 home 测配置键/表过滤、`model_catalog_json` 改写、文件复制、权限、幂等备份和输出不泄漏配置值，不访问网络、不碰真实 `~/.codex`。
-- **Opus review 入口**：`bash scripts/test-opus-review.sh`。用临时 HOME/PATH 里的假 `claude` 测三类 prompt、GLM 代理环境变量清理、`--model opus`、只读工具白名单、findings 原子写入、认证/额度/超时/其他错误的不同退出码和超时进程树回收，不访问网络、不花 Opus 额度。
+- **Opus review 入口**：`bash scripts/test-opus-review.sh`。用临时 HOME/PATH 里的假 `claude` 测三类 prompt、GLM 代理环境变量清理、`--model opus`、只读工具白名单、findings 原子写入、认证/额度/超时/其他错误的不同退出码、超时进程树回收，以及 `## 需要人取舍` 的标记校验（缺标 → 同模型补标一次、补标仍失败退出码 7 并列出条目、标记齐全不重试、「无」和没有这一节都通过），不访问网络、不花 Opus 额度。
 - **L1 连通性（pi）**：`scripts/selftest.sh --only L1`。用 `--impl pi` 跑技能时，第 0 步也会执行这个检查。
 - **L2 wrapper（pi）**：`scripts/selftest.sh`。它会在 `~/.cache/implement-spec-split-selftest/` 下建一个临时仓库和 worktree，让 pi 用 tdd 技能实现一个很小的 ticket，然后检查这几件事：
   - 有新 commit，工作区是干净的，测试我们自己重跑能通过；

@@ -17,6 +17,8 @@ tracker documentation instead.
                          Fresh wayfinder claims with no live Orca agent terminal naming the
                          ticket (#N in title or preview) in this repository's worktrees are
                          listed as orphan claims; without Orca they are left unchecked.
+                         Hygiene reports `人工票待做：#n` for a Spec whose open execution
+                         tickets are all `ready-for-human`; such tickets are never dispatched.
   --order                Print a deterministic development order for implementable Specs.
   --parallel K           With --order, plan for K concurrent Specs (default: 2).
   --workers N            With --order, split N total workers across K concurrent Specs.
@@ -29,9 +31,9 @@ tracker documentation instead.
                          state, shelved, has_fog, status closed|shelved|empty|exploring|
                          fog_pending|unconverted|converted, decisions_total, decisions_open,
                          spec_numbers, tickets[]}; specs[] {number, title, kind, state,
-                         status landed|needs_tickets|ready|running|interrupted|shelved, map
+                         status landed|needs_tickets|ready|running|interrupted|shelved|human, map
                          (number or null), has_tickets, tickets[] {number, title, state,
-                         shelved}, tickets_total, tickets_closed, claim {state
+                         shelved, human}, tickets_total, tickets_closed, claim {state
                          active|reserved|interrupted|idle, branch, worktree, claimed_at}
                          or null, depends_on, extra_blockers}; loose_specs[] (Specs
                          without a map); next_wave (same object as --order --json).
@@ -516,6 +518,7 @@ if (mode === 'collect') {
       state: issue ? issue.state : 'open',
       title: issue ? issue.title : '',
       shelved: issue ? isShelved(issue) : false,
+      human: issue ? hasLabel(issue, 'ready-for-human') : false,
     };
   }
 
@@ -524,7 +527,19 @@ if (mode === 'collect') {
     return openTickets.length > 0 && openTickets.every((ticket) => ticket.shelved);
   }
 
+  // A `ready-for-human` execution ticket is not waiting for an implementer,
+  // exactly like a shelved one: it never enters 可以实现, the order or a wave.
+  // A Spec whose open tickets are all shelved or human counts as human-only
+  // when at least one is human, so --all can say who must still do it.
+  function onlyHumanOpenTickets(spec) {
+    const openTickets = spec.tickets.filter((ticket) => ticket.state === 'open');
+    return openTickets.length > 0 &&
+      openTickets.every((ticket) => ticket.shelved || ticket.human) &&
+      openTickets.some((ticket) => ticket.human);
+  }
+
   const shelvedOnlySpecs = [];
+  const humanOnlySpecs = [];
   const implement = [];
   for (const spec of stage.specs) {
     const referencesImplementation = spec.refs.some((ref) => implementations.has(Number(ref)));
@@ -562,7 +577,13 @@ if (mode === 'collect') {
       closed: tickets.filter((ticket) => ticket.state === 'closed').length,
     };
     if (onlyShelvedOpenTickets(record)) shelvedOnlySpecs.push(record);
-    else implement.push(record);
+    else {
+      if (onlyHumanOpenTickets(record)) {
+        record.human_only = true;
+        humanOnlySpecs.push(record);
+      }
+      implement.push(record);
+    }
   }
 
   for (const oldSpec of stage.oldCandidates) {
@@ -577,7 +598,13 @@ if (mode === 'collect') {
       closed: tickets.filter((ticket) => ticket.state === 'closed').length,
     };
     if (onlyShelvedOpenTickets(record)) shelvedOnlySpecs.push(record);
-    else implement.push(record);
+    else {
+      if (onlyHumanOpenTickets(record)) {
+        record.human_only = true;
+        humanOnlySpecs.push(record);
+      }
+      implement.push(record);
+    }
   }
   implement.sort((a, b) => a.number - b.number);
 
@@ -676,6 +703,16 @@ if (mode === 'collect') {
     )).sort((a, b) => a.number - b.number),
   })) : [];
   if (all) {
+    for (const spec of humanOnlySpecs) {
+      hygiene.push({
+        kind: 'human-only-spec',
+        number: spec.number,
+        title: spec.title,
+        tickets: spec.tickets.filter((ticket) => (
+          ticket.state === 'open' && ticket.human
+        )).sort((a, b) => a.number - b.number),
+      });
+    }
     for (const spec of stage.closedSpecs || []) {
       const tickets = readEndpoint(endpointDir, 'sub', spec.number)
         .filter((ticket) => isOpen(ticket))
@@ -879,6 +916,7 @@ if (mode === 'collect') {
   )));
   const output = {
     implement,
+    humanOnlySpecs,
     needsTickets,
     missing,
     mapSpecs,
@@ -922,7 +960,7 @@ if (mode === 'render') {
   function blockersFor(spec) {
     const ticketNumbers = new Set(spec.tickets.map((ticket) => ticket.number));
     const openTickets = spec.tickets.filter((ticket) => (
-      ticket.state === 'open' && !ticket.shelved
+      ticket.state === 'open' && !ticket.shelved && !ticket.human
     ));
     if (openTickets.length === 0) return [];
     const eachTicketHasExternal = openTickets.every((ticket) => {
@@ -957,10 +995,11 @@ if (mode === 'render') {
 
   const lines = [];
   lines.push('可以实现');
-  if (pipeline.implement.length === 0) {
+  const implementableSpecs = pipeline.implement.filter((spec) => !spec.human_only);
+  if (implementableSpecs.length === 0) {
     lines.push('（无）');
   } else {
-    for (const spec of pipeline.implement) {
+    for (const spec of implementableSpecs) {
       const branch = integrationBranch(spec.number);
       let state;
       if (!insideGit()) {
@@ -973,7 +1012,7 @@ if (mode === 'render') {
       const blockers = blockersFor(spec);
       if (blockers.length > 0) state += `；被卡住：${blockers.map((n) => `#${n}`).join(' ')}`;
       const tickets = spec.tickets.map((ticket) => (
-        ticket.shelved ? `#${ticket.number}(搁置)` : `#${ticket.number}`
+        `#${ticket.number}${ticket.shelved ? '(搁置)' : ticket.human ? '(人工)' : ''}`
       )).join(' ');
       lines.push(`- #${spec.number} ${spec.closed}/${spec.tickets.length} ${state} ${clean(spec.title)} [票：${tickets}] → /implement-spec-split ${spec.number}`);
     }
@@ -1093,6 +1132,9 @@ if (mode === 'render') {
         } else if (item.kind === 'shelved-only-spec') {
           const tickets = item.tickets.map((ticket) => `#${ticket.number}`).join(' ');
           lines.push(`- 规格 #${item.number} ${clean(item.title)}：未关执行票只剩搁置票 ${tickets}，可关闭规格（核对后由用户确认）`);
+        } else if (item.kind === 'human-only-spec') {
+          const tickets = item.tickets.map((ticket) => `#${ticket.number}`).join(' ');
+          lines.push(`- 规格 #${item.number} ${clean(item.title)}：人工票待做：${tickets} → 由人工完成，agent 不派发`);
         } else if (item.kind === 'implementation') {
           const specs = item.specNumbers.map((number) => `#${number}`).join('、');
           lines.push(`- 实现票 #${item.number} ${clean(item.title)} 的规格 ${specs} 已关闭，票还开着 → 核对后关票`);
@@ -1322,7 +1364,10 @@ if (mode === 'order') {
   const states = new Map();
   const branches = new Map();
   const records = new Map();
-  for (const spec of pipeline.implement) {
+  // Human-only Specs stay in pipeline.implement so the graph still carries
+  // their tickets, but they never enter the order or a wave.
+  const orderedSpecs = pipeline.implement.filter((spec) => !spec.human_only);
+  for (const spec of orderedSpecs) {
     const number = Number(spec.number);
     const branch = integrationBranch(number);
     const claim = claimFor(number);
@@ -1359,10 +1404,12 @@ if (mode === 'order') {
   }
 
   const edges = new Map();
-  for (const spec of pipeline.implement) {
+  for (const spec of orderedSpecs) {
     const target = Number(spec.number);
     const targetTickets = new Set(spec.tickets.map((ticket) => Number(ticket.number)));
-    const openTickets = spec.tickets.filter((ticket) => ticket.state === 'open');
+    const openTickets = spec.tickets.filter((ticket) => (
+      ticket.state === 'open' && !ticket.human
+    ));
     const blockersByTicket = new Map();
     const frontier = [];
     for (const ticket of openTickets) {
@@ -1400,7 +1447,7 @@ if (mode === 'order') {
       (record.dependencies.size > 0 || record.extraBlockers.size > 0);
   }
 
-  const implementNumbers = pipeline.implement.map((spec) => Number(spec.number));
+  const implementNumbers = orderedSpecs.map((spec) => Number(spec.number));
   const idleNumbers = implementNumbers.filter((number) => states.get(number) === 'idle');
   const idleSet = new Set(idleNumbers);
   const idleEdges = new Map(idleNumbers.map((number) => [number, new Set()]));
@@ -1570,6 +1617,7 @@ if (mode === 'order') {
       title: clean(child.title),
       state: child.state,
       shelved: isShelved(child),
+      human: child.human === true || hasLabel(child, 'ready-for-human'),
     });
     const specIssue = (number) => {
       const issue = issueByNumber.get(Number(number));
@@ -1578,6 +1626,8 @@ if (mode === 'order') {
     const mapNumbers = new Set(stage.maps.map((map) => Number(map.number)));
     const shelvedOnly = new Set((pipeline.hygiene || [])
       .filter((item) => item.kind === 'shelved-only-spec').map((item) => Number(item.number)));
+    const humanOnly = new Set((pipeline.humanOnlySpecs || [])
+      .map((spec) => Number(spec.number)));
     const needsTickets = new Set(pipeline.needsTickets.map((spec) => Number(spec.number)));
     const implementByNumber = new Map(pipeline.implement.map((spec) => [Number(spec.number), spec]));
 
@@ -1634,6 +1684,7 @@ if (mode === 'order') {
       if (!open) status = 'landed';
       else if (needsTickets.has(number)) status = 'needs_tickets';
       else if (shelvedOnly.has(number)) status = 'shelved';
+      else if (humanOnly.has(number)) status = 'human';
       else if (records.has(number)) {
         const record = records.get(number);
         claim = graphClaim(number, record);
@@ -1646,6 +1697,7 @@ if (mode === 'order') {
         kind: 'spec',
         state: open ? 'open' : 'closed',
         status,
+        human_only: humanOnly.has(number),
         map: null,
         has_tickets: tickets.length > 0,
         tickets,
@@ -1663,13 +1715,14 @@ if (mode === 'order') {
       const tickets = spec.tickets.map(ticketOf);
       specRecords.set(number, {
         number, title: clean(spec.title), kind: 'legacy', state: 'open',
-        status: record.state === 'idle' ? 'ready' : record.state,
+        status: !record ? 'human' : (record.state === 'idle' ? 'ready' : record.state),
+        human_only: humanOnly.has(number),
         map: null, has_tickets: tickets.length > 0, tickets,
         tickets_total: tickets.length,
         tickets_closed: tickets.filter((ticket) => ticket.state === 'closed').length,
-        claim: graphClaim(number, record),
-        depends_on: [...record.dependencies].sort((a, b) => a - b),
-        extra_blockers: [...record.extraBlockers].sort((a, b) => a - b),
+        claim: record ? graphClaim(number, record) : null,
+        depends_on: record ? [...record.dependencies].sort((a, b) => a - b) : [],
+        extra_blockers: record ? [...record.extraBlockers].sort((a, b) => a - b) : [],
         map_refs: [],
       });
     }
@@ -1767,7 +1820,7 @@ if (mode === 'order') {
   }
 
   const lines = [];
-  if (pipeline.implement.length === 0) {
+  if (orderedSpecs.length === 0) {
     lines.push('开发顺序：没有可以实现的规格');
     process.stdout.write(lines.join('\n') + '\n');
     process.exit(0);

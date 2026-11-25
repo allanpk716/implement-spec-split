@@ -201,7 +201,7 @@ ${parts.join("\n\n")}
 
 // ---------- repo ----------
 const MAP_LABEL = {closed: "关", converted: "已转", fog_pending: "迷雾", unconverted: "未转", exploring: "探索", empty: "空", shelved: "搁置"};
-const SPEC_LABEL = {landed: "落地", running: "实现中", ready: "待做", needs_tickets: "没拆票", interrupted: "中断", shelved: "搁置"};
+const SPEC_LABEL = {landed: "落地", running: "实现中", ready: "待做", needs_tickets: "没拆票", interrupted: "中断", shelved: "搁置", human: "人工"};
 const PHASES = ["split", "implement", "integrate", "review", "land"];
 // Phases that are not a step of the linear stage bar get a Chinese label.
 const PHASE_LABEL = {waiting: "等依赖"};
@@ -213,7 +213,7 @@ function leaf(text, small) {
 function ticketLeaves(tickets) {
   const open = tickets.filter((t) => t.state !== "closed");
   const closed = tickets.length - open.length;
-  const out = open.map((t) => leaf(esc(`#${t.number} ${t.title}`), t.shelved ? "搁置" : "待做"));
+  const out = open.map((t) => leaf(esc(`#${t.number} ${t.title}`), t.human ? "人工" : t.shelved ? "搁置" : "待做"));
   if (closed) out.push(leaf(`已关 Ticket ${closed} 张`, `${closed}/${tickets.length}`));
   return out;
 }

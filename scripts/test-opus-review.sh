@@ -47,6 +47,12 @@ trap cleanup EXIT HUP INT TERM
 cat > "$BIN/claude" <<'FAKE'
 #!/usr/bin/env bash
 set -u
+calls=0
+if [ -n "${FAKE_CLAUDE_CALLS:-}" ]; then
+  [ -f "$FAKE_CLAUDE_CALLS" ] && calls=$(cat "$FAKE_CLAUDE_CALLS" 2>/dev/null)
+  calls=$((calls + 1))
+  printf '%s\n' "$calls" > "$FAKE_CLAUDE_CALLS"
+fi
 {
   echo "===ENV==="
   env | LC_ALL=C sort
@@ -54,7 +60,11 @@ set -u
   for arg in "$@"; do printf 'ARG\t%s\n' "$arg"; done
 } > "$FAKE_CLAUDE_LOG"
 pwd -P > "$FAKE_CLAUDE_CWD"
-case "${FAKE_CLAUDE_SCENARIO:-ok}" in
+scenario=${FAKE_CLAUDE_SCENARIO:-ok}
+if [ "$calls" -ge 2 ] && [ -n "${FAKE_CLAUDE_SCENARIO_2:-}" ]; then
+  scenario=$FAKE_CLAUDE_SCENARIO_2
+fi
+case "$scenario" in
   ok) printf 'fake Opus findings\n'; exit 0 ;;
   auth) echo 'Invalid API key: 401 Unauthorized'; exit 1 ;;
   quota) echo '429 Too Many Requests: usage limit reached'; exit 1 ;;
@@ -71,6 +81,42 @@ case "${FAKE_CLAUDE_SCENARIO:-ok}" in
     wait $!
     printf 'late output\n'
     ;;
+  missingmarks)
+    cat <<'MD'
+## 需要人取舍
+1. 是否删除旧表
+   A. 删除
+   B. 保留
+MD
+    exit 0
+    ;;
+  fullmarks)
+    cat <<'MD'
+## 需要人取舍
+1. 是否删除旧表
+   A. 删除
+   B. 保留
+   推荐：A — 旧表已无引用
+   可自动采纳：是
+MD
+    exit 0
+    ;;
+  preamblemarks)
+    cat <<'MD'
+## 需要人取舍
+
+以下两条需要你拍板：
+1. 是否删除旧表
+   推荐：A — 旧表已无引用
+   可自动采纳：是
+2. 是否保留旧索引
+   推荐：B — 还有查询在用
+   可自动采纳：是
+MD
+    exit 0
+    ;;
+  nonemarks) printf '## 需要人取舍\n无\n'; exit 0 ;;
+  dropsection) printf 'repaired without the section\n'; exit 0 ;;
   *) echo "unknown fake scenario" >&2; exit 99 ;;
 esac
 FAKE
@@ -119,6 +165,10 @@ export FAKE_CLAUDE_CWD="$WORK/code-cwd.log"
 export FAKE_CLAUDE_CHILD_PID="$WORK/timeout-child.pid"
 export FAKE_CLAUDE_SCENARIO=ok
 export FAKE_DATE_STATE="$WORK/fake-date-state"
+export FAKE_CLAUDE_CALLS="$WORK/claude-calls"
+
+reset_calls() { : > "$FAKE_CLAUDE_CALLS"; }
+call_count() { cat "$FAKE_CLAUDE_CALLS" 2>/dev/null || echo 0; }
 
 run_review() {
   "$REVIEW" "$@" >"$WORK/run.out" 2>"$WORK/run.err"
@@ -293,7 +343,64 @@ expect_rc "missing input is a usage error" 64 "$RUN_RC"
 run_review --kind code --input main --out "$WORK/bad-timeout.md" --cwd "$REPO" --timeout zero
 expect_rc "invalid timeout is a usage error" 64 "$RUN_RC"
 
-EXIT_CODE_SENTENCE='任何非 0 退出码都停车并说明（退出码含义见 scripts/opus-review.sh 头注释）'
+printf '%s\n' '## 需要人取舍' '1. 是否删除旧表' '   A. 删除' '   B. 保留' \
+  '   推荐：A — 旧表已无引用' '   可自动采纳：是' > "$WORK/expected-fullmarks.md"
+printf '## 需要人取舍\n无\n' > "$WORK/marks-none-expected.md"
+
+reset_calls
+export FAKE_CLAUDE_LOG="$WORK/marks-ok.log" FAKE_CLAUDE_SCENARIO=fullmarks FAKE_CLAUDE_SCENARIO_2=
+run_review --kind draft --input "$WORK/draft.md" --out "$WORK/marks-ok.md" --cwd "$REPO" --timeout 5
+expect_rc "complete 需要人取舍 marks succeed" 0 "$RUN_RC"
+check "complete marks need no repair retry" test "$(call_count)" = 1
+check "complete marks are kept verbatim" cmp -s "$WORK/marks-ok.md" "$WORK/expected-fullmarks.md"
+
+reset_calls
+export FAKE_CLAUDE_LOG="$WORK/marks-repair.log" FAKE_CLAUDE_SCENARIO=missingmarks FAKE_CLAUDE_SCENARIO_2=fullmarks
+run_review --kind draft --input "$WORK/draft.md" --out "$WORK/marks-repaired.md" --cwd "$REPO" --timeout 5
+expect_rc "missing marks are repaired by one retry" 0 "$RUN_RC"
+check "repair retry runs exactly once" test "$(call_count)" = 2
+check "repaired findings keep the item" grep -Fq '1. 是否删除旧表' "$WORK/marks-repaired.md"
+check "repaired findings have the recommendation" grep -Fq '推荐：A — 旧表已无引用' "$WORK/marks-repaired.md"
+check "repaired findings have the auto-apply mark" grep -Fq '可自动采纳：是' "$WORK/marks-repaired.md"
+check "repair prompt carries the original output" grep -Fq '是否删除旧表' "$FAKE_CLAUDE_LOG"
+check "repair prompt names the missing marks" grep -Fq '可自动采纳' "$FAKE_CLAUDE_LOG"
+
+reset_calls
+export FAKE_CLAUDE_LOG="$WORK/marks-failed.log" FAKE_CLAUDE_SCENARIO=missingmarks FAKE_CLAUDE_SCENARIO_2=missingmarks
+run_review --kind draft --input "$WORK/draft.md" --out "$WORK/marks-failed.md" --cwd "$REPO" --timeout 5
+expect_rc "unrepaired marks exit 7" 7 "$RUN_RC"
+check "unrepaired marks list the item on stderr" grep -Fq '1. 是否删除旧表' "$WORK/run.err"
+check "unrepaired marks write no findings" test ! -e "$WORK/marks-failed.md"
+check "unrepaired marks were retried once" test "$(call_count)" = 2
+
+reset_calls
+export FAKE_CLAUDE_LOG="$WORK/marks-dropped.log" FAKE_CLAUDE_SCENARIO=missingmarks FAKE_CLAUDE_SCENARIO_2=dropsection
+run_review --kind draft --input "$WORK/draft.md" --out "$WORK/marks-dropped.md" --cwd "$REPO" --timeout 5
+expect_rc "a repair retry that drops the section exits 7" 7 "$RUN_RC"
+check "dropping the section is reported" grep -Fq 'dropped ## 需要人取舍' "$WORK/run.err"
+check "a dropped section writes no findings" test ! -e "$WORK/marks-dropped.md"
+
+reset_calls
+export FAKE_CLAUDE_LOG="$WORK/marks-none.log" FAKE_CLAUDE_SCENARIO=nonemarks FAKE_CLAUDE_SCENARIO_2=
+run_review --kind draft --input "$WORK/draft.md" --out "$WORK/marks-none.md" --cwd "$REPO" --timeout 5
+expect_rc "a 无 section needs no marks" 0 "$RUN_RC"
+check "a 无 section needs no retry" test "$(call_count)" = 1
+check "a 无 section is written verbatim" cmp -s "$WORK/marks-none.md" "$WORK/marks-none-expected.md"
+
+reset_calls
+export FAKE_CLAUDE_LOG="$WORK/marks-preamble.log" FAKE_CLAUDE_SCENARIO=preamblemarks FAKE_CLAUDE_SCENARIO_2=
+run_review --kind draft --input "$WORK/draft.md" --out "$WORK/marks-preamble.md" --cwd "$REPO" --timeout 5
+expect_rc "a preamble before the first item is not an item" 0 "$RUN_RC"
+check "a preamble needs no retry" test "$(call_count)" = 1
+
+reset_calls
+export FAKE_CLAUDE_LOG="$WORK/no-section.log" FAKE_CLAUDE_SCENARIO=ok FAKE_CLAUDE_SCENARIO_2=
+run_review --kind draft --input "$WORK/draft.md" --out "$WORK/no-section.md" --cwd "$REPO" --timeout 5
+expect_rc "a findings file without the section passes" 0 "$RUN_RC"
+check "a missing section needs no retry" test "$(call_count)" = 1
+check "the exit-code table documents code 7" grep -Eq '^# +7 ' "$HERE/opus-review.sh"
+
+EXIT_CODE_SENTENCE='退出码为 3（额度或 429）时按 quota 停车，其余非 0 退出码仍按原规则停车并说明（退出码含义见 scripts/opus-review.sh 头注释）'
 check "SKILL delegates exit codes to the wrapper header" \
   grep -Fq "$EXIT_CODE_SENTENCE" "$HERE/../SKILL.md"
 check "find-next delegates exit codes to the wrapper header" \
