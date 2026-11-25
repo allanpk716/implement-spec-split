@@ -151,6 +151,10 @@
 
 38. **2026-11-26：停车报告加两行机器可读的类别与可恢复时间。** 证据：另一个 worker 正在写守护程序 `scripts/keeper.sh`，要靠停车报告判断能否在额度重置后自动恢复。决定：`## 停车报告` 标题之后紧跟两行，写在 `### 需要你决定` 之前：`停车类别：quota|transient|decision|error|other`、`可恢复时间：<ISO 8601 含时区>|无`。`quota` 填额度重置时刻（不知道就当前时间 + 5 小时），`transient` 填当前时间 + 30 分钟，其余填 `无`。keeper 在可恢复时间之后自动恢复 `quota` 和 `transient`，所以「额度用尽」不再写成「等人恢复」。Opus review 退出码为 3（额度或 429）时按 `quota` 停车，其余退出码仍按原规则。
 
+39. **2026-11-26：无人值守 Run 结束前必须自关，且不许以问人结束（`hooks/unattended-stop-guard.js`，Stop 事件）。** 证据：11-20 至 11-25 的 19 个无人值守 Run 调用过 `close-self.sh` 的是 0 个，10 个以「可以 /clear 了」结尾空转；spec-18 用纯文本发问后停住，`unattended-ask-guard` 只拦得住 AskUserQuestion。决定：最近一次 `/implement-spec-split` 带 `--auto-land` 时生效；规则 A：`run.json` 的 phase 为 done/waiting/parked 且 transcript 里没有 Bash 运行过 `close-self.sh` 就 block；规则 B：phase 不是这三个且最后一条 assistant 文本末 300 字以问号结尾或含「请确认 / 等你 / 需要你 / 要不要 / 是否继续 / 你来决定 / 请选择 / 回复我」就 block。`stop_hook_active` 时同一规则最多再拦 1 次（计数按 transcript 哈希存 `os.tmpdir()`），之后放行；找不到 `run.json` 只跑规则 B；逃生口 `UNATTENDED_STOP_GUARD_DISABLE=1`，异常 fail open。已知局限：`close-self.sh --dry-run` 也算已自关。
+
+40. **2026-11-26：守护进程 spec-keeper 接管死掉、卡住和额度停车的 Run（`scripts/keeper.sh`，服务在 `~/ops/services/spec-keeper/`，launchd 每 10 分钟）。** 证据：11-20 以来无人值守 Run 等人约 32.5 小时，其中约 22 小时是会话/worker 卡死或断线没人叫醒、以及 429/额度停车要人手动恢复；总控 find-next 会话自己也会死、会被 `/clear`。决定：用确定性脚本而不是再开一个 LLM 会话盯着；只处理启动状态 `auto_land` 不为 false 的仓库；动作只有四种：quota/transient 停车过了可恢复时间 → `launch-wave --only <n> --apply`；claim interrupted 且无新报告 → 同样恢复；claim active、phase 不是 done/parked、transcript（含 `<session>/subagents/` 下的子代理 transcript）与 Run 目录、worker 运行目录都超过 45 分钟没写入 → 先在会话终端发一行「继续…」，再过 45 分钟仍无写入才关终端、`claim.sh release --force`、恢复；decision/error/other 停车每份报告只通知一次。同一规格 24 小时最多自动恢复 3 次，「launch-wave 退出 0 且之后 claim 为 active」才计数（launch-wave 对不可启动的规格也退出 0）。缺 `run.json` 或 transcript 时一律跳过，宁可漏判不误杀；handoff 预留期内不做卡住处理。旧报告没有机器可读行时按关键词兜底（额度/429/quota/rate limit/resets → quota，其余 decision）。不写 GitHub、不 push、不删分支。暂停：`touch ~/ops/state/spec-keeper/paused`。
+
 ## flash 模式设计要点（2026-11-20 规格定稿，ADR 0001）
 
 三档分工：flash 主会话/规格会话（`claude-flash` = glm-5.3-flash，只执行与转述）、glm-5.4 子代理（全部源码修改与大量阅读）、官方 Opus（一切结论性判断）。要点：
@@ -278,6 +282,8 @@
 - **批量 Brief 生成**：`bash find-next/scripts/test-make-batch-briefs.sh`。用假 `gh` 测变量替换、上游技能版本选择与参数校验。
 - **流水线状态**：`bash scripts/test-pipeline-status.sh`。它用假 `gh` 和临时 git 仓库测独立规格、单票规格、原版父规格、旧父 issue 形状、缺规格分组、探索中的地图、分支接手、已合入的遗留分支、外部阻塞、`--order` 开发顺序（状态、排序、波次、`--apart`、循环依赖）、`ready-for-human` 执行票（`(人工)` 后缀、只剩人工票的规格不进「可以实现」/`--order`/波次、`--all` 提示「人工票待做」、`--graph` 的 `human`/`human_only`/`status: human`）和 gh 失败，不访问网络。
 - **前沿计算**：`bash scripts/test-frontier.sh`。用假 `gh` 和临时夹具跑真实 `pipeline-status.sh --graph`，测未阻塞票、只有已关闭阻塞的票、被挡票及其阻塞票、`ready-for-human` 票、搁置票的分节输出，前沿行在前且升序，未知规格、pipeline-status 失败、`blocked_by` 查询失败都 fail closed（stdout 为空），以及参数错误，不访问网络。
+- **unattended-stop-guard**：`node hooks/test-unattended-stop-guard.js`。临时 transcript + 临时 `ISS_STATE_DIR`/`TMPDIR`：非无人值守放行、done/waiting/parked 未自关 block、已自关放行、问句 block、非问句放行、找不到 `run.json` 只跑规则 B、`stop_hook_active` 循环上限、逃生口、坏 transcript fail open、6MB transcript 2 秒内判定，不访问网络。
+- **spec-keeper**：`bash scripts/test-keeper.sh`。假 `gh`/`orca`/`claim.sh`/`launch-wave.sh`/`lock.sh`：quota 停车未到点不动、到点恢复；decision 只通知一次；24h 第 4 次改通知；interrupted 恢复；卡住第一轮发「继续」、第二轮关终端+释放+恢复；有写入不动；旧报告关键词兜底；`--dry-run` 零写；非 auto_land 跳过；锁冲突、暂停、gh 失败都退出 0。
 - **进度看板**：`bash scripts/test-board.sh`。用假 orca、假 pipeline-status、临时 git 仓库和临时 Run/Worker 目录测仓库登记、刷新节奏、关系图快照、认领状态、Run 阶段、Worker 异常、终端/网页输出、EPIPE、Board pruning 和帮助文本，不访问网络。
 - **Run 阶段记录**：`bash scripts/test-run-phase.sh`。用临时 HOME/ISS_STATE_DIR 测各阶段写入、覆盖、省略字段、最新 Run 目录选择、状态目录覆盖、写失败只警告和参数校验。
 - **票进度标签**：`bash scripts/test-ticket-watch.sh`。用临时 git 仓库测 `ticket-watch.sh --once` 的 worktree、分支、领先提交、脏文件、最近提交和外部 worker run dir 输出，worktree 清理后的零退出提示，以及缺失参数和非法 interval 的报错，不访问网络。
