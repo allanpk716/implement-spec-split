@@ -380,14 +380,14 @@ missing_tradeoff_marks() {
         # drop it instead of reporting it as an unmarked item.
         if (saw_item) flush()
         item = line
-        has_rec = (line ~ /推荐：/)
-        has_auto = (line ~ /可自动采纳：[[:space:]]*(是|否)/)
+        has_rec = (line ~ /推荐[*]*[：:]/)
+        has_auto = (line ~ /可自动采纳[*]*[：:][*[:space:]]*(是|否)/)
         saw_item = 1
         next
       }
       if (item == "") item = line
-      if (line ~ /推荐：/) has_rec = 1
-      if (line ~ /可自动采纳：[[:space:]]*(是|否)/) has_auto = 1
+      if (line ~ /推荐[*]*[：:]/) has_rec = 1
+      if (line ~ /可自动采纳[*]*[：:][*[:space:]]*(是|否)/) has_auto = 1
     }
     END {
       if (insec && meaningful == 0) { print "NONE"; exit }

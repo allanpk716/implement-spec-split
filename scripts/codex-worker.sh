@@ -277,7 +277,7 @@ classify() {
 }
 
 RETRY_PROMPT="The previous attempt was interrupted by an API error. Continue the task from where you left off, then finish with the report the brief asks for."
-RESUME_PROMPT="You were paused because you reached the time limit. First commit the work that is done and passes its tests, then continue the remaining work. If you still cannot finish, list the unfinished acceptance criteria in your final report."
+RESUME_PROMPT="You were paused because you reached the time limit. If the Brief allows commits, first commit the work that is done and passes its tests; if it says not to commit, keep everything uncommitted. Then continue the remaining work. If you still cannot finish, list the unfinished acceptance criteria in your final report."
 READ_ONLY_PROMPT="本任务只读。不要修改、新建或删除任何文件；不要执行 git commit、git stash、git checkout 或 git reset；只运行查看、搜索和已有测试这类命令。请把结论写在最终回复里。"
 READ_ONLY_RESUME_PROMPT="你因为到达时间上限被暂停。请继续完成调查，不要修改任何文件；如果仍然无法完成，请按 Brief 要求的报告格式给出目前的结论，并写明还没有确认的部分。"
 EFFICIENCY_PROMPT="效率要求：互相独立的查看、搜索、测试命令放在同一轮里并行调用，不要一次只读一个文件。需要摸清几个互不依赖的模块、或跑几组互不相干的检查时，用 spawn_agent 开 explorer 子代理并行勘察：每个子代理给清楚范围和要回报的内容，等它们都完成再继续。修改文件、git 操作只由你自己做，不交给子代理。任务很小时不要开子代理。"

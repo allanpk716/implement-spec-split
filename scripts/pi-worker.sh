@@ -293,7 +293,7 @@ for s in "${SKILLS[@]+"${SKILLS[@]}"}"; do ARGS+=(--skill "$(winpath "$s")"); do
 
 FIRST_PROMPT="Do the task described in the attached brief. Finish with the report it asks for."
 RETRY_PROMPT="The previous attempt was interrupted by an API error. Continue the task from where you left off, then finish with the report the brief asks for."
-RESUME_PROMPT="You were paused because you reached the time limit. First commit the work that is done and passes its tests, then continue the remaining work. If you still cannot finish, list the unfinished acceptance criteria in your final report."
+RESUME_PROMPT="You were paused because you reached the time limit. If the Brief allows commits, first commit the work that is done and passes its tests; if it says not to commit, keep everything uncommitted. Then continue the remaining work. If you still cannot finish, list the unfinished acceptance criteria in your final report."
 
 # Kill pi and its whole process tree: pi's tool children (npm test, shells) are
 # native Windows processes that an MSYS `kill` cannot reach, so on Git Bash kill the
