@@ -11,13 +11,13 @@ description: 默认进入推进模式：循环扫描当前 GitHub 仓库的 wayf
 
 ## 用法
 
-- `/find-next [--workers N] [--specs K] [--worker codex|pi|agent] [--agent-model <model>] [--no-auto-land] [地图号、实现票号或规格号…]`：默认推进模式（见「推进模式」），也是地图、规格、票、开发的通用入口。它循环执行：扫描 → 自动调查/关闭 research 票 → 准备决策题 / 迷雾毕业建议 / task 清单 / prototype 反应题 / 散票分流建议 → 起草规格和执行票 → 有问题就一轮问用户 → 应用答案并再扫描 → 发布 → 启动第 1 波。起草、调研、决策准备、迷雾毕业、散票分流、task 和 prototype 交给 worker：不给 `--worker` 或给 `codex` 时照旧派 codex worker；`pi` 维持现状（被忽略，等同 codex）；`agent` 时改由主会话开 Agent 子代理执行这些步骤（`model` 显式传 `--agent-model`，默认 `sonnet`），并让生成的开发命令也用 `--impl agent`。只支持 GitHub 跟踪器；本地 markdown 跟踪器请用 `--suggest` 或 `--list`
+- `/find-next [--workers N] [--specs K] [--worker codex|pi|agent] [--agent-model <model>] [--no-auto-land] [地图号、实现票号或规格号…]`：默认推进模式（见「推进模式」），也是地图、规格、票、开发的通用入口。它循环执行：扫描 → 自动调查/关闭 research 票 → 准备决策题 / 迷雾毕业建议 / task 清单 / prototype 反应题 / 散票分流建议 → 起草规格和执行票 → 有问题就一轮问用户 → 应用答案并再扫描 → 发布 → 启动第 1 波。起草、调研、决策准备、迷雾毕业、散票分流、task 和 prototype 交给 worker：不给 `--worker` 或给 `codex` 时照旧派 codex worker；`pi` 维持现状（被忽略，等同 codex）；`agent` 时改由主会话开 Agent 子代理执行这些步骤（`model` 显式传 `--agent-model`，默认 `sonnet`）。只支持 GitHub 跟踪器；本地 markdown 跟踪器请用 `--suggest` 或 `--list`
 - `/find-next --suggest [--worker codex|pi|self|agent] [--agent-model <model>]`：原先的默认行为，只读挑一个 Next step（见「建议模式流程」）；未给 `--worker` 时等同于 `codex`。支持 GitHub 和本地 markdown 跟踪器
 - `/find-next --list`：不挑一个，列出当前仓库的全部待办清单（见「清单模式」）。总是我自己做，不派 worker，`--worker` 被忽略
 - `/find-next --batch …`：推进模式别名，兼容旧用法
 - `/find-next --watch`：只进入**总控**（见「总控」一节），不推进、不起草；推进模式第 11 步收尾后自动进入同一节。grill-feature / grill-map 启动规格后，本仓库没有总控在跑时也走这里
 - `--workers N` 可选，是全机 GLM worker 总数；每份规格的 `--parallel` = N ÷ K（至少 1）。没给时读 `~/.cache/implement-spec-split/max-workers`（`scripts/max-workers.sh` 用的同一文件）；文件也没有就把 worker 上限并入本轮最后一个问题问用户。`--specs K` 是同时开几份规格，默认 2。**同一仓库同一时间只在一个会话里运行推进模式**：推进模式全程持仓库级 `find-next-advance` 锁（见「推进模式」第 1 步），第二个会话会被拦下；持锁会话被意外关闭后锁自动失效
-- `--agent-model <sonnet|opus|haiku|fable>` 只在 `--worker agent` 时有效，默认 `sonnet`；给了 `--worker codex`/`pi`/`self`（或不给 `--worker`）却给 `--agent-model` 是参数冲突，报错让用户改。一个开关管全程：`--worker agent` 同时决定本技能自己的调研/决策/起草方式和生成的开发命令后端，不提供混搭。
+- `--agent-model <sonnet|opus|haiku|fable>` 只在 `--worker agent` 时有效，默认 `sonnet`；给了 `--worker codex`/`pi`/`self`（或不给 `--worker`）却给 `--agent-model` 是参数冲突，报错让用户改。一个开关管全程：`--worker agent` 决定本技能自己的调研/决策/起草方式，不提供混搭；生成的开发命令不带后端参数（实现走路由表）。
 - **无人值守落地**（GLOSSARY.md）默认开启：本批规格（含之后自动开的波次）不停下问人；Opus 审查里带推荐、标「可自动采纳：是」的取舍按推荐落地并记为「自动拍板（可推翻）」，只有真要人决定的事才停车。落地、部分落地、停车都在规格 issue 下留报告，由本会话的总控汇总给用户。`--no-auto-land` 只在推进模式有效，用来让本批保留 push 前确认：第 10 步把它透传给 launch-wave.sh，`--apply` 会把 `auto_land: false` 写进启动状态，`--next-wave` 沿用；`--auto-land` 保留为兼容别名，等同默认。
 
 只扫当前仓库，不跨仓库汇总。
@@ -295,18 +295,14 @@ flash 模式下，本节所有原本由主会话审读或复核的结论都按�
 10. **开发顺序与启动（每次都做）**：发布完或不需要发布时，先运行：
 
    ```bash
-   <本技能目录>/scripts/launch-wave.sh --repo <owner/name> [--workers N] [--specs K] [--apart 224:239 …] [--impl agent --agent-model <model>] [--no-auto-land]
+   <本技能目录>/scripts/launch-wave.sh --repo <owner/name> [--workers N] [--specs K] [--apart 224:239 …] [--no-auto-land]
    ```
 
-   排序由 `pipeline-status.sh --order` 确定性计算：被依赖的先做 → 解锁下游多的先做 → 编号小的先做；完全被挡住的不进第 1 波；进行中的不排；中断的标「先恢复」；搁置执行票不算待实现，未关执行票全是搁置票的规格不进顺序或波次。我只补「改同一块代码」的 `--apart A:B` 判断，依据规格正文里的模块；拿不准不传。有 `--apart` 时按重跑后的结果为准。`--apply` 会把本次 workers/specs/apart（`agent` 后端时还包括后端与模型）写入 `~/.cache/implement-spec-split/launch/<owner>__<name>.json`，供合入后的 `--next-wave` 复用；开发顺序本身每次重算。没给 `--workers` 时脚本按第 6 步得到的答案传入；第 6 步也没问（已有 max-workers 文件）就不传，让脚本读状态文件或 max-workers 文件。
+   排序由 `pipeline-status.sh --order` 确定性计算：被依赖的先做 → 解锁下游多的先做 → 编号小的先做；完全被挡住的不进第 1 波；进行中的不排；中断的标「先恢复」；搁置执行票不算待实现，未关执行票全是搁置票的规格不进顺序或波次。我只补「改同一块代码」的 `--apart A:B` 判断，依据规格正文里的模块；拿不准不传。有 `--apart` 时按重跑后的结果为准。`--apply` 会把本次 workers/specs/apart 和这一波的 Orca Run 写入 `~/.cache/implement-spec-split/launch/<owner>__<name>.json`，供合入后的 `--next-wave` 复用；开发顺序本身每次重算。没给 `--workers` 时脚本按第 6 步得到的答案传入；第 6 步也没问（已有 max-workers 文件）就不传，让脚本读状态文件或 max-workers 文件。
 
-   `--worker agent` 时，试运行和 `--apply` 两次都要在 launch-wave.sh 后面追加 `--impl agent --agent-model <model>`（即第 1 波每条命令变成 `/implement-spec-split <n> --impl agent --agent-model <model> --parallel <P>`）。`--apply` 会把它写进启动状态，合入后的 `--next-wave --apply` 不带参数也会沿用；不给 `--worker agent` 时不追加任何后端参数，生成命令与现状逐字一致。
+   默认无人值守落地：试运行和 `--apply` 不带参数时每条命令末尾带 `--auto-land`，`--apply` 把 `auto_land: true` 写进启动状态，`--next-wave` 沿用；显式 `--no-auto-land` 时命令不带它，状态写 `auto_land: false`，`--next-wave` 也沿用它（旧状态文件没有该字段时按开启处理）。`--auto-land` 仍可接受，等同默认。命令里不再有实现后端参数：规格会话按路由表「编排」项经 Orca 托管启动，票的实现按路由表「实现」项派发，都不在这里选。
 
-   默认无人值守落地：试运行和 `--apply` 不带参数时每条命令末尾带 `--auto-land`，`--apply` 把 `auto_land: true` 写进启动状态，`--next-wave` 沿用；显式 `--no-auto-land` 时命令不带它，状态写 `auto_land: false`，`--next-wave` 也沿用它（旧状态文件没有该字段时按开启处理）。`--auto-land` 仍可接受，等同默认。
-
-   **原样转述试运行输出，不加解释**，不问用户，紧接着用同样参数加 `--apply` 再运行一次。唯一例外：出现「循环依赖」时不加 `--apply`，问用户怎么定。另需单独提醒一行：表里写「另需 #N」的规格要另开会话处理那张票。脚本会写全机 worker 上限、预留规格、在 Orca 里建 worktree 并启动 `/implement-spec-split <n> --impl codex --auto-land --parallel <P>`（`--worker agent` 时为 `--impl agent --agent-model <model> --auto-land --parallel <P>`）；「需手动」条目按脚本输出提醒。合入后的自动下一波见 implement-spec-split 根技能第 9 步。
-
-   flash 模式下，规格会话与默认实现后端的选择由 launch-wave.sh 处理，见「flash 模式」一节。
+   **原样转述试运行输出，不加解释**，不问用户，紧接着用同样参数加 `--apply` 再运行一次。唯一例外：出现「循环依赖」时不加 `--apply`，问用户怎么定。另需单独提醒一行：表里写「另需 #N」的规格要另开会话处理那张票。`--apply` 会写全机 worker 上限、预留规格、为这一波建一个 Orca Run（打印 run id），在 Orca 里把规格工作区挂在主工作区下并经 Orca 托管启动 `/implement-spec-split <n> --auto-land --parallel <P>`；会话认领（claim 记录里出现 pid）后才报「已启动」，没认领的先读终端再决定重派一次或停车。`#<n> 停车：…` 和紧跟的「重新启动：…」原样转述给用户；「需手动」条目按脚本输出提醒。认领等待最长 15 分钟（`ISS_CLAIM_WAIT`），超过前台 Bash 上限时按后台任务的写法运行（`run_in_background: true`），拿到输出再转述。合入后的自动下一波见 implement-spec-split 根技能第 9 步。
 
 11. **收尾**：先运行 `~/.claude/skills/implement-spec-split/scripts/completion-report.sh <仓库>`（不带 `--spec`），把输出原样放在收尾报告最上面（脚本非 0 时写「完成度结论（查询失败）」），下面才是本轮做了什么；第 1 步接续过旧推进运行时，先写一段「接续上次中断的推进」（复用了哪些票的产出、作废重派了哪些、在旧目录接着发布了哪些规格）。原样转述启动结果，列出已启动、跳过、失败和需手动的规格。列出 `emptyMaps`（若有），逐张提示「用 `/wayfinder <地图号>` 画图」，不代画、不建第一批票。单列「等待时机」（#号、标题、条件、要现在开就回「开 #N」；条件是人要做的动作时已在顶部完成度结论里给出对应动作）与未结案的散票分流建议。列出因单次 2 张上限未处理的 prototype 票、因 3 轮问询上限或「先到这」留下的待拍板事项，提示下次运行 `/find-next --batch` 接着推。不要让用户 `/clear` 或去看 GitHub：本会话接着做总控。最后运行 `run-state.sh finish <运行目录>`，再 `lock.sh release find-next-advance --scope repo`，然后进入「总控」一节（本轮启动了规格、或仓库里还有开着的规格时；都没有就到此结束）。
 
@@ -374,7 +370,7 @@ flash 模式下，Opus review 与 Design session 的失败处理见「flash 模�
   `map` 用于地图、迷雾、空地图、地图内 decision/research 票和大模块话题；`feature` 用于小功能或单个决策类散票。flash 提示用户切换、阻塞等待 handoff，成功后只读 `handoff.md` 并执行其中交给 Orchestrator 的待办，脚本非 0 时转述 stderr 并停止。
 - **推荐入口替换**：flash 模式下，上文推荐 `/wayfinder` 的地方改推荐 `/grill-map`；推荐 `/grill-with-docs` 的地方，小功能或单个决策改 `/grill-feature`，画图、推进地图或大模块讨论改 `/grill-map`。`/find-next` 自身入口和 `/to-spec`、`/to-tickets`、`/implement-spec-split` 的推荐不变。
 - **worker 后端**：没给 `--worker` 时按 `--worker agent` 处理（flash 环境里 `sonnet`/`opus` 都映射到 glm-5.4，子代理本身就是 GLM，与 implement-spec-split、launch-wave 的 flash 默认一致）。`codex-worker.sh` / `pi-worker.sh` 在 `FLASH_ORCHESTRATOR=1` 时拒跑；只有用户显式给了 `--worker codex|pi`，才在每条 wrapper 命令前加 `WORKER_ALLOW_FLASH=1`，其他情况不许设置，也不许绕开本技能自己起 worker。
-- **第 1 波启动**：仍按第 10 步的原有命令试运行并 `--apply`；flash 环境下 `launch-wave.sh` 自己选择 OpenClaude 规格会话，并在未显式指定实现后端时默认 agent 后端，技能层不重复实现该规则。
+- **第 1 波启动**：仍按第 10 步的原有命令试运行并 `--apply`；规格会话由 `launch-wave.sh` 按路由表「编排」项（锁定 flash）经 Orca 托管启动，用的就是 OpenClaude 槽位，技能层不重复实现该规则。
 - **Opus review 不可用**：退出码为 3（额度或 429）时按 quota 停车，其余非 0 退出码仍按原规则停车并说明（退出码含义见 scripts/opus-review.sh 头注释）；不自动重试、不降级到 GLM、不改由 flash 自己审读。Design session 脚本失败同样停下并转述错误。
 - **阶段路由**：`/grill-router`（只由用户敲，背后是 `~/.claude/skills/implement-spec-split/scripts/stage-route.sh`）是用户设置的全局路由表（GLOSSARY.md 的 Stage route）：编排、讨论、调研起草、实现、审查、诊断六个阶段各用哪个启动器档案、模型和思考强度，可带到期。`opus-review.sh` 每次被调用时自己读「审查」（`--kind code`、`draft`）或「诊断」（`--kind diagnose`）的路由，`design-session.sh` 读「讨论」，正在推进的运行不用重开，下一次审查就是新路由。findings 文件首行每次都是 `路由：审查（review）claude-glm / glm-5.4 / medium · <时间>`；档案不是 `claude` 时 `opus-review.sh` 的 stderr 会说明本次没调官方 Opus。照常按 findings 执行，汇报结论时带上这一行。不要自己改路由表，也不要把切换当成降级而拒收 findings。
 - **worker 派发路由**：同一张路由表（见「建议模式流程」第 3 步的「阶段路由」）在本技能里只管 `codex-worker.sh` 的派发；flash 环境默认走 agent 后端的运行不经过它，路由对那些运行无效（子代理型号由启动器决定）。只有显式 `--worker codex`（带 `WORKER_ALLOW_FLASH=1`）的派发才按路由表。不要自己改路由表。

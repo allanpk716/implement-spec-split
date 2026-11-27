@@ -23,7 +23,7 @@ tracker documentation instead.
   --parallel K           With --order, plan for K concurrent Specs (default: 2).
   --workers N            With --order, split N total workers across K concurrent Specs.
   --apart A:B            With --order, keep A and B out of the same wave. Repeatable.
-  --cmd-suffix STR       With --order, append STR to each command (default: --impl codex).
+  --cmd-suffix STR       With --order, append STR to each command (default: --auto-land; '' for none).
   --json                 With --order, print the same plan as JSON instead of a text table.
   --graph                Print the full relation graph as JSON for the Progress board (closed
                          maps, Specs and Tickets included); takes the --order options.
@@ -60,7 +60,10 @@ ALL=0
 ORDER=0
 PARALLEL=2
 WORKERS=
-CMD_SUFFIX='--impl codex'
+# Every command launches unattended unless the caller opts the batch out
+# (launch-wave passes '' then); how a Spec's tickets are implemented is the
+# Stage route table's business, not an argument of the command.
+CMD_SUFFIX='--auto-land'
 JSON=0
 GRAPH=0
 APART=()
@@ -1174,7 +1177,7 @@ if (mode === 'order') {
   const pipeline = readJson(args[1]);
   const blockerDir = args[2];
   const parallel = Math.max(1, Number(args[3] || 2));
-  const commandSuffix = args[4] === undefined ? '--impl codex' : args[4];
+  const commandSuffix = args[4] === undefined ? '--auto-land' : args[4];
   const suppliedClaimsDir = args[5] || '';
   const lstartCommand = args[6] || process.env.ISS_PID_START_SCRIPT;
   const workersArgument = args[7] || '';

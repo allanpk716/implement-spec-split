@@ -155,7 +155,7 @@ A Claim record that `find-next/scripts/launch-wave.sh` writes with `claim.sh res
 _Avoid_: pre-claim, lease
 
 **Launch state**:
-The file `~/.cache/implement-spec-split/launch/<owner>__<name>.json` where `launch-wave.sh --apply` records the chosen worker count, wave size, apart pairs, whether the batch lands unattended (`auto_land`), and (when the `agent` backend was chosen) backend and agent model for a repository; `--next-wave` reuses those judgments while recalculating the order. State files from before the agent backend have no backend field and keep behaving like `--impl codex`; state files from before unattended landing became the default have no `auto_land` field and keep landing unattended.
+The file `~/.cache/implement-spec-split/launch/<owner>__<name>.json` where `launch-wave.sh --apply` records the chosen worker count, wave size, apart pairs, whether the batch lands unattended (`auto_land`) and the Orca Run of the latest wave (`run`) for a repository; `--next-wave` reuses those judgments while recalculating the order. How a Spec's tickets are implemented is not in it: that is the Stage route table's 实现 route, read at each dispatch, and the `impl`/`agent_model` fields state files carried before 规格 #26 are ignored. State files from before unattended landing became the default have no `auto_land` field and keep landing unattended.
 _Avoid_: order cache (the order itself is recalculated)
 
 **Repo registry**:
