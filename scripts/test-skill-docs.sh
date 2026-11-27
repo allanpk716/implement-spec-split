@@ -78,6 +78,27 @@ has 'new commits' 'the gate checks new commits' "$SKILL"
 has 'a clean tree' 'the gate checks a clean tree' "$SKILL"
 has "merger script's test run passes" 'the gate checks the merger script test run' "$SKILL"
 
+# --- SKILL.md: the three reports carry the route table and the check lines (票 #47)
+
+# The landing report: completion-report.sh with the run directory ends with
+# what stage-dispatch.sh verify prints.
+has 'completion-report.sh <主 checkout> --spec <n> --notify --run-dir <Spec Run root>' \
+  'SKILL.md runs completion-report.sh with the run directory' "$SKILL"
+has 'stage-dispatch.sh verify --run-dir <Spec Run root>' 'SKILL.md names the verify command for the reports' "$SKILL"
+# The parking report's 现状 and the final report's 细节 paste that output instead
+# of the two route lines of the old switches.
+without '<the two route lines of "Report at the end">' 'the parking report no longer asks for the two route lines' "$SKILL"
+without '**Route**, two lines written every time' 'the final report no longer asks for the two route lines' "$SKILL"
+without 'names it in `projection.provider`' 'the session no longer reads the model off worker-show by hand' "$SKILL"
+# What stays: the two machine-readable lines and the section keeper and the
+# supervisor read.
+has '停车类别：decision' 'the parking report keeps its category line' "$SKILL"
+has '可恢复时间：无' 'the parking report keeps its recovery-time line' "$SKILL"
+has '### 需要你决定' 'the parking report keeps its decision section' "$SKILL"
+has '### 现状' 'the parking report keeps its status section' "$SKILL"
+# A mismatch is a warning that holds nothing back.
+has 'never held back' 'SKILL.md says a model mismatch never holds back the landing' "$SKILL"
+
 # --- the Ticket Brief template --------------------------------------------------
 
 for text in 'worker_done' '--task-id' '## 护栏' '探索笔记' '规格内容' '票内容' \
