@@ -131,8 +131,8 @@ for (const [name, value] of Object.entries(responses)) {
 
 // One fixture directory per `shared-counter` scenario, run by run_counter_case below.
 const scenarios = {
-  // Two labelled tickets with no blocker: only #16 is released, #17 and #18 wait for it.
-  'counter-two-open': {
+  // Three `shared-counter` tickets with no blocker: only #16 is released, #17 and #18 wait for it.
+  'counter-three-open': {
     tickets: [
       issue(16, 'Counter ticket one', 'open', ['shared-counter']),
       issue(17, 'Counter ticket two', 'open', ['shared-counter']),
@@ -140,7 +140,7 @@ const scenarios = {
     ],
     blockers: {16: [], 17: [], 18: []},
   },
-  // #16 merged and closed: the next labelled ticket is released on the next run.
+  // #16 merged and closed: the next `shared-counter` ticket is released on the next run.
   'counter-smaller-closed': {
     tickets: [
       issue(16, 'Counter ticket one', 'closed', ['shared-counter']),
@@ -148,7 +148,7 @@ const scenarios = {
     ],
     blockers: {17: []},
   },
-  // A labelled ticket with an open blocker stays in `# blocked` for that reason
+  // A `shared-counter` ticket with an open blocker stays in `# blocked` for that reason
   // and takes no slot, so #17 is the one released.
   'counter-blocked-takes-no-slot': {
     tickets: [
@@ -157,7 +157,7 @@ const scenarios = {
     ],
     blockers: {16: [20], 17: []},
   },
-  // A labelled ticket that is human or shelved takes no slot either.
+  // A `shared-counter` ticket that is human or shelved takes no slot either.
   'counter-human-shelved-take-no-slot': {
     tickets: [
       issue(16, 'Human counter ticket', 'open', ['ready-for-human', 'shared-counter']),
@@ -274,7 +274,7 @@ fi
 
 # A `shared-counter` ticket bumps a shared counter (GLOSSARY.md). Among such
 # tickets that pass the other frontier conditions frontier.sh releases only the
-# lowest-numbered one; the rest wait in `# blocked`, naming it. A labelled
+# lowest-numbered one; the rest wait in `# blocked`, naming it. A `shared-counter`
 # ticket that is blocked, human or shelved is not eligible and takes no slot.
 # Each scenario is the Spec's own fixture directory, swapped in by overriding
 # FIXTURE_DIR on the run_frontier call. Expected outputs are hand-written, not
@@ -286,42 +286,43 @@ run_counter_case() {
   awk '/^# /{exit} {print}' "$output" > "${output%.out}-frontier.out"
 }
 
-run_counter_case counter-two-open "$WORK/two-open.out"
-expect_exit 0 'two labelled tickets: scan succeeds'
-check_frontier=$(head -n 4 "$WORK/two-open.out" | tr '\n' ' ')
+run_counter_case counter-three-open "$WORK/three-open.out"
+expect_exit 0 'three shared-counter tickets: scan succeeds'
+check_frontier=$(head -n 4 "$WORK/three-open.out" | tr '\n' ' ')
 if [ "$check_frontier" = '#12 #13 #16 # blocked ' ]; then
-  record PASS 'two labelled tickets: exactly the lowest-numbered one is released, unmarked tickets unaffected'
+  record PASS 'three shared-counter tickets: exactly the lowest-numbered one is released, unmarked tickets unaffected'
 else
-  record FAIL 'two labelled tickets: exactly the lowest-numbered one is released, unmarked tickets unaffected' "got [$check_frontier]"
+  record FAIL 'three shared-counter tickets: exactly the lowest-numbered one is released, unmarked tickets unaffected' "got [$check_frontier]"
 fi
-expect_has '#17 Counter ticket two（等共享计数器：#16）' 'waiting labelled ticket names the one it waits for' "$WORK/two-open.out"
-expect_has '#18 Counter ticket three（等共享计数器：#16）' 'every other labelled ticket waits for the same released one' "$WORK/two-open.out"
-expect_without '#17' 'waiting labelled ticket is not in the frontier' "$WORK/two-open-frontier.out"
-expect_without '#18' 'third labelled ticket is not in the frontier' "$WORK/two-open-frontier.out"
-if sed -n '4,6p' "$WORK/two-open.out" | tr '\n' '|' | grep -qF \
-  '# blocked|#17 Counter ticket two（等共享计数器：#16）|#18 Counter ticket three（等共享计数器：#16）|'; then
-  record PASS 'waiting labelled tickets sit in the blocked section, ascending'
+expect_has '#17 Counter ticket two（等共享计数器：#16）' 'waiting shared-counter ticket names the one it waits for' "$WORK/three-open.out"
+expect_has '#18 Counter ticket three（等共享计数器：#16）' 'every other shared-counter ticket waits for the same released one' "$WORK/three-open.out"
+expect_without '#17' 'waiting shared-counter ticket is not in the frontier' "$WORK/three-open-frontier.out"
+expect_without '#18' 'third shared-counter ticket is not in the frontier' "$WORK/three-open-frontier.out"
+check_blocked=$(sed -n '4,6p' "$WORK/three-open.out" | tr '\n' ' ')
+if [ "$check_blocked" = \
+  '# blocked #17 Counter ticket two（等共享计数器：#16） #18 Counter ticket three（等共享计数器：#16） ' ]; then
+  record PASS 'waiting shared-counter tickets sit in the blocked section, ascending'
 else
-  record FAIL 'waiting labelled tickets sit in the blocked section, ascending' "$(sed -n '4,7p' "$WORK/two-open.out")"
+  record FAIL 'waiting shared-counter tickets sit in the blocked section, ascending' "got [$check_blocked]"
 fi
 
 run_counter_case counter-smaller-closed "$WORK/smaller-closed.out"
-expect_exit 0 'smaller labelled ticket closed: scan succeeds'
-expect_has '#17' 'smaller labelled ticket closed: the next one is released' "$WORK/smaller-closed-frontier.out"
-expect_without '等共享计数器' 'smaller labelled ticket closed: nobody waits any more' "$WORK/smaller-closed.out"
+expect_exit 0 'smaller shared-counter ticket closed: scan succeeds'
+expect_has '#17' 'smaller shared-counter ticket closed: the next one is released' "$WORK/smaller-closed-frontier.out"
+expect_without '等共享计数器' 'smaller shared-counter ticket closed: nobody waits any more' "$WORK/smaller-closed.out"
 
 run_counter_case counter-blocked-takes-no-slot "$WORK/blocked-slot.out"
-expect_exit 0 'blocked labelled ticket: scan succeeds'
-expect_has '#16 Counter ticket one（阻塞：#20）' 'blocked labelled ticket keeps its blocker reason' "$WORK/blocked-slot.out"
-expect_has '#17' 'blocked labelled ticket takes no slot: the free one is released' "$WORK/blocked-slot-frontier.out"
-expect_without '等共享计数器：#16' 'blocked labelled ticket is not waited for' "$WORK/blocked-slot.out"
+expect_exit 0 'blocked shared-counter ticket: scan succeeds'
+expect_has '#16 Counter ticket one（阻塞：#20）' 'blocked shared-counter ticket keeps its blocker reason' "$WORK/blocked-slot.out"
+expect_has '#17' 'blocked shared-counter ticket takes no slot: the free one is released' "$WORK/blocked-slot-frontier.out"
+expect_without '等共享计数器：#16' 'blocked shared-counter ticket is not waited for' "$WORK/blocked-slot.out"
 
 run_counter_case counter-human-shelved-take-no-slot "$WORK/human-shelved-slot.out"
-expect_exit 0 'human and shelved labelled tickets: scan succeeds'
-expect_has '#16 Human counter ticket（人工）' 'human labelled ticket is still listed under human' "$WORK/human-shelved-slot.out"
-expect_has '#17 【搁置】Shelved counter ticket（搁置）' 'shelved labelled ticket is still listed under shelved' "$WORK/human-shelved-slot.out"
-expect_has '#18' 'human and shelved labelled tickets take no slot: the free one is released' "$WORK/human-shelved-slot-frontier.out"
-expect_without '等共享计数器' 'human and shelved labelled tickets are not waited for' "$WORK/human-shelved-slot.out"
+expect_exit 0 'human and shelved shared-counter tickets: scan succeeds'
+expect_has '#16 Human counter ticket（人工）' 'human shared-counter ticket is still listed under human' "$WORK/human-shelved-slot.out"
+expect_has '#17 【搁置】Shelved counter ticket（搁置）' 'shelved shared-counter ticket is still listed under shelved' "$WORK/human-shelved-slot.out"
+expect_has '#18' 'human and shelved shared-counter tickets take no slot: the free one is released' "$WORK/human-shelved-slot-frontier.out"
+expect_without '等共享计数器' 'human and shelved shared-counter tickets are not waited for' "$WORK/human-shelved-slot.out"
 
 SPEC_ARG=99
 run_frontier "$WORK/missing.out"
