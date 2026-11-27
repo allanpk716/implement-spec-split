@@ -311,6 +311,7 @@
 - **codex worker home 生成**：`bash scripts/test-setup-worker-home.sh`。用临时目录里的假源 home 测配置键/表过滤、`model_catalog_json` 改写、文件复制、权限、幂等备份和输出不泄漏配置值，不访问网络、不碰真实 `~/.codex`。
 - **Opus review 入口**：`bash scripts/test-opus-review.sh`。用临时 HOME/PATH 里的假 `claude` 测三类 prompt、GLM 代理环境变量清理、`--model opus`、只读工具白名单、findings 原子写入、认证/额度/超时/其他错误的不同退出码、超时进程树回收，以及 `## 需要人取舍` 的标记校验（缺标 → 同模型补标一次、补标仍失败退出码 7 并列出条目、标记齐全不重试、「无」和没有这一节都通过），不访问网络、不花 Opus 额度。
 - **判断模型开关入口**：`bash scripts/test-judgment-model.sh`。用临时设置文件和假 `date` 测默认值、一条命令设两个角色、只动一个角色时另一个的模型和到期时间不变、切换与切回、`--until` / `--for` 与按角色到期、坏用法不改设置、`--print <角色>` 对各种坏文件只答 opus 或替代模型。切换本身在 `test-opus-review.sh`（经假 `claude-glm` 执行、findings 首行、补标与额度错误不回落到官方 claude）和 `test-design-session.sh`（终端创建、提示词文件、退出码文件、`--attach`、缺启动器）里各有用例；`/judgment-model` 技能文件和各文档对它的说法也在这个测试里核对。
+- **阶段路由表**：`bash scripts/test-stage-route.sh`。用临时状态文件和假 `date` 测六个阶段的默认表、`use` 单项与多项、只动一个阶段时其余阶段的行不变、设回默认即离开表、`--until` / `--for` 与按阶段到期、目录外的组合 / 编排锁定 / 档案不接受的强度一律拒绝且不改表、审查与实现同模型只警告一次不拦、未知组合回默认并提示、损坏文件整表回默认并提示、`--print` 四个字段与找不到值时退出 66、`--launch` 四个档案的交互与 headless 启动命令，以及 `/grill-router` 技能文件的写法；不调真实启动器。
 - **L1 连通性（pi）**：`scripts/selftest.sh --only L1`。用 `--impl pi` 跑技能时，第 0 步也会执行这个检查。
 - **L2 wrapper（pi）**：`scripts/selftest.sh`。它会在 `~/.cache/implement-spec-split-selftest/` 下建一个临时仓库和 worktree，让 pi 用 tdd 技能实现一个很小的 ticket，然后检查这几件事：
   - 有新 commit，工作区是干净的，测试我们自己重跑能通过；
