@@ -141,6 +141,7 @@
     - 输出另起 `# blocked`（被挡的票及其 open 阻塞票）、`# human`（人工票）、`# shelved`（搁置票）。任一 gh 查询失败以非 0 退出、stderr 说明、stdout 不打印任何东西（fail closed）。
     - SKILL 第 1 步和第 6 步：前沿只能来自这个脚本，禁止自行判断，也不要自己查 `blocked_by` 去推翻它；脚本失败等 30 秒重试一次，再失败停车，类别 `transient`。
     - 测试 `scripts/test-frontier.sh` 用假 `gh` 跑真实 `pipeline-status.sh`。
+    - 2026-11-28 注：第 45 条硬保证②给前沿多了一个条件——带 `shared-counter` 标签的票一次只放行编号最小的一张，其余即使没有开放阻塞也列在 `# blocked`、原因写「（等共享计数器：#m）」；上面「没有 open 阻塞票…的才是前沿」和「`# blocked`（被挡的票…）」两句对这类票不再完整。
 
 36. **2026-11-26：`ready-for-human` 执行票与搁置票同等对待，并新增运维票规则。** 证据：proxy-hub #49 是上线票，原标 `ready-for-human`；用户决定改由 agent 经 ssh-manager 自动上线，票面带「## 护栏」一节。`pipeline-status.sh` 原来不认这个标签，一旦解除阻塞就会把真正的人工票派给实现者。决定：
     - `pipeline-status.sh`：带 `ready-for-human` 的执行票算「非待实现」，在票列表里加 `(人工)` 后缀；规格未关执行票只剩人工票（可混搁置票）时，不进「可以实现」、`--order` 和波次，改在 `--all` 的「状态没收尾」提示 `人工票待做：#n`。`--order --json` 现有字段不变，`--graph` 只新增 `tickets[].human`、`specs[].human_only` 和 `status: human`。
