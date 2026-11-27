@@ -126,10 +126,12 @@ expect_stderr_lines() {
   fi
 }
 
-# The fake date answers +%s from FAKE_DATE_NOW and passes everything else on.
+# The fake date answers +%s from FAKE_DATE_NOW, fails on it when FAKE_DATE_FAIL
+# is set, and passes everything else on.
 cat > "$BIN/date" <<'FAKE'
 #!/usr/bin/env bash
 if [ "${1:-}" = +%s ] && [ -n "${FAKE_DATE_NOW:-}" ]; then
+  [ -z "${FAKE_DATE_FAIL:-}" ] || exit 1
   printf '%s\n' "$FAKE_DATE_NOW"
   exit 0
 fi
@@ -700,10 +702,447 @@ expect_stdout_has 'ISS_STAGE_ROUTE_FILE' 'help names the replacement variable'
 expect_stdout_has 'claude-glm' 'help names the profiles'
 expect_stdout_has 'claude-flash / glm-5.4      design' 'help lists the catalog'
 
-# migrate is reserved for #29.
+# --- The two old switches migrate into the table (#29) ---
+# The old settings are read from next to the table, as judgment-model and
+# worker-model, in the format the old scripts wrote. The migration reads those
+# files itself: the old scripts are never run.
+
+expect_file_missing() {
+  file=$2
+  name=$1
+  if [ ! -e "$file" ]; then
+    record PASS "$name"
+  else
+    record FAIL "$name" "$(basename "$file") still exists"
+  fi
+}
+
+expect_file_content() {
+  expected=$1
+  name=$2
+  file=$3
+  if [ -f "$file" ] && [ "$(cat "$file")" = "$expected" ]; then
+    record PASS "$name"
+  else
+    record FAIL "$name" "file=$(tr '\n' ' ' < "$file" 2>/dev/null)"
+  fi
+}
+
+# Exactly one line of stdout matches the extended regex $1 in full.
+expect_stdout_line_matches() {
+  pattern="^($1)\$"
+  name=$2
+  if grep -Eq -- "$pattern" "$RUN_STDOUT" 2>/dev/null; then
+    record PASS "$name"
+  else
+    record FAIL "$name" "no stdout line matches [$1]: $(tr '\n' '|' < "$RUN_STDOUT")"
+  fi
+}
+
+# Exactly $2 lines of stderr match the extended regex $1.
+expect_stderr_matching() {
+  pattern=$1
+  count=$2
+  name=$3
+  actual=$(grep -Ec -- "$pattern" "$RUN_STDERR" 2>/dev/null)
+  if [ "$actual" -eq "$count" ]; then
+    record PASS "$name"
+  else
+    record FAIL "$name" "$actual lines match, expected $count: $(tr '\n' '|' < "$RUN_STDERR")"
+  fi
+}
+
+# A stage reads back as the route <profile>/<model>/<effort>[@<until>] through
+# --print; an empty until is a stage without an expiry.
+expect_route() {
+  local stage=$1 profile=$2 model=$3 effort=$4 until=$5
+  run_router --print "$stage" profile
+  expect_stdout "$profile" "$stage reads its profile $profile"
+  run_router --print "$stage" model
+  expect_stdout "$model" "$stage reads its model $model"
+  run_router --print "$stage" effort
+  expect_stdout "$effort" "$stage reads its effort $effort"
+  run_router --print "$stage" until
+  expect_stdout "$until" "$stage reads its expiry '${until:-none}'"
+}
+
+OLD_JUDGMENT=$WORK/state/judgment-model
+OLD_WORKER=$WORK/state/worker-model
+rm -f "$OLD_JUDGMENT" "$OLD_WORKER"
+
+# Both old files hold settings that are in effect: the first run carries the
+# five stages over with their expiry and deletes both old files.
+rm -f "$STATE_FILE"
+printf 'grill=glm-5.4\ngrill.until=1795831200\nreview=glm-5.4\nreview.until=\n' > "$OLD_JUDGMENT"
+printf 'worker=glm-5.3\nworker.until=1000003600\n' > "$OLD_WORKER"
+FAKE_DATE_NOW=1000000000
+run_router
+expect_exit 0 'the first run migrates the old switches and shows the table'
+expect_state 'design=claude-glm/glm-5.4/high@1795831200
+research=codex-glm/glm-5.3/high@1000003600
+implementation=codex-glm/glm-5.3/high@1000003600
+review=claude-glm/glm-5.4/high
+diagnosis=claude-glm/glm-5.4/high' 'the first run carries the five stages over with their expiry'
+expect_stdout_line_matches '讨论（design）：claude-glm / glm-5.4 / high，到 .* 自动切回默认' 'the first run shows the migrated design route with its expiry'
+expect_stdout_line_matches '调研起草（research）：codex-glm / glm-5.3 / high，到 .* 自动切回默认' 'the first run shows the migrated research route with its expiry'
+expect_stdout_line_matches '实现（implementation）：codex-glm / glm-5.3 / high，到 .* 自动切回默认' 'the first run shows the migrated implementation route with its expiry'
+expect_stdout_line_matches '审查（review）：claude-glm / glm-5.4 / high，不会自动切回；切回用 /grill-router use review=claude/opus/high' 'the first run shows the migrated review route without an expiry'
+expect_stdout_line_matches '诊断（diagnosis）：claude-glm / glm-5.4 / high，不会自动切回；切回用 /grill-router use diagnosis=claude/opus/high' 'the first run shows the migrated diagnosis route without an expiry'
+expect_stderr_has 'judgment-model' 'the first run names the old file it migrated'
+expect_stderr_has 'worker-model' 'the first run names the other old file it migrated'
+expect_stderr_has 'grill=glm-5.4' 'the migration note names the old setting'
+expect_stderr_has 'worker=glm-5.3' 'the migration note names the worker setting'
+expect_stderr_has '已删除' 'the notes say the old files were deleted'
+expect_route design claude-glm glm-5.4 high 1795831200
+expect_route research codex-glm glm-5.3 high 1000003600
+expect_route implementation codex-glm glm-5.3 high 1000003600
+expect_route review claude-glm glm-5.4 high ''
+expect_route diagnosis claude-glm glm-5.4 high ''
+expect_file_missing "$OLD_JUDGMENT" 'the old judgment-model file is deleted once migrated'
+expect_file_missing "$OLD_WORKER" 'the old worker-model file is deleted once migrated'
+
+# An old setting that has expired is ignored. The other setting of the same
+# file is carried all the same, and the file goes once both are dealt with.
+rm -f "$STATE_FILE"
+printf 'grill=glm-5.4\ngrill.until=1000000000\nreview=glm-5.4\nreview.until=\n' > "$OLD_JUDGMENT"
+run_router
+expect_exit 0 'a first run with an expired old setting still shows the table'
+expect_state 'review=claude-glm/glm-5.4/high
+diagnosis=claude-glm/glm-5.4/high' 'an expired old setting does not reach the table; the other one does'
+expect_stderr_has 'grill=glm-5.4 已到期' 'the expired setting is named on stderr'
+expect_stderr_has '不迁入' 'the note says the expired setting was not carried'
+expect_stderr_has 'review=glm-5.4' 'the setting still in effect is reported as carried'
+expect_file_missing "$OLD_JUDGMENT" 'an old file whose settings were all dealt with is deleted, expired ones included'
+expect_route design claude opus high ''
+expect_route review claude-glm glm-5.4 high ''
+
+# A file in which every setting has expired carries nothing; the table is
+# written all the same, so that this was the first run.
+rm -f "$STATE_FILE"
+printf 'worker=glm-5.3\nworker.until=999\n' > "$OLD_WORKER"
+run_router --print research model
+expect_exit 0 'a first --print with only an expired old setting exits 0'
+expect_stdout glm-5.4 'an expired worker setting leaves research on its default'
+expect_state '' 'nothing is written into the table for an expired old setting'
+expect_stderr_has 'worker=glm-5.3 已到期' 'the expired worker setting is named on stderr'
+expect_stderr_has '已删除' 'the old file with only an expired setting is deleted'
+expect_file_missing "$OLD_WORKER" 'the old worker-model file is deleted once expired'
+
+# A model outside the catalog cannot be carried: its file stays as it was, one
+# line says so, and the other file is carried all the same.
+rm -f "$STATE_FILE"
+printf 'grill=glm-5.4\ngrill.until=\nreview=opus\nreview.until=\n' > "$OLD_JUDGMENT"
+printf 'worker=glm-5.3-flash\nworker.until=\n' > "$OLD_WORKER"
+run_router
+expect_exit 0 'a first run with a setting that cannot be carried exits 0'
+expect_state 'design=claude-glm/glm-5.4/high' 'only the setting inside the catalog reaches the table'
+expect_file_content 'worker=glm-5.3-flash
+worker.until=' 'the old file that could not be carried stays as it was' "$OLD_WORKER"
+expect_file_missing "$OLD_JUDGMENT" 'the other old file is migrated and deleted all the same'
+expect_stderr_has 'worker=glm-5.3-flash' 'the note names the setting that could not be carried'
+expect_stderr_has 'codex-glm/glm-5.3-flash 不在已验证目录' 'the note says the pair is outside the catalog'
+expect_stderr_has "$OLD_WORKER" 'the note names the file that stays'
+expect_stderr_matching 'glm-5.3-flash' 1 'one line on stderr says what could not be carried'
+expect_stderr_has 'grill=glm-5.4' 'the setting that could be carried is still reported'
+expect_route research codex-glm glm-5.4 high ''
+expect_route implementation claude-glm glm-5.4 high ''
+
+# A model the old switch never wrote cannot be carried either.
+rm -f "$STATE_FILE"
+printf 'review=gpt\nreview.until=\n' > "$OLD_JUDGMENT"
+run_router --print review model
+expect_stdout opus 'a setting with a model the old switch never wrote leaves the stage on its default'
+expect_state '' 'a model the old switch never wrote reaches nothing'
+expect_stderr_matching 'review=gpt' 1 'one line on stderr names the unknown model'
+expect_stderr_has '反推不出档案' 'the note says the profile cannot be read back off the model'
+expect_file_content 'review=gpt
+review.until=' 'the old file with the unknown model stays as it was' "$OLD_JUDGMENT"
+
+# --- migrate on request ---
+
+expect_stderr_lacks() {
+  text=$1
+  name=$2
+  if grep -Fq -- "$text" "$RUN_STDERR" 2>/dev/null; then
+    record FAIL "$name" "unexpected [$text] in stderr"
+  else
+    record PASS "$name"
+  fi
+}
+
+# $1 is a copy taken before the command ran.
+expect_file_unchanged() {
+  copy=$1
+  name=$2
+  file=$3
+  if cmp -s "$file" "$copy"; then
+    record PASS "$name"
+  else
+    record FAIL "$name" "file=$(tr '\n' ' ' < "$file" 2>/dev/null)"
+  fi
+}
+
+# With no old file and no table, migrate says so, writes the table (this is
+# the first run) and shows it.
+rm -f "$STATE_FILE" "$OLD_JUDGMENT" "$OLD_WORKER"
 run_router migrate
-expect_exit 64 'migrate exits 64 until #29 implements it'
-expect_stderr_has 'migrate' 'migrate says it is not available yet'
+expect_exit 0 'migrate with nothing to migrate exits 0'
+expect_stdout "$DEFAULT_TABLE" 'migrate prints the table as use does'
+expect_stderr_lines 1 'migrate with nothing to migrate says so in one line'
+expect_stderr_has '没有旧开关的状态文件可迁移' 'migrate says there is no old file to migrate'
+expect_state '' 'migrate on the first run writes the table'
+
+# With a table and nothing to carry, migrate leaves the file byte for byte.
+printf '\ndesign = claude-glm / glm-5.4 / low \n\n' > "$STATE_FILE"
+cp "$STATE_FILE" "$WORK/table-before.txt"
+run_router migrate
+expect_exit 0 'migrate with a table and nothing to carry exits 0'
+expect_stderr_lines 1 'migrate with a table and nothing to carry says only that there is nothing'
+expect_stdout_has '讨论（design）：claude-glm / glm-5.4 / low，不会自动切回' 'migrate shows the table it found'
+expect_file_unchanged "$WORK/table-before.txt" 'migrate with nothing to carry does not rewrite the table' "$STATE_FILE"
+
+# migrate carries what the first run carries, expiry included.
+rm -f "$STATE_FILE"
+printf 'grill=glm-5.4\ngrill.until=\nreview=glm-5.4\nreview.until=1795831200\n' > "$OLD_JUDGMENT"
+printf 'worker=glm-5.3\nworker.until=\n' > "$OLD_WORKER"
+run_router migrate
+expect_exit 0 'migrate carries the old switches over'
+expect_state 'design=claude-glm/glm-5.4/high
+research=codex-glm/glm-5.3/high
+implementation=codex-glm/glm-5.3/high
+review=claude-glm/glm-5.4/high@1795831200
+diagnosis=claude-glm/glm-5.4/high@1795831200' 'migrate writes the five stages as the first run does'
+expect_stdout_line_matches '审查（review）：claude-glm / glm-5.4 / high，到 .* 自动切回默认' 'migrate shows the table it wrote'
+expect_stderr_has '已迁移' 'migrate reports what it carried'
+expect_file_missing "$OLD_JUDGMENT" 'migrate deletes the old judgment-model file once migrated'
+expect_file_missing "$OLD_WORKER" 'migrate deletes the old worker-model file once migrated'
+
+# A stage the table already has in effect keeps its route: the old setting for
+# it is not carried, one line says so, and the rest is carried.
+rm -f "$STATE_FILE" "$OLD_JUDGMENT" "$OLD_WORKER"
+run_router use design=claude-flash/glm-5.4/medium review=claude/opus/medium
+printf 'grill=glm-5.4\ngrill.until=\nreview=glm-5.4\nreview.until=\n' > "$OLD_JUDGMENT"
+run_router migrate
+expect_exit 0 'migrate onto a table that already sets stages exits 0'
+expect_state 'design=claude-flash/glm-5.4/medium
+review=claude/opus/medium
+diagnosis=claude-glm/glm-5.4/high' 'migrate leaves the stages the table has in effect alone and carries the rest'
+expect_stderr_has '不迁入 design=claude-flash/glm-5.4/medium' 'the note names a stage kept and its route'
+expect_stderr_has '不迁入 review=claude/opus/medium' 'the note names the other stage kept'
+expect_stderr_has '路由表里已设过' 'the note says the stage was already set'
+expect_stderr_has 'diagnosis=claude-glm/glm-5.4/high' 'the stage that was free is carried'
+expect_stderr_lacks '警告' 'migrate does not warn when review and implementation stay on different models'
+expect_file_missing "$OLD_JUDGMENT" 'the old file goes once its settings were dealt with, skipped ones included'
+
+# An expired line is not in effect: the old setting takes that stage.
+rm -f "$STATE_FILE" "$OLD_JUDGMENT"
+run_router use design=claude-flash/glm-5.4/medium --until 2001-09-09T01:46:40Z
+printf 'grill=glm-5.4\ngrill.until=\nreview=opus\nreview.until=\n' > "$OLD_JUDGMENT"
+run_router migrate
+expect_exit 0 'migrate onto a table with an expired line exits 0'
+expect_state 'design=claude-glm/glm-5.4/high' 'migrate carries onto a stage whose line has expired'
+expect_stderr_lacks '不迁入' 'an expired line does not count as set'
+
+# A first run is the only run that migrates by itself: an old file that turns
+# up later waits for migrate.
+rm -f "$STATE_FILE" "$OLD_JUDGMENT" "$OLD_WORKER"
+run_router --print design model
+expect_stdout opus 'the first run answers --print with the value alone'
+expect_state '' 'the first run writes the table although there was nothing to carry'
+expect_stderr_empty 'the first run says nothing when there is no old file'
+printf 'grill=glm-5.4\ngrill.until=\nreview=glm-5.4\nreview.until=\n' > "$OLD_JUDGMENT"
+run_router --print design model
+expect_stdout opus 'a later run does not carry an old file that turned up after the first run'
+expect_stderr_empty 'a later run says nothing about the old file'
+expect_file_content 'grill=glm-5.4
+grill.until=
+review=glm-5.4
+review.until=' 'the old file that turned up later is left alone until migrate' "$OLD_JUDGMENT"
+run_router migrate
+expect_stdout_has '讨论（design）：claude-glm / glm-5.4 / high，不会自动切回' 'migrate carries the old file that turned up later'
+expect_file_missing "$OLD_JUDGMENT" 'migrate then deletes it'
+expect_stderr_has '警告' 'migrate warns once when review and implementation land on the same model'
+expect_stderr_matching '警告' 1 'the same-model warning is one line after migrate'
+
+# A file kept for a setting that cannot be carried stays through later runs,
+# quietly, and migrate says again what it cannot carry.
+rm -f "$STATE_FILE" "$OLD_JUDGMENT" "$OLD_WORKER"
+printf 'worker=glm-5.3-flash\nworker.until=\n' > "$OLD_WORKER"
+run_router --print research model
+expect_stdout glm-5.4 'a first run answers the default for a stage whose old setting cannot be carried'
+expect_stderr_matching 'glm-5.3-flash' 1 'the first run says once what it cannot carry'
+run_router --print research model
+expect_stderr_empty 'a later run does not repeat what cannot be carried'
+expect_file_content 'worker=glm-5.3-flash
+worker.until=' 'the file that cannot be carried is still there' "$OLD_WORKER"
+run_router migrate
+expect_exit 0 'migrate with only a setting it cannot carry exits 0'
+expect_stderr_matching 'glm-5.3-flash' 1 'migrate says again what it cannot carry'
+expect_file_content 'worker=glm-5.3-flash
+worker.until=' 'the file that cannot be carried survives migrate' "$OLD_WORKER"
+expect_state '' 'nothing was written for it'
+
+# migrate takes no argument.
+run_router migrate extra
+expect_exit 64 'migrate with an argument is a usage error'
+expect_stderr_has 'migrate takes no argument' 'the refusal says migrate takes no argument'
+
+# --- The first run is whichever command comes first ---
+
+# use on the first run migrates first and then sets its own stages.
+rm -f "$STATE_FILE" "$OLD_JUDGMENT" "$OLD_WORKER"
+printf 'grill=glm-5.4\ngrill.until=\nreview=glm-5.4\nreview.until=\n' > "$OLD_JUDGMENT"
+run_router use review=claude/opus/medium
+expect_exit 0 'use works on the first run'
+expect_state 'design=claude-glm/glm-5.4/high
+review=claude/opus/medium
+diagnosis=claude-glm/glm-5.4/high' 'use on the first run migrates first and then sets its own stage'
+expect_stdout_has '审查（review）：claude / opus / medium，不会自动切回' 'use prints the status of the table it left'
+expect_file_missing "$OLD_JUDGMENT" 'the old file is migrated and deleted before use sets its stage'
+
+# --launch on the first run starts the migrated route.
+rm -f "$STATE_FILE"
+printf 'worker=glm-5.3\nworker.until=\n' > "$OLD_WORKER"
+run_router --launch research headless
+expect_exit 0 '--launch works on the first run'
+expect_stdout 'codex
+exec
+-m
+glm-5.3
+-c
+model_reasoning_effort=high' '--launch on the first run starts the migrated route'
+expect_file_missing "$OLD_WORKER" 'the old worker-model file is migrated and deleted before --launch'
+
+# --help reads nothing and migrates nothing.
+rm -f "$STATE_FILE" "$OLD_JUDGMENT" "$OLD_WORKER"
+printf 'grill=glm-5.4\ngrill.until=\nreview=opus\nreview.until=\n' > "$OLD_JUDGMENT"
+run_router --help
+expect_exit 0 'help works on the first run'
+expect_stderr_empty 'help says nothing about migration'
+expect_file_missing "$STATE_FILE" 'help does not migrate: no table is written'
+expect_file_content 'grill=glm-5.4
+grill.until=
+review=opus
+review.until=' 'help leaves the old file alone' "$OLD_JUDGMENT"
+expect_stdout_has 'stage-route.sh migrate' 'help documents migrate'
+expect_stdout_has 'judgment-model' 'help names the old files it migrates'
+expect_stdout_has 'glm-5.3-flash' 'help names the setting that cannot be carried'
+
+# Settings on the old switches' default were no setting: nothing is carried,
+# and the files go like any other.
+rm -f "$STATE_FILE"
+printf 'grill=opus\ngrill.until=\nreview=opus\nreview.until=\n' > "$OLD_JUDGMENT"
+printf 'worker=glm-5.4\nworker.until=\n' > "$OLD_WORKER"
+run_router
+expect_stdout "$DEFAULT_TABLE" 'old settings on the old default carry nothing'
+expect_state '' 'a table migrated from old defaults is empty'
+expect_stderr_lacks '已迁移' 'nothing is reported as carried from old defaults'
+expect_stderr_has '已删除' 'the old files on their defaults are deleted all the same'
+
+# An old file is read as the old scripts read it: the <role>.model key, spaces
+# inside a line, CRLF endings and a line that is not a setting are all fine,
+# and a non-numeric until never expires.
+rm -f "$STATE_FILE" "$OLD_WORKER"
+printf '# a comment\r\n grill.model = glm-5.4 \r\ngrill.until=soon\r\nreview.model=glm-5.4\r\nreview.until=1795831200\r\n' > "$OLD_JUDGMENT"
+run_router --print design until
+expect_exit 0 'a first --print on an old file in the old format exits 0'
+expect_stdout '' 'a non-numeric old until carries no expiry'
+expect_state 'design=claude-glm/glm-5.4/high
+review=claude-glm/glm-5.4/high@1795831200
+diagnosis=claude-glm/glm-5.4/high@1795831200' 'the old format is read: .model key, spaces, CRLF, other lines ignored'
+
+# An unreadable clock never expires an old setting, as under the old switches.
+rm -f "$STATE_FILE"
+printf 'grill=glm-5.4\ngrill.until=1000000000\nreview=opus\nreview.until=\n' > "$OLD_JUDGMENT"
+export FAKE_DATE_FAIL=1
+run_router --print design model
+export FAKE_DATE_FAIL=
+expect_stdout glm-5.4 'an old setting whose expiry cannot be judged is carried'
+expect_state 'design=claude-glm/glm-5.4/high@1000000000' 'an old setting whose expiry cannot be judged keeps its expiry'
+
+# An old file that is not a readable regular file is left alone.
+rm -f "$STATE_FILE" "$OLD_JUDGMENT" "$OLD_WORKER"
+printf 'grill=glm-5.4\ngrill.until=\nreview=opus\nreview.until=\n' > "$OLD_JUDGMENT"
+chmod 000 "$OLD_JUDGMENT"
+mkdir "$OLD_WORKER"
+run_router --print design model
+expect_stdout opus 'an unreadable old file carries nothing'
+expect_stderr_empty 'an unreadable old file and one that is a directory are not reported'
+expect_state '' 'nothing is written for old files that cannot be read'
+chmod 644 "$OLD_JUDGMENT"
+expect_file_content 'grill=glm-5.4
+grill.until=
+review=opus
+review.until=' 'an unreadable old file is not deleted' "$OLD_JUDGMENT"
+if [ -d "$OLD_WORKER" ]; then
+  record PASS 'an old path that is a directory is not deleted'
+else
+  record FAIL 'an old path that is a directory is not deleted'
+fi
+rmdir "$OLD_WORKER"
+rm -f "$OLD_JUDGMENT"
+
+# When the table cannot be written, nothing is lost: a read still answers, the
+# old files stay, and migrate exits 65.
+rm -f "$STATE_FILE"
+printf 'grill=glm-5.4\ngrill.until=\nreview=opus\nreview.until=\n' > "$OLD_JUDGMENT"
+chmod 555 "$WORK/state"
+run_router --print design model
+expect_exit 0 'a first --print still answers when the table cannot be written'
+expect_stdout opus 'a first --print answers from the table on disk, which is none, when it cannot be written'
+expect_stderr_has '迁移没有写入' 'the failed migration is reported'
+expect_file_content 'grill=glm-5.4
+grill.until=
+review=opus
+review.until=' 'the old file stays when the table cannot be written' "$OLD_JUDGMENT"
+run_router migrate
+expect_exit 65 'migrate exits 65 when the table cannot be written'
+expect_stderr_has '迁移没有写入' 'migrate reports the table it could not write'
+expect_file_content 'grill=glm-5.4
+grill.until=
+review=opus
+review.until=' 'the old file stays when migrate cannot write the table' "$OLD_JUDGMENT"
+chmod 755 "$WORK/state"
+run_router --print design model
+expect_stdout glm-5.4 'the next run migrates once the table can be written'
+expect_file_missing "$OLD_JUDGMENT" 'the old file goes once the migration is written'
+
+# A directory where the table should be is not a first run, and migrate cannot
+# write into it: it exits 65 and the old files stay.
+rm -f "$STATE_FILE" "$OLD_JUDGMENT"
+printf 'grill=glm-5.4\ngrill.until=\nreview=opus\nreview.until=\n' > "$OLD_JUDGMENT"
+mkdir "$STATE_FILE"
+run_router --print design model
+expect_stdout opus 'a directory where the table should be still reads as the default, with no first run'
+expect_stderr_empty 'a directory where the table should be triggers no migration'
+run_router migrate
+expect_exit 65 'migrate exits 65 when a directory sits where the table should be'
+expect_stderr_has '迁移没有写入' 'migrate reports that it could not write the table'
+expect_file_content 'grill=glm-5.4
+grill.until=
+review=opus
+review.until=' 'the old file stays when a directory sits where the table should be' "$OLD_JUDGMENT"
+if [ -z "$(ls -A "$STATE_FILE")" ]; then
+  record PASS 'nothing is moved into the directory'
+else
+  record FAIL 'nothing is moved into the directory' "inside=$(ls -A "$STATE_FILE")"
+fi
+rmdir "$STATE_FILE"
+
+# The old files are looked up next to the table, so a relocated table never
+# reaches the files next to the default one.
+mkdir -p "$WORK/other"
+printf 'grill=glm-5.4\ngrill.until=\nreview=opus\nreview.until=\n' > "$WORK/other/judgment-model"
+printf 'review=glm-5.4\nreview.until=\n' > "$OLD_JUDGMENT"
+rm -f "$STATE_FILE" "$OTHER_FILE"
+ISS_STAGE_ROUTE_FILE=$OTHER_FILE "$ROUTER" --print design model > "$RUN_STDOUT" 2> "$RUN_STDERR"
+RUN_EXIT=$?
+expect_stdout glm-5.4 'a relocated table migrates from the old files next to it'
+expect_file_missing "$WORK/other/judgment-model" 'the old file next to the relocated table is migrated and deleted'
+expect_file_content 'review=glm-5.4
+review.until=' 'the old file next to the default table is not touched' "$OLD_JUDGMENT"
+expect_stderr_has 'judgment-model' 'the note names the old file that was migrated'
+rm -f "$OLD_JUDGMENT" "$OTHER_FILE"
 
 # The user-facing command is the grill-router skill.
 # The skill text checks all read the same file.
@@ -727,6 +1166,16 @@ expect_skill_has '认不出' 'the skill has a rule for words it cannot recognise
 expect_skill_has '退出码 64' 'the skill relays usage errors'
 expect_skill_has '正在跑的会话' 'the skill says running sessions are not affected'
 expect_skill_has '不会自动切回' 'the skill reminds how to switch back'
+expect_skill_has 'stage-route.sh migrate' 'the skill shows the migrate command'
+expect_skill_has '迁移旧开关' 'the skill has the words for migrating the old switches'
+expect_skill_has 'judgment-model' 'the skill names the old switch whose settings migrate'
+expect_skill_has 'worker-model' 'the skill names the other old switch'
+expect_skill_has 'glm-5.3-flash' 'the skill names the setting that cannot be carried'
+expect_skill_has '不覆盖' 'the skill says a stage already set in the table is not overwritten'
+expect_skill_has '不要自己' 'the skill forbids touching the old files itself'
+expect_skill_has '第一次运行' 'the skill says the first run migrates by itself'
+expect_skill_has '迁移' 'the skill relays the migration notes'
+expect_skill_has '退出码 65' 'the skill relays the exit code of a migrate that could not write'
 if sed -n '1p' "$SKILL" 2>/dev/null | grep -qx -- '---' &&
   sed -n '2p' "$SKILL" 2>/dev/null | grep -qx 'name: grill-router' &&
   sed -n '4p' "$SKILL" 2>/dev/null | grep -qx 'disable-model-invocation: true' &&

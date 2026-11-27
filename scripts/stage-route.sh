@@ -3,7 +3,9 @@
 # profile, model and reasoning effort each of the six stages runs on, with an
 # optional expiry. It replaces the two older switches, scripts/judgment-model.sh
 # and scripts/worker-model.sh, and coexists with them until every reader has
-# moved here (issues #32, #33, #34) and the old scripts are deleted (#38).
+# moved here (issues #32, #33, #34) and the old scripts are deleted (#38). The
+# settings those switches leave in effect are carried into this table on the
+# first run (see "Migration" below), so an upgrade loses nothing in use.
 #
 # A change takes effect at the stage's next dispatch or next new session. A
 # session or worker that is already executing is never switched mid-call.
@@ -22,7 +24,7 @@
 #                    [--until <time> | --for <duration>]
 #   stage-route.sh --print <stage> [profile|model|effort|until]
 #   stage-route.sh --launch <stage> <interactive|headless>
-#   stage-route.sh migrate                       (reserved for #29)
+#   stage-route.sh migrate                       carry the two old switches over
 #
 #   use sets every stage it names and leaves the others alone. The value is the
 #   whole route, e.g. `use review=claude-glm/glm-5.4/medium`; setting a stage
@@ -108,6 +110,43 @@
 # default: profile, model and effort always have a value (orchestration has no
 # effort in the table, see exit code 66).
 #
+# Migration. The two old switches keep their settings in judgment-model and
+# worker-model, next to this table (in ~/.claude/state/; a relocated table
+# looks next to itself, so a test never reaches the user's real files). The
+# run that finds no table yet carries them over before anything else but
+# --help: show, use, --print and --launch alike, so the first dispatch script
+# to call --print does it, not only /grill-router. `migrate` does the same on
+# request. Neither runs the old scripts; both only read the two files, in the
+# form the old scripts wrote them (`<role>.model` is also accepted for the
+# first line of each pair):
+#   grill=<opus|glm-5.4>, grill.until=<epoch>     design
+#   review=<opus|glm-5.4>, review.until=<epoch>   review and diagnosis
+#   worker=<glm-5.4|glm-5.3|glm-5.3-flash>,
+#   worker.until=<epoch>                          research and implementation
+# A setting in effect (until empty, or later than now) lands as
+# <profile>/<model>/high with its expiry as it was: the old switches had no
+# effort, so it is high. The profile is read back off the switch and the
+# model, glm-5.4 under judgment-model having run on claude-glm and the worker
+# models on codex-glm. What does not land:
+#   expired                ignored
+#   the old default        opus for grill and review, glm-5.4 for worker: no
+#                          setting was made, nothing is carried
+#   outside the catalog    codex-glm/glm-5.3-flash for research and
+#                          implementation today: the old file stays as it is
+#                          and everything else in the round is carried all the
+#                          same
+#   a stage the table
+#   already has in effect   (migrate only) keeps its route; an expired line or
+#                          one outside the catalog is not in effect
+# An old file whose every setting was dealt with is deleted. Each of these is
+# one line on stderr, and nothing goes to stdout: --print stays safe inside
+# $(...). The first run (whichever command it is, migrate included) writes
+# the table even when nothing was carried, which is what makes it the first
+# run only once; if the table cannot be written then, the old files stay and
+# the next run tries again. migrate on a table that is already there rewrites
+# it only when it carried something, prints the table as use does, and exits
+# 65 when the table cannot be written.
+#
 # Exit codes:
 #   0  done
 #   64 bad usage: an unknown stage, field, profile or form; a combination outside
@@ -140,6 +179,20 @@ claude-flash/glm-5.4 design
 codex-glm/glm-5.4 research implementation
 codex-glm/glm-5.3 research implementation
 claude-flash/glm-5.3-flash orchestration'
+
+# Migration (see the header). The settings of each old switch file and the
+# stages they map onto: <role> <the role's default model> <stages>. A role on
+# its default model was no setting under the old switch and carries nothing.
+OLD_JUDGMENT_ROLES='grill opus design
+review opus review diagnosis'
+OLD_WORKER_ROLES='worker glm-5.4 research implementation'
+
+# The Launcher profile each old model ran on, by the switch that named it:
+# <file> <model> <profile>. A pair the catalog does not list for a stage cannot
+# be carried onto it.
+OLD_PROFILES='judgment-model glm-5.4 claude-glm
+worker-model glm-5.3 codex-glm
+worker-model glm-5.3-flash codex-glm'
 
 die() {
   echo "stage-route: $*" >&2
@@ -418,20 +471,37 @@ launch_command() {
   esac
 }
 
-# Replaces the table with the lines printed by its argument.
+# Replaces the table with the lines printed by its argument. Returns 1, after
+# one line on stderr, when it cannot; the caller decides whether that is fatal.
 write_table() {
   local directory temporary
+  # mv into a directory would succeed and lose the table inside it.
+  [ ! -d "$STATE_FILE" ] || { echo "stage-route: cannot replace $STATE_FILE: it is a directory" >&2; return 1; }
   directory=$(dirname "$STATE_FILE")
-  mkdir -p "$directory" 2>/dev/null || cannot_write "cannot create $directory"
-  temporary=$(mktemp "$STATE_FILE.XXXXXX") || cannot_write "cannot write next to $STATE_FILE"
+  mkdir -p "$directory" 2>/dev/null || { echo "stage-route: cannot create $directory" >&2; return 1; }
+  temporary=$(mktemp "$STATE_FILE.XXXXXX") || { echo "stage-route: cannot write next to $STATE_FILE" >&2; return 1; }
   printf '%s' "$1" > "$temporary" || {
     rm -f "$temporary"
-    cannot_write "cannot write $temporary"
+    echo "stage-route: cannot write $temporary" >&2
+    return 1
   }
   mv -f "$temporary" "$STATE_FILE" || {
     rm -f "$temporary"
-    cannot_write "cannot replace $STATE_FILE"
+    echo "stage-route: cannot replace $STATE_FILE" >&2
+    return 1
   }
+}
+
+# Prints the table's lines from the R_ variables, one per stage that has a
+# line, in stage order; call after read_table.
+stored_lines() {
+  local stage profile model effort until lines=
+  for stage in $STAGES; do
+    [ "$stage" != "$LOCKED" ] || continue
+    eval "profile=\$R_${stage}_PROFILE; model=\$R_${stage}_MODEL; effort=\$R_${stage}_EFFORT; until=\$R_${stage}_UNTIL"
+    [ -z "$profile" ] || lines="${lines:+$lines$'\n'}$stage=$profile/$model/$effort${until:+@$until}"
+  done
+  printf '%s' "$lines"
 }
 
 # Prints the duration in seconds, or fails when it is not a sum of d/h/m/s.
@@ -461,7 +531,7 @@ epoch_of() {
 # use: every stage the command names takes the route given, the others keep
 # their line as it is.
 use_routes() {
-  local stage profile model effort value route named= lines= until= expiry= limit= given=0 seconds now off_default=0
+  local stage profile model effort value route named= until= expiry= limit= given=0 seconds now off_default=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --until|--for)
@@ -524,30 +594,26 @@ use_routes() {
       ;;
   esac
   load_table
-  for stage in $STAGES; do
-    [ "$stage" != "$LOCKED" ] || continue
-    case " $named " in
-      *" $stage "*)
-        eval "profile=\$N_${stage}_PROFILE; model=\$N_${stage}_MODEL; effort=\$N_${stage}_EFFORT"
-        until=$expiry
-        [ "$profile/$model/$effort" != "$(default_route "$stage")" ] || { profile=; until=; }
-        eval "E_${stage}_UNTIL=\$until"
-        ;;
-      *)
-        eval "profile=\$R_${stage}_PROFILE; model=\$R_${stage}_MODEL; effort=\$R_${stage}_EFFORT; until=\$R_${stage}_UNTIL"
-        ;;
-    esac
-    [ -z "$profile" ] || lines="${lines:+$lines$'\n'}$stage=$profile/$model/$effort${until:+@$until}"
+  for stage in $named; do
+    eval "profile=\$N_${stage}_PROFILE; model=\$N_${stage}_MODEL; effort=\$N_${stage}_EFFORT"
+    until=$expiry
+    # A stage set to its default leaves the table, expiry and all.
+    [ "$profile/$model/$effort" != "$(default_route "$stage")" ] || { profile=; model=; effort=; until=; }
+    eval "R_${stage}_PROFILE=\$profile; R_${stage}_MODEL=\$model; R_${stage}_EFFORT=\$effort; R_${stage}_UNTIL=\$until"
   done
-  write_table "$lines"
+  write_table "$(stored_lines)" || exit 65
   # The status is read back from the file just written, so it says exactly what
   # the next dispatch will see; the second read stays quiet about lines this
   # run already reported.
   READ_QUIET=1
   load_table
   show_status
-  # The same model reviewing what it wrote is no change of reviewer. Said once
-  # per command, never a refusal.
+  warn_same_model
+}
+
+# The same model reviewing what it wrote is no change of reviewer. Said once
+# per command that sets routes, never a refusal; call after resolve_table.
+warn_same_model() {
   if [ "$E_review_MODEL" = "$E_implementation_MODEL" ]; then
     echo "stage-route: 警告：审查（review）和实现（implementation）现在是同一个模型 ${E_review_MODEL}，等于没有换模型审查；不拦，下一次派发生效" >&2
   fi
@@ -586,6 +652,193 @@ uppercase_field() {
   esac
 }
 
+# Prints a stage's effective route as <profile>/<model>/<effort>; call after
+# resolve_table.
+effective_route() {
+  eval "printf '%s/%s/%s' \"\$E_${1}_PROFILE\" \"\$E_${1}_MODEL\" \"\$E_${1}_EFFORT\""
+}
+
+# --- Migration ---
+
+# Reads an old switch file into OLD_<role>_MODEL and OLD_<role>_UNTIL for each
+# role named after it, the way the old scripts read it themselves: `key=value`
+# lines with the whitespace taken out, `<role>` or `<role>.model` for the model
+# and `<role>.until` for the expiry, any other line ignored. Fails when the file
+# is missing or cannot be read, leaving the variables empty.
+read_old_file() {
+  local file=$1 role key value
+  shift
+  for role in "$@"; do
+    eval "OLD_${role}_MODEL=; OLD_${role}_UNTIL="
+  done
+  [ -f "$file" ] && [ -r "$file" ] || return 1
+  while IFS='=' read -r key value || [ -n "$key" ]; do
+    key=$(printf '%s' "$key" | tr -d '[:space:]')
+    value=$(printf '%s' "$value" | tr -d '[:space:]')
+    role=${key%%.*}
+    case " $* " in
+      *" $role "*) ;;
+      *) continue ;;
+    esac
+    case "$key" in
+      "$role") eval "OLD_${role}_MODEL=\$value" ;;
+      "$role.model") eval "OLD_${role}_MODEL=\$value" ;;
+      "$role.until") eval "OLD_${role}_UNTIL=\$value" ;;
+    esac
+  done < "$file" 2>/dev/null
+  return 0
+}
+
+# Succeeds when an old setting's expiry has passed, judged as the old switches
+# judged it: an empty or non-numeric until never expires, nor does an
+# unreadable clock.
+old_setting_expired() {
+  case "$1" in ''|*[!0-9]*) return 1 ;; esac
+  [ -n "$NOW" ] && [ "$1" -le "$NOW" ]
+}
+
+# Prints the Launcher profile the model $2 ran on under the old switch file
+# $1, or nothing for a model that switch never wrote.
+old_profile() {
+  local file model profile
+  while read -r file model profile; do
+    if [ "$file" = "$1" ] && [ "$model" = "$2" ]; then
+      printf '%s' "$profile"
+      return 0
+    fi
+  done <<< "$OLD_PROFILES"
+}
+
+# Succeeds when the table gives the stage a route that is in effect: a line
+# that is neither expired nor outside the catalog; call after resolve_table.
+stage_in_effect() {
+  local profile reason
+  eval "profile=\$R_${1}_PROFILE; reason=\$E_${1}_REASON"
+  [ -n "$profile" ] && [ -z "$reason" ]
+}
+
+# Collects a line for stderr. The notes are held back until the table is
+# written, so that nothing is reported that did not happen.
+MIGRATE_NOTES=
+
+note() {
+  MIGRATE_NOTES="${MIGRATE_NOTES:+$MIGRATE_NOTES$'\n'}stage-route: $*"
+}
+
+# Carries the settings of one old file, already read by read_old_file, into the
+# R_ variables: $1 the file's name for the notes, $2 its path, $3 its roles as
+# listed in OLD_*_ROLES. Sets MIGRATED when a line was added. Returns 1 when a
+# setting could not be carried and the file has to stay. A variable is braced
+# wherever a CJK character follows it: bash 3.2 reads the bytes of such a
+# character as part of the name.
+carry_old_file() {
+  local name=$1 path=$2 role default_model stages profile model until
+  local stage carried failed skipped route keep=0
+  while read -r role default_model stages; do
+    eval "model=\$OLD_${role}_MODEL; until=\$OLD_${role}_UNTIL"
+    [ -n "$model" ] || continue
+    if old_setting_expired "$until"; then
+      note "旧开关 $name 的 $role=$model 已到期，不迁入"
+      continue
+    fi
+    # Only a number is an expiry; the old switches read anything else as none.
+    case "$until" in ''|*[!0-9]*) until= ;; esac
+    [ "$model" != "$default_model" ] || continue
+    profile=$(old_profile "$name" "$model")
+    carried= failed= skipped=
+    for stage in $stages; do
+      if [ -z "$profile" ] || ! is_verified "$profile" "$model" "$stage"; then
+        failed="${failed:+${failed}、}$stage"
+      elif stage_in_effect "$stage"; then
+        skipped="${skipped:+${skipped}、}$stage=$(effective_route "$stage")"
+      else
+        route=$profile/$model/high
+        [ "$route" != "$(default_route "$stage")" ] || continue
+        eval "R_${stage}_PROFILE=\$profile; R_${stage}_MODEL=\$model; R_${stage}_EFFORT=high; R_${stage}_UNTIL=\$until"
+        MIGRATED=1
+        carried="${carried:+${carried}、}$stage=$route${until:+@$until}"
+      fi
+    done
+    if [ -n "$failed" ]; then
+      keep=1
+      if [ -n "$profile" ]; then
+        note "旧开关 $name 的 $role=$model 迁不进 ${failed}：$profile/$model 不在已验证目录，旧文件 $path 保留"
+      else
+        note "旧开关 $name 的 $role=$model 迁不进 ${failed}：旧开关没写过这个模型，反推不出档案，旧文件 $path 保留"
+      fi
+    fi
+    [ -z "$skipped" ] || note "旧开关 $name 的 $role=$model 不迁入 ${skipped}：路由表里已设过"
+    [ -z "$carried" ] || note "已迁移：旧开关 $name 的 $role=$model → $carried"
+  done <<< "$3"
+  [ "$keep" -eq 0 ] || return 1
+}
+
+# Deletes an old file whose every setting was dealt with, and notes it.
+remove_old_file() {
+  if rm -f "$1" 2>/dev/null; then
+    note "旧开关状态文件 $1 已删除"
+  else
+    note "旧开关状态文件 $1 删不掉，请手动删除"
+  fi
+}
+
+# Carries the two old switches into the table by the rules in the header. $1 is
+# `first` for the run that finds no table yet and `explicit` for the migrate
+# command. An old file is deleted only once the table holds what was carried
+# from it.
+migrate_routes() {
+  local mode=$1 judgment_file worker_file found=0 judgment_done=0 worker_done=0 table_missing=0
+  MIGRATED=0
+  MIGRATE_NOTES=
+  [ -e "$STATE_FILE" ] || table_missing=1
+  load_table
+  judgment_file=$(dirname "$STATE_FILE")/judgment-model
+  worker_file=$(dirname "$STATE_FILE")/worker-model
+  if read_old_file "$judgment_file" grill review; then
+    found=1
+    carry_old_file judgment-model "$judgment_file" "$OLD_JUDGMENT_ROLES" && judgment_done=1
+  fi
+  if read_old_file "$worker_file" worker; then
+    found=1
+    carry_old_file worker-model "$worker_file" "$OLD_WORKER_ROLES" && worker_done=1
+  fi
+  # A missing table is written even empty: that is what makes this the first
+  # run only once. A table that is there is rewritten only when a line was
+  # carried onto it.
+  if [ "$table_missing" -eq 1 ] || [ "$MIGRATED" -eq 1 ]; then
+    if ! write_table "$(stored_lines)"; then
+      if [ "$mode" = first ]; then
+        echo "stage-route: 迁移没有写入 ${STATE_FILE}，旧开关文件原样保留，下一次运行再迁移" >&2
+        return 0
+      fi
+      echo "stage-route: 迁移没有写入 ${STATE_FILE}，旧开关文件原样保留" >&2
+      exit 65
+    fi
+  fi
+  [ "$judgment_done" -eq 0 ] || remove_old_file "$judgment_file"
+  [ "$worker_done" -eq 0 ] || remove_old_file "$worker_file"
+  if [ "$mode" = explicit ] && [ "$found" -eq 0 ]; then
+    note "没有旧开关的状态文件可迁移（${judgment_file}、${worker_file}）"
+  fi
+  [ -z "$MIGRATE_NOTES" ] || printf '%s\n' "$MIGRATE_NOTES" >&2
+  if [ "$mode" = explicit ]; then
+    # The lines this run carried are its own; a line it already reported is
+    # not reported again.
+    READ_QUIET=1
+    load_table
+    show_status
+    warn_same_model
+  fi
+}
+
+# The run that finds no table yet carries the old switches over before anything
+# else (see "Migration" in the header). Help reads nothing; migrate does it by
+# itself, whatever the table.
+case "${1:-}" in
+  -h|--help|migrate) ;;
+  *) [ -e "$STATE_FILE" ] || migrate_routes first ;;
+esac
+
 case "${1:-}" in
   '') load_table; show_status ;;
   -h|--help) show_help ;;
@@ -617,7 +870,8 @@ case "${1:-}" in
     use_routes "$@"
     ;;
   migrate)
-    die "migrate is not available yet: it arrives with issue #29; until then scripts/judgment-model.sh and scripts/worker-model.sh keep working on their own"
+    [ $# -eq 1 ] || die "migrate takes no argument: it reads the old switches' files next to the table"
+    migrate_routes explicit
     ;;
   -*) die "unknown argument: $1" ;;
   *=*) die "a route is set with use: stage-route.sh use $1" ;;
