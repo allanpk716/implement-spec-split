@@ -666,9 +666,9 @@ ROUTE_STAGE=
 ROUTE_VALUE=
 route_read() {
   # Reads one field of ROUTE_STAGE's route into ROUTE_VALUE from ROUTE_TABLE: the
-  # dispatch's own table, or a file that does not exist for the stage's default route (a
-  # missing table reads as the default). The table's hints go to $2. `until` may be
-  # empty; every other field must have a value.
+  # dispatch's own table, or /dev/null for the stage's default route (a table without a
+  # line reads as the default). The table's hints go to $2. `until` may be empty; every
+  # other field must have a value.
   local field=$1
   ROUTE_VALUE=$(ISS_STAGE_ROUTE_FILE="$ROUTE_TABLE" "$STAGE_ROUTE" --print "$ROUTE_STAGE" "$field" 2>"$2") ||
     die "$STAGE_ROUTE --print $ROUTE_STAGE $field exited $? for $ROUTE_TABLE; not starting codex without a route"
@@ -694,8 +694,10 @@ resolve_stage_route() {
   route_read model /dev/null; ROUTE_MODEL=$ROUTE_VALUE
   route_read effort /dev/null; ROUTE_EFFORT=$ROUTE_VALUE
   route_read until /dev/null; ROUTE_UNTIL=$ROUTE_VALUE
-  # A table file that is never written holds no line: every stage reads as its default.
-  ROUTE_TABLE="$RUN_DIR/no-stage-route"
+  # /dev/null is a table that is there but holds no line, so every stage reads as its
+  # default; a path that does not exist would make stage-route.sh run its first-run
+  # migration and write a table there.
+  ROUTE_TABLE=/dev/null
   route_read profile /dev/null; default_route=$ROUTE_VALUE
   route_read model /dev/null; default_model=$ROUTE_VALUE
   route_read effort /dev/null; default_effort=$ROUTE_VALUE

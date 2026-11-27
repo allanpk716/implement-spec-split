@@ -11,8 +11,9 @@
 #
 # The model under test follows the Stage route table rules (ADR 0004):
 #   1. --model given: that model is tested, and the table is kept out of the test
-#      (ISS_STAGE_ROUTE_FILE points at no file), so the explicit value is what codex gets:
-#      a route off the default would override it.
+#      (ISS_STAGE_ROUTE_FILE points at /dev/null, a table with no line: every stage on
+#      its default), so the explicit value is what codex gets: a route off the default
+#      would override it.
 #   2. no --model: the model is the implementation stage's effective route
 #      (stage-route.sh --print implementation model) and the table is not isolated, so
 #      step 0's L1 preflight tests what a worker really runs on.
@@ -40,7 +41,7 @@ case "${ONLY:-all}" in L1|V1|V2|V3|all) ;; *) echo "--only must be L1, V1, V2, o
 ROOT="$HOME/.cache/implement-spec-split-selftest-codex/$(date +%Y%m%d-%H%M%S)-$$"
 if $GOT_MODEL; then
   # Rule 1: test the explicit model, isolated from the machine's real route table.
-  export ISS_STAGE_ROUTE_FILE="$ROOT/no-stage-route"
+  export ISS_STAGE_ROUTE_FILE=/dev/null
 else
   # Rule 2: no --model tests the implementation stage's effective model. The route is
   # defined only in stage-route.sh; an empty answer must not become `--model ""`.
@@ -161,7 +162,7 @@ command = "unsafe"
 EOF
   export CODEX_WORKER_HOME CODEX_WORKER_CODEX="$FAKE" CODEX_WORKER_SKIP_PREFLIGHT=1 CODEX_WORKER_POLL=1
   # Rule 3: every V1 case but the route cases below runs with the route table isolated.
-  export ISS_STAGE_ROUTE_FILE="$ROOT/no-stage-route"
+  export ISS_STAGE_ROUTE_FILE=/dev/null
   export FAKE_CODEX_PID_LOG="$ROOT/fake-pids.log"
   export FAKE_CODEX_HOME_LOG="$ROOT/fake-codex-homes.log"
   BRIEF="$ROOT/brief.md"
@@ -673,9 +674,10 @@ EOF
   FAKE_ROUTE="$ROUTE_DIR/fake-stage-route.sh"
   cat > "$FAKE_ROUTE" <<EOF
 #!/usr/bin/env bash
-# Stands in for scripts/stage-route.sh: answers from FAKE_ROUTE_MODE while the table
-# file exists, and defers to the real script otherwise (the wrapper reads the default
-# route from a table file that does not exist).
+# Stands in for scripts/stage-route.sh: answers from FAKE_ROUTE_MODE for the dispatch's
+# own table, and defers to the real script for the default route (the wrapper reads it
+# from /dev/null) and for a table file that does not exist.
+case "\$ISS_STAGE_ROUTE_FILE" in /dev/null) exec "$HERE/stage-route.sh" "\$@" ;; esac
 [ -e "\$ISS_STAGE_ROUTE_FILE" ] || exec "$HERE/stage-route.sh" "\$@"
 case "\${FAKE_ROUTE_MODE:-}" in
   empty) exit 0 ;;
@@ -718,7 +720,7 @@ EOF
   # model is what codex gets even on a machine whose route is off the default; without
   # --model the wrapper takes the route from the table file the caller named.
   printf 'implementation=codex-glm/glm-5.3/medium\n' > "$ROUTE_DIR/outer.table"
-  route_run rule1 "$ROOT/no-stage-route" - --model glm-5.3
+  route_run rule1 /dev/null - --model glm-5.3
   RO=$ROUTE_EXIT
   check "rule 1: an explicit --model is isolated from a routed machine (exit $RO)" test "$RO" -eq 0 -a "$(ran_model rule1)" = glm-5.3 -a "$(ran_effort rule1)" = high -a "$(notice_lines '阶段路由生效' "$ROUTE_DIR/rule1.err")" = 0
   route_run rule2 "$ROUTE_DIR/outer.table" -
@@ -732,7 +734,7 @@ EOF
   CALLER_STAGE_ROUTE_FILE=__unset__; use_caller_route_file
   check "L1 drops the isolation when the caller set no table file" test "${ISS_STAGE_ROUTE_FILE+set}" != set
   CALLER_STAGE_ROUTE_FILE=$SAVED_CALLER_FILE
-  export ISS_STAGE_ROUTE_FILE="$ROOT/no-stage-route"
+  export ISS_STAGE_ROUTE_FILE=/dev/null
 
   # A Resume keeps the first segment's model, effort and profile and prints no route
   # line, even when the table has since moved to another route; state saved before the
@@ -781,7 +783,7 @@ fi
 if [ -z "$ONLY" ] || [ "$ONLY" = V2 ]; then
   echo "V2 real codex + mock provider"
   # Rule 3: V2 passes --model "$MODEL" explicitly and stays isolated from the real table.
-  export ISS_STAGE_ROUTE_FILE="$ROOT/no-stage-route"
+  export ISS_STAGE_ROUTE_FILE=/dev/null
   V2_HOME="$ROOT/v2-home"; write_config "$V2_HOME" "http://127.0.0.1:1/v1"
   V2_WORKER_HOME="$V2_HOME"
   if command -v cygpath >/dev/null 2>&1; then V2_WORKER_HOME=$(cygpath -m "$V2_HOME"); fi
@@ -829,7 +831,7 @@ fi
 if [ -z "$ONLY" ] || [ "$ONLY" = V3 ]; then
   echo "V3 real GLM integration (not run by agent)"
   # Rule 3: V3 always passes --model "$MODEL" explicitly, so it is isolated from the real table like rule 1.
-  export ISS_STAGE_ROUTE_FILE="$ROOT/no-stage-route"
+  export ISS_STAGE_ROUTE_FILE=/dev/null
   TDD_SKILL=$(ls -d "$HOME"/.claude/plugins/cache/mattpocock/mattpocock-skills/*/skills/*/tdd 2>/dev/null | sort -V | tail -1)
   [ -n "$TDD_SKILL" ] || TDD_SKILL="$HOME/.agents/skills/tdd"
   [ -d "$TDD_SKILL" ] || fail "tdd skill not found"
