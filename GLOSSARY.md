@@ -9,11 +9,11 @@ The main agent running in the user's Claude Code session; it owns the task graph
 _Avoid_: coordinator, lead
 
 **In-session subagent**:
-A subagent spawned by the Orchestrator inside the Claude Code session, with its model chosen by name (sonnet, opus, haiku, fable).
+A subagent spawned by the Orchestrator inside the Claude Code session, with its model chosen by name (sonnet, opus, haiku, fable). Since 规格 #26 only the code-review subagents of a non-flash session are In-session subagents: the implementing roles are always Orca workers dispatched by `scripts/stage-dispatch.sh`.
 _Avoid_: native subagent, Claude subagent
 
 **External worker**:
-A separate coding-agent CLI process, a Worker harness running a Worker model, that the Orchestrator launches outside the session to do one role's work; it shares no conversation with the Orchestrator.
+A separate coding-agent CLI process, a Worker harness running a Worker model, that the Orchestrator launches outside the session to do one role's work; it shares no conversation with the Orchestrator. Since 规格 #26 that is the headless executor (`scripts/codex-worker.sh`: the step-2 exploration and find-next's research, decision and drafting workers); the implementing roles are not External workers but Orca workers the dispatch module starts on the 实现 route.
 _Avoid_: delegate, GLM subagent, headless subagent
 
 **Worker harness**:
@@ -21,15 +21,15 @@ The coding-agent CLI program an External worker runs in (codex or pi); it decide
 _Avoid_: codex worker / pi worker when the model matters, agent CLI
 
 **Worker model**:
-The model an External worker's harness talks to (GLM-5.4 today); chosen separately from the harness, so one harness can serve different models and one model can run under different harnesses. On the codex path the Stage routes decide it: a dispatch with `--read-only` runs the research route, any other dispatch the implementation route, both set by the user with `/grill-router`. Every fresh `codex-worker.sh` run reads the table, so a Run that is already executing changes model at its next dispatch, while a Resume keeps the model and effort of its first segment. v1 routes the codex path only: pi and the `agent` backend keep their own model choice.
+The model an External worker's harness talks to (GLM-5.4 today); chosen separately from the harness, so one harness can serve different models and one model can run under different harnesses. On the codex path the Stage routes decide it: a dispatch with `--read-only` runs the research route, any other dispatch the implementation route, both set by the user with `/grill-router`. Every fresh `codex-worker.sh` run reads the table, so a Run that is already executing changes model at its next dispatch, while a Resume keeps the model and effort of its first segment. An Orca worker's model is the 实现 route the dispatch module read when it started, recorded in its Sidecar.
 _Avoid_: implement model, backend model
 
 **Implement backend**:
-Which kind of executor runs the implementing roles for a run: an In-session subagent on the agent model (`agent` backend; `sonnet` is the legacy alias for it with the model pinned to sonnet), or an External worker on GLM (`codex` / `pi`).
-_Avoid_: implement model (GLM is not a model the session can select)
+Retired (规格 #26): which kind of executor ran the implementing roles for a run — an In-session subagent (`agent`) or an External worker (`codex` / `pi`) — chosen with `IMPLEMENT_BACKEND` and `--impl`. The implementing roles are now always Orca workers dispatched by `scripts/stage-dispatch.sh` on the 实现 Stage route, whatever the session.
+_Avoid_: using it for the Stage route (the route chooses the launcher, model and effort, never whether a role is dispatched)
 
 **Agent model**:
-The model the `agent` backend passes explicitly on every Agent call, selected per run with `--agent-model <sonnet|opus|haiku|fable>`; defaults to `IMPLEMENT_MODEL` (sonnet). In a GLM proxy environment an explicit `opus` may actually run GLM-5.4.
+Retired (规格 #26, with `--agent-model`): the model the former `agent` backend passed on every Agent call. The model an implementing role runs on is its Stage route, read by the dispatch module at each dispatch.
 _Avoid_: implement model (ambiguous with harness-specific settings such as `GLM_MODEL`)
 
 **Implementing roles**:
@@ -189,7 +189,7 @@ The Tickets whose blockers are all merged, so they can be started now; of the Ti
 _Avoid_: using it for a map's open decisions (that is the Map frontier)
 
 **Time limit**:
-The longest an External worker may run in one go, set per role; reaching it stops the worker but keeps its conversation so it can be Resumed.
+The longest an External worker may run in one go, set per role; reaching it stops the worker but keeps its conversation so it can be Resumed. An Orca worker (a dispatched implementing role) has none: nothing wraps it, and its liveness is Orca's.
 _Avoid_: timeout (ambiguous with Idle timeout and with a worker's own command timeouts)
 
 **Idle timeout**:
@@ -201,7 +201,7 @@ Continuing a stopped External worker's own conversation, in the same worktree, i
 _Avoid_: retry (that is the wrapper re-sending after an API error), re-brief
 
 **Brief**:
-The self-contained task description handed to an External worker, made of context pointers rather than copied content.
+The self-contained task description handed to a worker (an Orca worker the dispatch module started, or the headless executor), made of products rather than of process: a Ticket's Brief carries the Spec issue's content, the exploration notes that concern it and the Ticket issue's content, never the Spec session's reasoning; for a fix role, the review report; for a conflict role, the conflicted paths. A Ticket's Brief is drafted from `find-next/templates/brief-implement.md`.
 _Avoid_: prompt
 
 **Lean start (精简启动)**:

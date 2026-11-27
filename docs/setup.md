@@ -14,8 +14,8 @@ English: [setup.en.md](setup.en.md)
 
 ```
 阶段 0 公共基础
- ├─ 阶段 1 spec 并行实现（--impl sonnet 即可用）
- │     └─ 加上阶段 2 后可用 --impl codex
+ ├─ 阶段 1 spec 并行实现（票的实现是 Orca worker，按「实现」路由派发）
+ │     └─ 加上阶段 2 后，规格开始前的 headless 探索也可用
  └─ 阶段 2 codex 后端
        └─ 阶段 3 全局分工（CLAUDE.md 规则 + delegate-guard / unattended-ask-guard / unattended-stop-guard / land-push-guard hook）
 ```
@@ -45,7 +45,7 @@ English: [setup.en.md](setup.en.md)
 | 平台 | Windows 11 + Git Bash：完整验证（含真实 GLM 端到端）。Ubuntu 24.04：无模型的自测全部通过（`selftest-codex.sh --only V1`、hook 测试、doctor 测试），但没有用真实 codex 和 GLM 跑过。macOS 27（系统自带 bash 3.2）：完整验证（codex-cli 0.164.0，含真实 GLM 端到端 V3，2026-10-24）。已知限制：备用的 pi 后端（`pi-worker.sh`）在 Linux/macOS 上杀进程时只杀根进程，在这两个平台上请用 codex 后端 |
 | codex-cli | 0.163.0、0.164.0。其他版本未验证，换版本后先跑 `scripts/selftest-codex.sh --only V1` |
 | 模型 | GLM-5.4，经本地代理 |
-| 阶段 1 | `--impl codex`、`--impl pi` 在试验仓库端到端验证过；`--impl sonnet` 未验证 |
+| 阶段 1 | 旧后端（`codex`、`pi` wrapper）在试验仓库端到端验证过；规格 #26 起票的实现经 Orca worker 派发，这条路径等真机冒烟票验证 |
 | find-next | 本地 markdown 跟踪器：脚本单测通过，`--worker codex` 在真实仓库实跑过一次（2026-11-01）。GitHub 路径和 `--worker pi` 未实跑 |
 | 阶段 3 | hook 单元测试和本机冒烟测试通过；真实会话里的规则遵守情况仍在验收 |
 | 安装命令 | 插件安装命令按本机已装的 marketplace 名（`mattpocock`）给出；`npm i -g @openai/codex` 是 codex 官方的安装方式。都没有在全新机器上重走一遍 |
@@ -76,7 +76,7 @@ ls ~/.claude/skills/implement-spec-split/{SKILL.md,scripts,templates,hooks}
 
 ## 阶段 1：按 spec 并行实现（`/implement-spec-split`）
 
-这是 [Matt Pocock 的 `implement-spec`](https://github.com/mattpocock/skills) 的改版：编排逻辑相同，但每个角色单独指定模型。实现角色（exploration / implementer / merger / fix）用便宜模型，两个 code review 子代理固定用 Opus。
+这是 [Matt Pocock 的 `implement-spec`](https://github.com/mattpocock/skills) 的改版：编排逻辑相同，但每个角色单独指定模型。实现角色（exploration / implementer / fix；合并先走脚本、冲突才起 worker）用便宜模型，全部由规格会话经 `scripts/stage-dispatch.sh` 派成 Orca worker，启动器、模型和思考强度来自阶段路由表；两个 code review 子代理固定用 Opus。
 
 **安装**
 
@@ -89,6 +89,8 @@ ls ~/.claude/skills/implement-spec-split/{SKILL.md,scripts,templates,hooks}
 
 2. 在**目标项目**里运行一次 `/setup-matt-pocock-skills`，生成 `docs/agents/issue-tracker.md`（告诉技能 issue 在哪里、怎么查）。
 
+3. Orca，以及「实现」路由指向的启动器在 PATH 上（默认 `claude-glm`，见 `scripts/stage-route.sh`；改路由用 `/grill-router`）：票的实现 worker 是 Orca worker，没有 Orca 派不出去。规格开始前的 headless 探索走 `codex-worker.sh`，需要阶段 2。
+
 **准备 spec**
 
 spec 是一个 GitHub 父 issue，它的子 issue 就是 ticket，ticket 之间的依赖决定哪些能并行。可以用 mattpocock 的规划类技能生成，也可以手工建。
@@ -96,19 +98,16 @@ spec 是一个 GitHub 父 issue，它的子 issue 就是 ticket，ticket 之间�
 **使用**
 
 ```text
-/implement-spec-split                      # 不带参数：自动列出未完成的 spec 让你选
+/implement-spec-split                      # 不带参数：提示先跑 /find-next --batch，由它给出顺序和命令
 /implement-spec-split #12                  # 指定 spec
-/implement-spec-split #12                  # 不带 --impl：官方订阅会话用 codex，GLM 会话（DELEGATE_GUARD_DISABLE=1）用 agent
-/implement-spec-split #12 --impl sonnet    # 实现角色用 Sonnet 子代理
-/implement-spec-split #12 --impl codex     # 实现角色用 codex worker（需要阶段 2）
-/implement-spec-split #12 --impl codex --parallel 3
+/implement-spec-split #12 --parallel 3     # 本 Run 同时最多派 3 个票的 worker
 ```
 
 **并行是怎么发生的**
 
-- 技能先读 spec 和 ticket，建任务图。依赖都已满足的 ticket 组成"前沿"，前沿里的 ticket 各开一个 worktree 并行实现。
-- 合并串行进行：同一时间只有一个 merger 把完成的 ticket 合进集成分支。
-- 并发上限：`--impl sonnet` 时由 Claude 子代理并发；`--impl codex/pi` 时由 `GLM_MAX_PARALLEL` 控制（默认 2），可以用 `--parallel n` 只对本次运行覆盖。建议 2–3，闲时最多 4：智谱高峰期会限流，任何一个 worker 撞上 429 都会让整个运行停下来问你。
+- 技能先读 spec 和 ticket，建任务图。依赖都已满足的 ticket 组成"前沿"，前沿里的 ticket 各在自己的子工作区（挂在规格工作区下）并行实现。
+- 合并串行进行，而且先由脚本合：`scripts/merge-ticket.sh` 没冲突就直接合进集成分支并跑测试，有冲突才派一个 worker 解。
+- 并发上限：`GLM_MAX_PARALLEL` 控制（默认 2），可以用 `--parallel n` 只对本次运行覆盖。建议 2–3，闲时最多 4：智谱高峰期会限流，任何一个 worker 撞上 429 都会让整个运行停下来问你。
 - 每个 ticket 完成后都要经过验证关口和两个 Opus 审查（Standards、Spec）才算完。
 - 多个 spec 同时做：在同一个 clone 的多个 Orca worktree 里各开一个会话、各跑一次技能。不带 spec 编号时，技能会列出候选和状态（空闲 / 进行中 / 疑似中断），由你选；领到后会把会话的 worktree 关联到该 issue、标签页改名为 `spec-<n> …`。选一个"进行中"或"疑似中断"的 spec 就是接着做上次没做完的（Recovery）。`--parallel` 按每个运行计，几个运行的 worker 数相加，共享 GLM 额度。
 
@@ -116,7 +115,7 @@ spec 是一个 GitHub 父 issue，它的子 issue 就是 ticket，ticket 之间�
 
 **验证**
 
-在一个有 spec 的试验仓库里跑一次 `/implement-spec-split <spec> --impl sonnet`，观察：前沿里的 ticket 并行开工，合并串行，最后有两份审查报告。
+在一个有 spec 的试验仓库里跑一次 `/implement-spec-split <spec>`，观察：前沿里的 ticket 各在自己的子工作区并行开工，合并串行且先走脚本，最后有两份审查报告。（规格 #26 的派发路径以规格 #26 的真机冒烟票为准。）
 
 ---
 
@@ -156,7 +155,7 @@ ln -s ~/.claude/skills/implement-spec-split/grill-router ~/.claude/skills/grill-
 
 ## 阶段 2：codex 后端（GLM）
 
-让 `codex exec` 用 GLM 干活。阶段 1 的 `--impl codex` 和阶段 3 的日常分工都靠它。
+让 `codex exec` 用 GLM 干活。阶段 1 的 headless 探索和阶段 3 的日常分工都靠它。
 
 **安装**
 
@@ -408,7 +407,7 @@ node -e 'console.log(JSON.stringify({tool_name:"Write",tool_input:{file_path:"C:
 
 **规格会话与 Opus review**
 
-- flash 主会话里跑 `/find-next` 时，launch-wave 用 OpenClaude 槽位（即 flash）开规格会话，默认 `--impl agent`（glm-5.4 子代理实现），一份规格从头跑到尾不占订阅额度。
+- flash 主会话里跑 `/find-next` 时，launch-wave 用 OpenClaude 槽位（即 flash）开规格会话；票的实现由规格会话经 `scripts/stage-dispatch.sh` 按「实现」路由派成 Orca worker（默认 claude-glm / glm-5.4），一份规格从头跑到尾不占订阅额度。
 - flash 规格会话里的代码审核、草稿审读、连续失败诊断不落在会话内（GLM 会话里的 "opus" 子代理实际是 GLM，等于假审核），一律调 `scripts/opus-review.sh` 出会话执行（按「审查」「诊断」阶段的路由，默认官方 Opus）：`--kind code`（审分支/固定点）、`--kind draft`（审规格/票草稿）、`--kind diagnose`（诊断失败、建议续跑/改 Brief/停车）。任何非 0 退出码都停车并说明（含义见脚本头注释），不自动重试、不降级 GLM、不会话内自审。
 
 **阶段路由表：每个阶段用哪个启动器、模型和思考强度（`/grill-router`）**
@@ -492,4 +491,4 @@ $S migrate                                                              # 迁移
 | hook 不拦截 | 检查 `settings.json` 里的路径；新开会话；用上面的冒烟命令测 hook 本身；看是否有未过期的 `allow-direct-edit` |
 | 某个项目里 Claude 不按分工走 | 项目级 CLAUDE.md 可能写了相反的规则，优先看项目规则是否冲突 |
 | 调查任务返回 `violation`（退出码 8） | worker 在只读调查里改了文件。看 `status.json` 的 `changed_paths` 和 `git diff`，由你决定怎么还原 |
-| `--impl codex` 运行中途停下问你 | 有 worker 撞上限流；降低 `--parallel`，或换到闲时 |
+| 规格运行中途因额度 / 429 停车 | 有 worker 撞上限流；降低 `--parallel`，或换到闲时 |
