@@ -12,7 +12,7 @@ supersedes: ADR-0002, ADR-0003
 - **执行方式由阶段固定，用户只选档案**：编排、讨论、实现由 Orca orchestration 托管（交互式 worker，生命周期交给 Orca）；调研起草、审查、诊断是 headless（`claude -p` / `codex exec`），保留退出码和只读违规检查的契约。
 - **Launcher profile 由本项目维护，不用 Orca agent id**：Orca 不能注册自定义 agent（stablyai/orca#2284），`openclaude` 槽位不接受 `--model`。GLM 启动器走「`orca terminal create --command "<launcher> --model … --effort …"` + `worker-start --terminal`」收编（`docs/orca-smoke-2026-11-27.md` 实测通过，含嵌套 worktree）。
 - **工作区是三层树**：主会话 → 规格（`new-child`）→ 票（`new-child`，`--base-branch spec-<n>`），侧栏可折叠；票合入后、规格落地后释放并删除工作区，停车的保留。`progress-tab.sh` 退役。merger 改为脚本，冲突才起 worker。
-- **规格会话入口靠脚本验证结果**：`worker-start` 把 Orca 的 preamble 放在 spec 前，`/implement-spec-split N` 由模型自己调用 Skill（实测 flash 会照做，但不是机制保证）。`launch-wave` 在限定时间内检查认领记录是否出现，没出现就停掉重派一次，再失败停车。
+- **规格会话入口靠脚本验证结果**：`worker-start` 把 Orca 的 preamble 放在 spec 前，`/implement-spec-split N` 由模型自己调用 Skill（实测 flash 会照做，但不是机制保证）。`launch-wave` 在限定时间内检查认领记录是否出现；没出现时先读终端，确认没开始（如 prompt 还没提交）才停掉、`--retry-of` 重派一次，看到在动就延长等待，判断不了就停车（社区实测「已投递」不等于已开始、启动可慢到 13 分钟，沉默时盲目重派会把副作用做两遍）。
 - **flash 主会话及其拉起的流程里，五个非编排阶段一律经路由表派发**，会话内用 Agent 工具做实现或审查由 hook 拦。CC 原生订阅会话保持现状（会话内子代理照用），只有经 `codex-worker.sh` 派出的 worker 受路由表影响：带 `--read-only` 读「调研起草」，否则读「实现」。
 
 ## Considered Options
@@ -30,9 +30,11 @@ supersedes: ADR-0002, ADR-0003
 - 默认路由（与上线前实际行为一致，只有实现阶段换了执行方式）：编排 claude-flash（锁定）；讨论 claude-official / opus / high；调研起草 codex-glm / glm-5.4 / high；实现 claude-glm / glm-5.4 / high；审查 claude-official / opus / high；诊断同审查。
 - **实现和 fix 用 `--bare`**：实测同一极小任务 18.6K → 1.2K input tokens。`--bare` 不加载 CLAUDE.md、技能、插件和 hooks，规则改由 `--append-system-prompt-file` 注入一份精简规则，需要的 MCP 用 `--mcp-config` 加。实现 worker 身上原来靠 hook 的硬拦降为提示词，由合入前的脚本门（新提交、工作区干净、测试通过）和审查兜底。`--bare` 在 TUI + 收编下是否可用是规格的第一个验证项。
 - 每层会话只带上一层的产物：规格 issue → 票的 Brief（含规格开始前一次 headless 探索写下的相关文件和调用关系），不带上一层的过程。
-- 走收编路线时 Orca 的 Dispatch 不记模型（`launch.effective.model` 为 null），模型由派发脚本写进落地报告、停车报告和最终报告，三份报告都打印完整路由表。
-- Orca 的 orchestration 标 Experimental，API 两周十余次变更：所有 Orca 调用收敛到一个 `lib-orca.sh`。派发必须显式 `--run`，否则 Orca 按继承的终端环境认定协调者，消息会投到错误的会话（实测踩到）。
-- `orca worktree rm` 删父工作区会把子工作区变孤儿：清理顺序必须先票后规格。`new-child` 默认保留工作区，`worker-release` 不删工作区，脚本要显式删除。
-- 主会话或协调终端关闭不影响下层；新终端 `orca orchestration run-use --id <run>` 接管。keeper.sh 与 Orca 心跳并行一段时间再定去留（Orca 官方不许凭 `unverifiable` 自动恢复）。
+- 走收编路线时 Orca 的 Dispatch 不记模型（`launch.effective.model` 为 null），模型由派发脚本写进落地报告、停车报告和最终报告，三份报告都打印完整路由表，并读 worker 终端状态行核对实际模型，与路由表不符时警告、不拦。
+- Orca 的 orchestration 标 Experimental，API 两周十余次变更：所有 Orca 调用收敛到一个 `lib-orca.sh`。派发必须显式 `--run`，否则 Orca 按继承的终端环境认定协调者，消息会投到错误的会话（实测踩到）。`lib-orca.sh` 不缓存终端 handle（stablyai/orca#9163，handle 会漂移）、脚本里不用不带 `--peek` 的 `check`（会取走协调会话的消息）、不轮询。
+- `orca worktree rm` 删父工作区会把子工作区变孤儿：清理顺序必须先票后规格。`new-child` 默认保留工作区，`worker-release` 不删工作区，脚本要显式删除，并带 `--delete-branch`（新版默认留分支）；另有定期清理扫掉无主的遗弃工作区（社区有攒到 173GB 的实例）。
+- 主会话或协调终端关闭不影响下层；新终端 `orca orchestration run-use --id <run>` 接管。keeper.sh 与 Orca 心跳并行一段时间再定去留：判活以 `worker-list` 的 liveness 为第一证据、mtime 为第二证据；「确认失败」与「无法确认」分开，无法确认的不自动重派（Orca 官方不许凭 `unverifiable` 自动恢复）。
+- 自定义 agent 官方已明确不做任意 CLI（stablyai/orca#14952 closed not planned），启动档案是长期方案；PR #47662（基于已安装 agent 的自定义 agent）合入后可把档案迁过去，路由表不动。
+- 社区调研（`20261127_1354_社区如何用Orca做多Agent工作流_调研.md`）确认整体形状是主流，路由表、嵌套工作区、合并互斥、全天判活四点社区没有成体系的做法；`whutlichao/orchestra-auto` 与本项目同构但用平级工作区，只借鉴其把关与收尾规则，不整体采用。版本号、CHANGELOG 这类共享计数器在并行票间的冲突不在本 ADR 范围，单独记票。
 - `pi-worker.sh` 退役；`codex-worker.sh` 保留为 headless 执行器。
 - ADR 0001 的「会话不许自己换模型」仍成立：换模型只能是用户经 `/grill-router` 改表，脚本执行。`/grill-router` 是 `disable-model-invocation`，与旧开关一样是软约束。
