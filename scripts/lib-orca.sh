@@ -13,9 +13,9 @@
 #   worktree       orca_repo_list, orca_worktree_list, orca_worktree_create,
 #                  orca_worktree_create_child, orca_worktree_rm
 #   terminal       orca_terminal_list, orca_terminal_by_pane,
-#                  orca_terminal_create, orca_terminal_switch, orca_terminal_wait,
-#                  orca_terminal_close, orca_terminal_send, orca_terminal_read,
-#                  orca_terminal_show
+#                  orca_terminal_by_handle, orca_terminal_create,
+#                  orca_terminal_switch, orca_terminal_wait, orca_terminal_close,
+#                  orca_terminal_send, orca_terminal_read, orca_terminal_show
 #   orchestration  orca_orchestration_run_create, orca_orchestration_send,
 #                  orca_orchestration_check, orca_orchestration_worker_start,
 #                  orca_orchestration_worker_dispatch, orca_orchestration_worker_stop,
@@ -220,6 +220,32 @@ orca_terminal_by_pane() { # tabId leafId -> handle<TAB>worktreePath
       String(item.tabId || "") === process.env.TAB_ID &&
       String(item.leafId || "") === process.env.LEAF_ID);
     if (!terminal || !terminal.handle) process.exit(1);
+    process.stdout.write(String(terminal.handle) + "\t" + String(terminal.worktreePath || "") + "\n");
+  '
+}
+
+# The same receipt for a terminal named by its handle: the one every terminal
+# Orca opens inherits as ORCA_TERMINAL_HANDLE, which is all a session Orca
+# dispatched or adopted may carry (规格 #26, US24: no ORCA_TAB_ID, no
+# ORCA_AGENT_PANE). Asked of Orca on every call, like by_pane; the handle is
+# never trusted to be current on its own.
+orca_terminal_by_handle() { # handle -> handle<TAB>worktreePath
+  # Exits 1 when Orca has no such terminal (or says ok:false), 2 when the
+  # receipt cannot be parsed, 3 when Orca itself fails (its stderr is passed
+  # through).
+  local show
+  orca_require_value "${1:-}" 'a terminal handle' terminal_by_handle
+  show=$(orca_terminal_show "$1") || return 3
+  printf '%s' "$show" | node -e '
+    const fs = require("fs");
+    let value;
+    try { value = JSON.parse(fs.readFileSync(0, "utf8")); }
+    catch { process.exit(2); }
+    const result = value && typeof value === "object" ? value.result : null;
+    const terminal = result && typeof result === "object" ? result.terminal : null;
+    if (value && value.ok === false) process.exit(1);
+    if (!terminal || typeof terminal !== "object") process.exit(2);
+    if (!terminal.handle) process.exit(1);
     process.stdout.write(String(terminal.handle) + "\t" + String(terminal.worktreePath || "") + "\n");
   '
 }
