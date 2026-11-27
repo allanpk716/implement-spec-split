@@ -15,7 +15,7 @@ ADR 0002 给了判断模型一个用户开关；Worker model（GLOSSARY.md：Ext
 ## Consequences
 
 - **flash 与 ADR 0001 的证据有张力，要点名。** ADR 0001 Considered Options 第 1 条的原话：「flash 容易过度自信，小判断出错会在后续波次放大，省下的钱不够抵返工」（[ADR 0001](0001-cheap-orchestrator-default-deny.md)，MAINTAINING.md 的 flash 设计要点）。那条否决的是 flash 编排会话自己做判断；这里是 flash 当 External worker 写代码，判断仍归 review。但 flash 写代码 → fix 轮数上升（上限 3）→ Opus review 次数上升，而 Opus 额度正是 ADR 0002 的起因。review 若也切到 glm-5.4，就是 **flash 写、glm-5.4 审、无人值守自动拍板**，张力落到下一条。
-- **两个开关同时非默认时，无人值守 Run 照常自动落地，这是决定不是遗漏。** 两个开关各自是用户的明确决定（ADR 0002：「开关是用户的明确决定，不是系统自己降级」）。B（落地前停车，类别 `decision`）会在最需要它起作用的额度枯竭期把通宵批次全部停下，正违背 ADR 0002 和 MAINTAINING.md 第 29 条「可自动采纳的不停车」，还要多一处停车规则和 keeper 通知。C（脚本层拒绝「flash 写 + 非 Opus 审」）在 Opus 没额度时直接没得跑，且把两件独立的事耦死。可见性靠落地报告和最终报告同时写两个开关的状态。
+- **两个开关同时非默认时，无人值守 Run 照常自动落地，这是决定不是遗漏。** 两个开关各自是用户的明确决定（ADR 0002：「开关是用户的明确决定，不是系统自己降级」）。B（落地前停车，类别 `decision`）会在最需要它起作用的额度枯竭期把通宵批次全部停下，正违背 ADR 0002 和 MAINTAINING.md 第 29 条「可自动采纳的不停车」，还要多一处停车规则和 keeper 通知。C（脚本层拒绝「flash 写 + 非 Opus 审」）在 Opus 没额度时直接没得跑，且把两件独立的事耦死。可见性靠落地报告、停车报告（`### 现状` 下）和最终报告同时写两个开关的状态。
 - **一刀切**：读多判断少的活（调研、起草）也降档；flash 的 1M 上下文是试验值，find-next 带 `--mcp all` 的调研 worker 上下文压力最大；规格和票的草稿质量只靠主会话或 Opus review 兜底。
 - **环境未就绪就切 flash**：在用户做完 flash 的 L1 与目录项之前，每个 codex Run 两次失败后停车，一整批无人值守规格可能全停。
 - **中途切换没有预检**：step 0 的 L1 只覆盖切换之后新开的 Run。开关在派发时读取（`acquire_worker_slot` 之前），排队中的 worker 保留派发时的型号，复位后仍会按旧型号起跑一次。

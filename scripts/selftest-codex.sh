@@ -15,7 +15,8 @@
 #   2. no --model: the model is the switch's effective value (worker-model.sh --print) and
 #      the switch is not isolated, so step 0's L1 preflight tests what a worker really runs on.
 #   3. V1, V2 and V3 always keep the wrapper away from the real switch file; the V1 switch
-#      cases point ISS_WORKER_MODEL_FILE at a scratch file one call at a time.
+#      cases point ISS_WORKER_MODEL_FILE at a scratch file one call at a time. L1 restores
+#      the switch file rule 1 or 2 decided on, so a whole-suite run keeps that rule for L1.
 
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -44,6 +45,14 @@ else
   MODEL=$("$HERE/worker-model.sh" --print 2>/dev/null || true)
   [ -n "$MODEL" ] || { echo "worker-model.sh --print returned nothing" >&2; exit 64; }
 fi
+# The switch file as rule 1 or 2 left it. V1, V2 and V3 isolate themselves from the real
+# switch for their own duration; L1 follows rule 1/2 and restores this before it runs, so a
+# whole-suite run does not carry the V1/V2 isolation into L1.
+CALLER_WORKER_MODEL_FILE=${ISS_WORKER_MODEL_FILE-__unset__}
+use_caller_switch_file() {
+  if [ "$CALLER_WORKER_MODEL_FILE" = __unset__ ]; then unset ISS_WORKER_MODEL_FILE
+  else export ISS_WORKER_MODEL_FILE="$CALLER_WORKER_MODEL_FILE"; fi
+}
 mkdir -p "$ROOT"
 export ISS_STATE_DIR="$ROOT/worker-state"
 FAILS=0
@@ -523,9 +532,11 @@ EOF
   SWITCH_FILE="$SWITCH_DIR/worker-model"
   switch_run() {
     # <name> <switch file> <content: '-' leaves the file alone, '' removes it> [wrapper args]
+    # SWITCH_HOME overrides the worker home for one call; SWITCH_SCENARIO the fake codex scenario.
     local name="$1" file="$2" state="$3"; shift 3
     if [ "$state" = - ]; then :; elif [ -z "$state" ]; then rm -f "$file"; else printf '%s\n' "$state" > "$file"; fi
-    env ISS_WORKER_MODEL_FILE="$file" FAKE_CODEX_SCENARIO="${SWITCH_SCENARIO:-ok}" FAKE_CODEX_ARGS_LOG="$SWITCH_DIR/$name.args.jsonl" \
+    env ISS_WORKER_MODEL_FILE="$file" CODEX_WORKER_HOME="${SWITCH_HOME:-$CODEX_WORKER_HOME}" \
+      FAKE_CODEX_SCENARIO="${SWITCH_SCENARIO:-ok}" FAKE_CODEX_ARGS_LOG="$SWITCH_DIR/$name.args.jsonl" \
       "$WORKER" --cwd "$ROOT/v1" --brief "$BRIEF" --run-dir "$SWITCH_DIR/$name" --retries 0 --time-limit 120 --idle-timeout 20 "$@" \
       >"$SWITCH_DIR/$name.out" 2>"$SWITCH_DIR/$name.err"
     SWITCH_EXIT=$?
@@ -552,6 +563,24 @@ EOF
   SO=$SWITCH_EXIT
   check "switch with an expiry runs the switched model (exit $SO)" test "$SO" -eq 0 -a "$(switch_m override-until)" = glm-5.3
   check "switch line shows the expiry and the reset command" bash -c "grep -Eq '到期 [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} [+-][0-9]{2}:[0-9]{2}；复位 /worker-model use glm-5.4' '$SWITCH_DIR/override-until.err'"
+
+  # Dispatch-time catalog check (spec 4.2-10): the switch line names a switched model the
+  # worker home's catalog does not list, and says nothing about one it does list.
+  CATALOG_HOME="$SWITCH_DIR/catalog-home"; mkdir -p "$CATALOG_HOME/sessions"
+  printf 'model_catalog_json = "%s/models.json"\n\n[model_providers.custom]\nname = "custom"\nbase_url = "https://api.example.invalid/v1"\n' \
+    "$(codex_home_for_platform "$CATALOG_HOME")" > "$CATALOG_HOME/config.toml"
+  printf '{"models":[{"slug":"glm-5.4"},{"slug":"glm-5.3"}]}\n' > "$CATALOG_HOME/models.json"
+  SWITCH_HOME="$CATALOG_HOME"
+  switch_run catalog-missing "$SWITCH_FILE" $'worker=glm-5.3-flash\nworker.until='
+  SO=$SWITCH_EXIT
+  check "a switched model outside the worker catalog still runs (exit $SO)" test "$SO" -eq 0 -a "$(switch_m catalog-missing)" = glm-5.3-flash
+  check "switch line names a model outside the worker catalog" bash -c "test \"\$(grep -Fc 'Worker model 开关生效' '$SWITCH_DIR/catalog-missing.err')\" -eq 1 && grep -Fq '不在 worker 目录，L1 未验' '$SWITCH_DIR/catalog-missing.err'"
+  check "switch line puts the catalog note before the reset command" bash -c "grep -Fq '不在 worker 目录，L1 未验；复位 /worker-model use glm-5.4' '$SWITCH_DIR/catalog-missing.err'"
+  switch_run catalog-listed "$SWITCH_FILE" $'worker=glm-5.3\nworker.until='
+  SO=$SWITCH_EXIT
+  check "a switched model inside the worker catalog runs (exit $SO)" test "$SO" -eq 0 -a "$(switch_m catalog-listed)" = glm-5.3
+  check "switch line does not question a model inside the worker catalog" bash -c "test \"\$(grep -Fc 'Worker model 开关生效' '$SWITCH_DIR/catalog-listed.err')\" -eq 1 && ! grep -Fq '不在 worker 目录' '$SWITCH_DIR/catalog-listed.err'"
+  SWITCH_HOME=""
 
   # An expired switch, a broken file and an unknown model all mean the default again.
   switch_run expired "$SWITCH_FILE" $'worker=glm-5.3\nworker.until=1000000000'
@@ -596,16 +625,24 @@ EOF
   switch_run rule1 "$ROOT/no-worker-model" - --model glm-5.3
   SO=$SWITCH_EXIT
   check "rule 1: an explicit --model is isolated from a switched machine (exit $SO)" test "$SO" -eq 0 -a "$(switch_m rule1)" = glm-5.3 -a "$(switch_lines "$SWITCH_DIR/rule1.err")" = 0
-  # Rule 2: without --model the model under test is the switch's value and the wrapper reads the switch.
-  OUTER_MODEL=$(ISS_WORKER_MODEL_FILE="$SWITCH_DIR/outer.state" "$HERE/worker-model.sh" --print 2>/dev/null || true)
-  switch_run rule2a "$SWITCH_DIR/outer.state" - --model "$OUTER_MODEL"
+  # Rule 2: without --model and without isolation the wrapper can only take the model from
+  # the switch file; an isolation leaking in would show up here as the default.
+  switch_run rule2a "$SWITCH_DIR/outer.state" -
   SO=$SWITCH_EXIT
-  check "rule 2: without --model the switch's model is tested (exit $SO, print $OUTER_MODEL, -m $(switch_m rule2a))" test "$SO" -eq 0 -a "$OUTER_MODEL" = glm-5.3-flash -a "$(switch_m rule2a)" = glm-5.3-flash
+  check "rule 2: without --model the wrapper runs on the switched model (exit $SO, -m $(switch_m rule2a))" test "$SO" -eq 0 -a "$(switch_m rule2a)" = glm-5.3-flash -a "$(switch_lines "$SWITCH_DIR/rule2a.err")" = 1
   printf 'worker=glm-5.4\nworker.until=\n' > "$SWITCH_DIR/outer-default.state"
-  OUTER_MODEL=$(ISS_WORKER_MODEL_FILE="$SWITCH_DIR/outer-default.state" "$HERE/worker-model.sh" --print 2>/dev/null || true)
-  switch_run rule2b "$SWITCH_DIR/outer-default.state" - --model "$OUTER_MODEL"
+  switch_run rule2b "$SWITCH_DIR/outer-default.state" -
   SO=$SWITCH_EXIT
-  check "rule 2: a default switch tests the default (exit $SO, -m $(switch_m rule2b))" test "$SO" -eq 0 -a "$OUTER_MODEL" = glm-5.4 -a "$(switch_m rule2b)" = glm-5.4
+  check "rule 2: without --model a default switch runs on the default (exit $SO, -m $(switch_m rule2b))" test "$SO" -eq 0 -a "$(switch_m rule2b)" = glm-5.4 -a "$(switch_lines "$SWITCH_DIR/rule2b.err")" = 0
+  # A whole-suite run must not carry the V1/V2 isolation into L1: the L1 block restores the
+  # switch file rule 1 or 2 decided on at the entry.
+  SAVED_CALLER_FILE=$CALLER_WORKER_MODEL_FILE
+  CALLER_WORKER_MODEL_FILE="$SWITCH_DIR/outer.state"; use_caller_switch_file
+  check "L1 restores a caller's switch file" test "${ISS_WORKER_MODEL_FILE:-}" = "$SWITCH_DIR/outer.state"
+  CALLER_WORKER_MODEL_FILE=__unset__; use_caller_switch_file
+  check "L1 drops the isolation when the caller set no switch file" test "${ISS_WORKER_MODEL_FILE+set}" != set
+  CALLER_WORKER_MODEL_FILE=$SAVED_CALLER_FILE
+  export ISS_WORKER_MODEL_FILE="$ROOT/no-worker-model"
 
   # A Resume keeps the first segment's model and prints no switch line, even when the
   # switch has since moved to another model.
@@ -622,6 +659,12 @@ EOF
   check "resume under another switch value exit code (got $RR)" test "$RR" -eq 0
   check "resume keeps the first segment's model" test "$(switch_m resume)" = glm-5.3
   check "resume prints no switch line" test "$(switch_lines "$SWITCH_DIR/resume-resumed.err")" = 0
+
+  # An explicit empty --model never reaches codex as an empty -m.
+  "$WORKER" --cwd "$ROOT/v1" --brief "$BRIEF" --run-dir "$SWITCH_DIR/empty-model" --model "" --retries 0 --time-limit 120 --idle-timeout 20 >/dev/null 2>"$SWITCH_DIR/empty-model.err"
+  EM=$?
+  check "an explicit empty --model exits 64 without starting codex (got $EM)" bash -c "test $EM -eq 64 && ! test -e '$SWITCH_DIR/empty-model/fake-codex-args.jsonl'"
+  check "an explicit empty --model names the argument" grep -q -- '--model must not be empty' "$SWITCH_DIR/empty-model.err"
 
   # Rule 3: every other V1 case ran codex on $MODEL, whatever a machine's switch says.
   check "every existing V1 case ran codex on \$MODEL ($MODEL)" node -e '
@@ -686,6 +729,8 @@ fi
 
 if [ -z "$ONLY" ] || [ "$ONLY" = L1 ]; then
   echo "L1 real GLM (not run by agent)"
+  # L1 follows rule 1/2, not the V1/V2/V3 isolation: put back the switch file the entry decided on.
+  use_caller_switch_file
   mkdir -p "$ROOT/l1"; printf 'Reply with exactly the word: ok. Do not use any tools.\n' > "$ROOT/l1.brief"
   "$WORKER" --cwd "$ROOT/l1" --brief "$ROOT/l1.brief" --run-dir "$ROOT/l1-run" --model "$MODEL" --time-limit 120 --idle-timeout 30 --retries 0 >/dev/null
   [ $? -eq 0 ] && pass "codex answered on $MODEL" || fail "codex L1 failed"

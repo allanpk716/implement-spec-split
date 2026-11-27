@@ -774,6 +774,8 @@ else
   SEGMENTS=1; ATTEMPT=0
   CODEX_HOME_FOR_CODEX="$(winpath "$WORKER_HOME")"
   resolve_worker_model
+  # Never start codex with an empty -m: an explicit `--model ""` with the switch on the default.
+  [ -n "$MODEL" ] || die "--model must not be empty"
   write_state
   emit_worker_home_warning
 fi

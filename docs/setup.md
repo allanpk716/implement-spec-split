@@ -474,7 +474,7 @@ $S use glm-5.4                                           # 复位
 - 优先级：开关（非默认时）> 调用方显式传的 `--model` > 默认。开关生效期间 `--model` 会被覆盖，wrapper 会在 stderr 和运行目录的 `stderr.log` 里写一行 `Worker model 开关生效：…`（型号、被覆盖的 `--model`、到期时间、是否在 worker 模型目录里、复位命令），`status.json` 的 `model` 记实际用的型号。日常用法不要给 wrapper 传 `--model`。
 - `glm-5.3-flash` 还没有在 codex 路径上实证，也不在 `models.json` 模型目录里。切到它之前先验证：`scripts/selftest-codex.sh --only L1 --model glm-5.3-flash`；报错指向型号或目录时，在 `~/.codex/models.json` 补条目（`input_modalities: ["text"]`，`supported_reasoning_levels` 照 `glm-5.3`，`context_window` 暂按 1M），重跑 `scripts/setup-worker-home.sh`（直接改 `~/.codex-worker/models.json` 会被下次重跑覆盖；重跑前看一眼 `~/.codex/config.toml` 顶层的 `model_provider`，它会被原样复制进 worker home）。`/worker-model use glm-5.3-flash` 遇到目录里没有的型号只警告、不拦。L1 通过也只证明端点接受该型号，不证明 `high` 推理档和 1M 上下文可用。
 - 不管的：`--impl pi`、`--impl agent`（含 flash 环境默认的 agent 后端，子代理型号由启动器决定）、keeper、run-phase。flash 环境里只有显式 `--impl codex` 并带 `WORKER_ALLOW_FLASH=1` 的 Run 才经过 wrapper、才受开关影响。不调 `codex-worker.sh` 的机器（如 train3060）上开关是惰性的，那边不要装 `/worker-model` 软链。
-- 只由用户切：薄技能设了 `disable-model-invocation`，会话不能自己调它；这只是软约束（会话仍可经 Bash 跑脚本），和 `/judgment-model` 一样。两个开关同时非默认时，无人值守 Run 照常自动落地，落地报告和最终报告会同时写两个开关的状态。
+- 只由用户切：薄技能设了 `disable-model-invocation`，会话不能自己调它；这只是软约束（会话仍可经 Bash 跑脚本），和 `/judgment-model` 一样。两个开关同时非默认时，无人值守 Run 照常自动落地，落地报告、停车报告（`### 现状` 下）和最终报告会同时写两个开关的状态。
 
 **flash 的边界**
 

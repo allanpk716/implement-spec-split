@@ -226,12 +226,15 @@ This batch lands without the user, typically to run overnight: `launch-wave.sh` 
 
 ### 现状
 <what is already merged into spec-<n>, tests, branch, run dirs>
+<the two switch-state lines of "Report at the end" whenever either user switch (`/worker-model`, `/judgment-model`) is off its default>
 ```
 
 The two lines right after `## 停车报告` are mandatory and come before `### 需要你决定`:
 
 - `停车类别：quota|transient|decision|error|other`
 - `可恢复时间：<ISO 8601 含时区>|无`
+
+`### 现状` also carries the two switch-state lines of "Report at the end" whenever either user switch (`/worker-model`, `/judgment-model`) is off its default: a park is exactly when the user needs to know who wrote and who reviewed, and the two switches are off their defaults most often in the quota-tight periods that cause parks. They go under `### 现状`, so the first section the supervisor relays verbatim and the two machine-readable lines keeper reads are untouched.
 
 | 类别 | 场景 | 可恢复时间 |
 |---|---|---|
@@ -361,6 +364,6 @@ The reader is the user, who did not watch the Run and reads Chinese. Write the r
 
 `## 细节`:
 - Which backend and model ran each role (implement / merge / fix / review), and any role that ran on a different backend than configured, and why.
-- **Switch state**, whenever either user switch is off its default (`/worker-model`, `/judgment-model`; write both lines then, whichever one is off): the Worker model line is the set of distinct `status.json.model` values of this Run's workers — not the switch's current value, since a switch changed mid-Run makes them differ — or `不适用` for a Run on the `agent` backend or one that dispatched no worker; the Judgment model line is the model the reviews (and grill sessions, if any) actually ran on, read from the `判断模型：` first line of their findings files, or `不适用` for a Run that ran no review. The same two lines go into the `## 落地报告` and the `## 停车报告` of an unattended Run.
+- **Switch state**, whenever either user switch is off its default (`/worker-model`, `/judgment-model`; write both lines then, whichever one is off): the Worker model line is the set of distinct `status.json.model` values of this Run's workers — not the switch's current value, since a switch changed mid-Run makes them differ — or `不适用` for a Run on the `agent` backend or one that dispatched no worker; the Judgment model line is the model the reviews (and grill sessions, if any) actually ran on, read from the `判断模型：` first line of their findings files, or `不适用` for a Run that ran no review. The same two lines go into the `## 落地报告` and into the `### 现状` of a `## 停车报告` of an unattended Run.
 - For External workers: one line per run with ticket, status, segments (`status.json`; more than 1 means it was Resumed), duration and run directory; whether the run overlapped GLM peak hours.
 - The review findings per axis, and how they were resolved.

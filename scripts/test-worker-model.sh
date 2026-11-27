@@ -489,6 +489,7 @@ else
   record FAIL "codex-worker.sh reads the switch only in the fresh-run branch, before write_state" "$(cat "$WRAPPER_OUT")"
 fi
 expect_file_has 'worker-model.sh" --print default' 'codex-worker.sh asks the switch for the default instead of a literal' "$WRAPPER"
+expect_file_has '[ -n "$MODEL" ] || die "--model must not be empty"' 'codex-worker.sh refuses an empty model before starting codex' "$WRAPPER"
 if grep -Fq 'resolve_worker_home' "$WRAPPER" && grep -Eq '^\s*resolve_worker_model$' "$WRAPPER" && grep -Fq 'ISS_WORKER_MODEL' "$WRAPPER"; then
   record FAIL 'codex-worker.sh has no environment override for the switch'
 else
@@ -512,6 +513,11 @@ fi
 expect_file_has 'Usage: scripts/selftest-codex.sh [--model <id>]' 'the selftest usage line no longer names a default model' "$HERE/selftest-codex.sh"
 expect_file_has '1. --model given: that model is tested' 'the selftest header states rule 1' "$HERE/selftest-codex.sh"
 expect_file_has '2. no --model: the model is the switch' 'the selftest header states rule 2' "$HERE/selftest-codex.sh"
+if [ "$(grep -c '^[[:space:]]*use_caller_switch_file$' "$HERE/selftest-codex.sh")" -eq 1 ]; then
+  record PASS 'the selftest restores the caller switch file at one place, the L1 block'
+else
+  record FAIL 'the selftest restores the caller switch file at one place, the L1 block'
+fi
 
 # The user-facing command is the worker-model skill, symlinked like the others.
 SKILL=$ROOT/worker-model/SKILL.md
@@ -535,6 +541,11 @@ expect_file_has 'status.json.model' 'SKILL.md names status.json.model where a wo
 expect_file_has '/worker-model use glm-5.4' 'SKILL.md names the reset command' "$MAIN_SKILL"
 expect_file_has 'distinct `status.json.model` values' 'the SKILL.md report takes the Worker model from status.json.model' "$MAIN_SKILL"
 expect_file_has '不适用' 'the SKILL.md report writes not-applicable for the agent backend' "$MAIN_SKILL"
+expect_file_has 'into the `### 现状` of a `## 停车报告`' 'SKILL.md puts the switch-state lines into the parking report' "$MAIN_SKILL"
+expect_file_has '`### 现状` also carries the two switch-state lines' 'the parking report shape says where the switch-state lines go' "$MAIN_SKILL"
+expect_file_has '停车报告（`### 现状` 下）' 'MAINTAINING.md names the parking report among the reports that state both switches' "$ROOT/MAINTAINING.md"
+expect_file_has '停车报告（`### 现状` 下）' 'docs/setup.md names the parking report among the reports that state both switches' "$ROOT/docs/setup.md"
+expect_file_has 'the parking report (under `### 现状`)' 'docs/setup.en.md names the parking report among the reports that state both switches' "$ROOT/docs/setup.en.md"
 expect_file_lacks 'CODEX_MODEL' 'GLOSSARY.md no longer mentions CODEX_MODEL' "$ROOT/GLOSSARY.md"
 expect_file_has 'its own global switch' 'GLOSSARY.md gives the Judgment model its own switch' "$ROOT/GLOSSARY.md"
 expect_file_has '/worker-model' 'GLOSSARY.md points the Worker model at its switch' "$ROOT/GLOSSARY.md"
@@ -563,7 +574,7 @@ expect_file_has '模板是 v2' 'test-doctor.sh expects the template version in t
 ADR=$ROOT/docs/adr/0003-worker-model-hot-switch.md
 if [ -f "$ADR" ]; then record PASS 'ADR 0003 exists'; else record FAIL 'ADR 0003 exists'; fi
 for text in '--model' 'judgment-model.sh' 'agent 后端' 'lib-switch.sh' '--force-model' 'ISS_WORKER_MODEL' 'pi-worker.sh' 'coder-model' '停车' \
-  '照常自动落地' 'flash 容易过度自信' '软约束' '硬依赖' '未验证'; do
+  '照常自动落地' '停车报告（`### 现状` 下）' 'flash 容易过度自信' '软约束' '硬依赖' '未验证'; do
   expect_file_has "$text" "ADR 0003 records [$text]" "$ADR"
 done
 
