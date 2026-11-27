@@ -228,7 +228,7 @@ flash 模式下，本节所有原本由主会话审读或复核的结论都按�
       草稿只在运行目录，不在仓库内。不能调用 `/to-spec`、`/to-tickets` 本身；worker 直接读最新上游技能规则。
 
       flash 模式下，起草结果出现未决地图条目时按「flash 模式」一节改推荐 `/grill-map`。
-   4. **审稿（我做）**：读 `result.md`、`manifest.json`、`spec.md` 和执行票正文，检查实现决定都有出处且出处确实这么定了；`实现票：`、`地图：`两行正确；执行票是竖切、阻塞合理、跨组阻塞对得上；`blocked_by` 不挂还没有规格的实现票，该交接的写进 `handoffs`；`unresolved` 只留真正要用户拍板的事，每条带推荐答案；标题格式与仓库一致。用 `publish-batch.sh <全部 manifest.json>` 试运行核对计划。小问题直接改；大问题换新 Brief 重派那一组。
+   4. **审稿（我做）**：读 `result.md`、`manifest.json`、`spec.md` 和执行票正文，检查实现决定都有出处且出处确实这么定了；`实现票：`、`地图：`两行正确；执行票是竖切、阻塞合理、碰同一计数器的票已串行、跨组阻塞对得上；`blocked_by` 不挂还没有规格的实现票，该交接的写进 `handoffs`；`unresolved` 只留真正要用户拍板的事，每条带推荐答案；标题格式与仓库一致。用 `publish-batch.sh <全部 manifest.json>` 试运行核对计划。小问题直接改；大问题换新 Brief 重派那一组。
 
       flash 模式下，本段审稿按「flash 模式」一节并入当轮 Opus review。
 
@@ -298,7 +298,7 @@ flash 模式下，本节所有原本由主会话审读或复核的结论都按�
    <本技能目录>/scripts/launch-wave.sh --repo <owner/name> [--workers N] [--specs K] [--apart 224:239 …] [--impl agent --agent-model <model>] [--no-auto-land]
    ```
 
-   排序由 `pipeline-status.sh --order` 确定性计算：被依赖的先做 → 解锁下游多的先做 → 编号小的先做；完全被挡住的不进第 1 波；进行中的不排；中断的标「先恢复」；搁置执行票不算待实现，未关执行票全是搁置票的规格不进顺序或波次。我只补「改同一块代码」的 `--apart A:B` 判断，依据规格正文里的模块；拿不准不传。有 `--apart` 时按重跑后的结果为准。`--apply` 会把本次 workers/specs/apart（`agent` 后端时还包括后端与模型）写入 `~/.cache/implement-spec-split/launch/<owner>__<name>.json`，供合入后的 `--next-wave` 复用；开发顺序本身每次重算。没给 `--workers` 时脚本按第 6 步得到的答案传入；第 6 步也没问（已有 max-workers 文件）就不传，让脚本读状态文件或 max-workers 文件。
+   排序由 `pipeline-status.sh --order` 确定性计算：被依赖的先做 → 解锁下游多的先做 → 编号小的先做；完全被挡住的不进第 1 波；进行中的不排；中断的标「先恢复」；搁置执行票不算待实现，未关执行票全是搁置票的规格不进顺序或波次。我只补「改同一块代码」或「都改同一计数器」的 `--apart A:B` 判断，依据规格正文里的模块和起草 worker 在 `result.md` 里的共享计数器提示；拿不准不传。有 `--apart` 时按重跑后的结果为准。`--apply` 会把本次 workers/specs/apart（`agent` 后端时还包括后端与模型）写入 `~/.cache/implement-spec-split/launch/<owner>__<name>.json`，供合入后的 `--next-wave` 复用；开发顺序本身每次重算。没给 `--workers` 时脚本按第 6 步得到的答案传入；第 6 步也没问（已有 max-workers 文件）就不传，让脚本读状态文件或 max-workers 文件。
 
    `--worker agent` 时，试运行和 `--apply` 两次都要在 launch-wave.sh 后面追加 `--impl agent --agent-model <model>`（即第 1 波每条命令变成 `/implement-spec-split <n> --impl agent --agent-model <model> --parallel <P>`）。`--apply` 会把它写进启动状态，合入后的 `--next-wave --apply` 不带参数也会沿用；不给 `--worker agent` 时不追加任何后端参数，生成命令与现状逐字一致。
 
