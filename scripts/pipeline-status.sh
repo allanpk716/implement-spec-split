@@ -1544,8 +1544,8 @@ if (mode === 'order') {
   function inFlightApartFrom(number) {
     const held = [];
     for (const [left, right] of apartPairs) {
-      if (left === number && right !== number && inFlight.has(right)) held.push(right);
-      if (right === number && left !== number && inFlight.has(left)) held.push(left);
+      if (left === number && inFlight.has(right)) held.push(right);
+      if (right === number && inFlight.has(left)) held.push(left);
     }
     return [...new Set(held)].sort((a, b) => a - b);
   }
