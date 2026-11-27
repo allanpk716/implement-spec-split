@@ -570,6 +570,182 @@ call "$WORK/wait-timeout-none.out" orca_terminal_wait term_glm exit
 expect_exit 64 "terminal wait without a timeout exits 64: a wait always carries one"
 expect_empty_log "terminal wait without a timeout never starts Orca" "$ORCA_LOG"
 
+# --- spec session dispatch: the calls launch-wave makes (#26, ticket #40) -------
+# A Spec session is a child worktree of the main one (orca_worktree_create_child,
+# tested with the Ticket form below), and Orca starts the agent in it: a worker
+# is dispatched by worktree path and agent slot (never --terminal, never
+# --model). A retry names the Task and the dispatch it retries. The terminal is
+# read as a rendered screen; terminal show keeps a preview after the process
+# has exited.
+
+printf '%s\n' '/implement-spec-split 7 --auto-land --parallel 2' > "$WORK/spec-7.md"
+
+reset_logs
+call "$WORK/dispatch.out" orca_orchestration_worker_dispatch run_abc --worktree '/w/spec-7' \
+    --agent openclaude --spec-file "$WORK/spec-7.md" --timeout-ms 900000
+expect_exit 0 "worker dispatch: exits 0"
+expect_same "$(printf 'orchestration\nARG worker-start\nARG --run\nARG run_abc\nARG --worktree\nARG path:/w/spec-7\nARG --agent\nARG openclaude\nARG --spec-file\nARG %s\nARG --json\nARG --timeout-ms\nARG 900000' "$WORK/spec-7.md")" \
+  "$(cat "$ORCA_LOG")" \
+  "worker dispatch: names the Run, places the worker by worktree path with the agent slot and reads the spec from the file, as JSON"
+
+reset_logs
+call "$WORK/dispatch-no-timeout.out" orca_orchestration_worker_dispatch run_abc --worktree '/w/spec-7' \
+    --agent openclaude --spec-file "$WORK/spec-7.md"
+expect_exit 0 "worker dispatch without --timeout-ms: exits 0"
+expect_same "$(printf 'orchestration\nARG worker-start\nARG --run\nARG run_abc\nARG --worktree\nARG path:/w/spec-7\nARG --agent\nARG openclaude\nARG --spec-file\nARG %s\nARG --json' "$WORK/spec-7.md")" \
+  "$(cat "$ORCA_LOG")" "worker dispatch without --timeout-ms: no timeout argument at all"
+
+reset_logs
+call "$WORK/dispatch-retry.out" orca_orchestration_worker_dispatch run_abc --worktree '/w/spec-7' \
+    --agent openclaude --task task_7 --retry-of ctx_first --timeout-ms 1000
+expect_exit 0 "worker dispatch retry: exits 0"
+expect_same "$(printf 'orchestration\nARG worker-start\nARG --run\nARG run_abc\nARG --worktree\nARG path:/w/spec-7\nARG --agent\nARG openclaude\nARG --task\nARG task_7\nARG --retry-of\nARG ctx_first\nARG --json\nARG --timeout-ms\nARG 1000')" \
+  "$(cat "$ORCA_LOG")" \
+  "worker dispatch retry: names the Task and the dispatch it retries, repeating the placement and reading no spec file"
+
+reset_logs
+call "$WORK/dispatch-task.out" orca_orchestration_worker_dispatch run_abc --worktree '/w/spec-7' \
+    --agent openclaude --task task_7
+expect_exit 0 "worker dispatch by Task: exits 0"
+expect_same "$(printf 'orchestration\nARG worker-start\nARG --run\nARG run_abc\nARG --worktree\nARG path:/w/spec-7\nARG --agent\nARG openclaude\nARG --task\nARG task_7\nARG --json')" \
+  "$(cat "$ORCA_LOG")" "worker dispatch by Task: the Task carries the spec, so no spec file"
+
+reset_logs
+call "$WORK/dispatch-empty.out" orca_orchestration_worker_dispatch '' --worktree '/w/spec-7' \
+    --agent openclaude --spec-file "$WORK/spec-7.md"
+expect_exit 64 "worker dispatch with an empty Run id exits 64"
+expect_has 'Run id' "worker dispatch with an empty Run id says what is missing" "$WORK/dispatch-empty.out.err"
+expect_empty_log "worker dispatch with an empty Run id never starts Orca" "$ORCA_LOG"
+
+reset_logs
+call "$WORK/dispatch-twice.out" orca_orchestration_worker_dispatch run_abc --run run_other \
+    --worktree '/w/spec-7' --agent openclaude --spec-file "$WORK/spec-7.md"
+expect_exit 64 "worker dispatch with a second --run exits 64"
+expect_empty_log "worker dispatch with a second --run never starts Orca" "$ORCA_LOG"
+
+reset_logs
+call "$WORK/dispatch-no-worktree.out" orca_orchestration_worker_dispatch run_abc \
+    --agent openclaude --spec-file "$WORK/spec-7.md"
+expect_exit 64 "worker dispatch without --worktree exits 64"
+expect_has 'worktree' "worker dispatch without --worktree says what is missing" "$WORK/dispatch-no-worktree.out.err"
+expect_empty_log "worker dispatch without --worktree never starts Orca" "$ORCA_LOG"
+
+reset_logs
+call "$WORK/dispatch-no-agent.out" orca_orchestration_worker_dispatch run_abc \
+    --worktree '/w/spec-7' --spec-file "$WORK/spec-7.md"
+expect_exit 64 "worker dispatch without --agent exits 64"
+expect_has 'agent' "worker dispatch without --agent says what is missing" "$WORK/dispatch-no-agent.out.err"
+expect_empty_log "worker dispatch without --agent never starts Orca" "$ORCA_LOG"
+
+reset_logs
+call "$WORK/dispatch-no-spec.out" orca_orchestration_worker_dispatch run_abc \
+    --worktree '/w/spec-7' --agent openclaude
+expect_exit 64 "worker dispatch without a spec file or a Task exits 64"
+expect_has 'spec' "worker dispatch without a spec says what is missing" "$WORK/dispatch-no-spec.out.err"
+expect_empty_log "worker dispatch without a spec never starts Orca" "$ORCA_LOG"
+
+reset_logs
+call "$WORK/dispatch-both.out" orca_orchestration_worker_dispatch run_abc --worktree '/w/spec-7' \
+    --agent openclaude --spec-file "$WORK/spec-7.md" --task task_7
+expect_exit 64 "worker dispatch with both a spec file and a Task exits 64"
+expect_has 'one' "worker dispatch with both a spec file and a Task says to give one" "$WORK/dispatch-both.out.err"
+expect_empty_log "worker dispatch with both a spec file and a Task never starts Orca" "$ORCA_LOG"
+
+reset_logs
+call "$WORK/dispatch-retry-no-task.out" orca_orchestration_worker_dispatch run_abc --worktree '/w/spec-7' \
+    --agent openclaude --spec-file "$WORK/spec-7.md" --retry-of ctx_first
+expect_exit 64 "worker dispatch with --retry-of but no Task exits 64"
+expect_has '--task' "worker dispatch with --retry-of but no Task says the Task is needed" \
+  "$WORK/dispatch-retry-no-task.out.err"
+expect_empty_log "worker dispatch with --retry-of but no Task never starts Orca" "$ORCA_LOG"
+
+reset_logs
+call "$WORK/dispatch-model.out" orca_orchestration_worker_dispatch run_abc --worktree '/w/spec-7' \
+    --agent openclaude --spec-file "$WORK/spec-7.md" --model glm-5.3-flash
+expect_exit 64 "worker dispatch with --model exits 64: the agent slot runs the model from its own config"
+expect_has '--model' "worker dispatch with an option it does not offer names it" "$WORK/dispatch-model.out.err"
+expect_empty_log "worker dispatch with an option it does not offer never starts Orca" "$ORCA_LOG"
+
+reset_logs
+call "$WORK/dispatch-terminal.out" orca_orchestration_worker_dispatch run_abc --worktree '/w/spec-7' \
+    --agent openclaude --spec-file "$WORK/spec-7.md" --terminal term_glm
+expect_exit 64 "worker dispatch with --terminal exits 64: adopting a terminal is worker_start's form"
+expect_has '--terminal' "worker dispatch told about --terminal names it" "$WORK/dispatch-terminal.out.err"
+expect_empty_log "worker dispatch with --terminal never starts Orca" "$ORCA_LOG"
+
+reset_logs
+call "$WORK/dispatch-timeout-word.out" orca_orchestration_worker_dispatch run_abc --worktree '/w/spec-7' \
+    --agent openclaude --spec-file "$WORK/spec-7.md" --timeout-ms soon
+expect_exit 64 "worker dispatch with a word for --timeout-ms exits 64"
+expect_has 'soon' "worker dispatch with a word for a timeout names it" "$WORK/dispatch-timeout-word.out.err"
+expect_empty_log "worker dispatch with a word for a timeout never starts Orca" "$ORCA_LOG"
+
+reset_logs
+call "$WORK/dispatch-timeout-zero.out" orca_orchestration_worker_dispatch run_abc --worktree '/w/spec-7' \
+    --agent openclaude --spec-file "$WORK/spec-7.md" --timeout-ms 0
+expect_exit 64 "worker dispatch with --timeout-ms 0 exits 64"
+expect_empty_log "worker dispatch with --timeout-ms 0 never starts Orca" "$ORCA_LOG"
+
+reset_logs
+call "$WORK/stop.out" orca_orchestration_worker_stop ctx_first
+expect_exit 0 "worker stop: exits 0"
+expect_same "$(printf 'orchestration\nARG worker-stop\nARG --dispatch\nARG ctx_first\nARG --json')" "$(cat "$ORCA_LOG")" \
+  "worker stop: stops that dispatch, as JSON"
+
+reset_logs
+call "$WORK/stop-empty.out" orca_orchestration_worker_stop ''
+expect_exit 64 "worker stop without a dispatch exits 64"
+expect_has 'dispatch' "worker stop without a dispatch says what is missing" "$WORK/stop-empty.out.err"
+expect_empty_log "worker stop without a dispatch never starts Orca" "$ORCA_LOG"
+
+reset_logs
+call "$WORK/read-screen.out" orca_terminal_read term_spec --screen
+expect_exit 0 "terminal read --screen: exits 0"
+expect_same "$(printf 'terminal\nARG read\nARG --terminal\nARG term_spec\nARG --screen\nARG --json')" "$(cat "$ORCA_LOG")" \
+  "terminal read --screen: reads the rendered screen of that terminal, as JSON"
+
+reset_logs
+call "$WORK/read-screen-limit.out" orca_terminal_read term_spec --screen --limit 60
+expect_exit 0 "terminal read --screen --limit: exits 0"
+expect_same "$(printf 'terminal\nARG read\nARG --terminal\nARG term_spec\nARG --screen\nARG --limit\nARG 60\nARG --json')" \
+  "$(cat "$ORCA_LOG")" "terminal read --screen --limit: the limit follows the screen flag"
+
+reset_logs
+call "$WORK/read-stream.out" orca_terminal_read term_spec
+expect_exit 0 "terminal read without --screen: exits 0"
+expect_same "$(printf 'terminal\nARG read\nARG --terminal\nARG term_spec\nARG --json')" "$(cat "$ORCA_LOG")" \
+  "terminal read without --screen: the accumulated output, as JSON"
+
+reset_logs
+call "$WORK/read-empty.out" orca_terminal_read '' --screen
+expect_exit 64 "terminal read without a handle exits 64"
+expect_has 'handle' "terminal read without a handle says what is missing" "$WORK/read-empty.out.err"
+expect_empty_log "terminal read without a handle never starts Orca" "$ORCA_LOG"
+
+reset_logs
+call "$WORK/read-cursor.out" orca_terminal_read term_spec --screen --cursor 12
+expect_exit 64 "terminal read with --cursor exits 64: the library reads the screen or the stream, never a window"
+expect_has '--cursor' "terminal read with an option it does not offer names it" "$WORK/read-cursor.out.err"
+expect_empty_log "terminal read with an option it does not offer never starts Orca" "$ORCA_LOG"
+
+reset_logs
+call "$WORK/read-limit-word.out" orca_terminal_read term_spec --limit many
+expect_exit 64 "terminal read with a word for --limit exits 64"
+expect_has 'many' "terminal read with a word for a limit names it" "$WORK/read-limit-word.out.err"
+expect_empty_log "terminal read with a word for a limit never starts Orca" "$ORCA_LOG"
+
+reset_logs
+call "$WORK/terminal-show.out" orca_terminal_show term_spec
+expect_exit 0 "terminal show: exits 0"
+expect_same "$(printf 'terminal\nARG show\nARG --terminal\nARG term_spec\nARG --json')" "$(cat "$ORCA_LOG")" \
+  "terminal show: asks for that terminal's metadata and preview, as JSON"
+
+reset_logs
+call "$WORK/terminal-show-empty.out" orca_terminal_show ''
+expect_exit 64 "terminal show without a handle exits 64"
+expect_has 'handle' "terminal show without a handle says what is missing" "$WORK/terminal-show-empty.out.err"
+expect_empty_log "terminal show without a handle never starts Orca" "$ORCA_LOG"
+
 # --- orchestration check --types: the wake condition of one blocking wait -----
 # stage-dispatch.sh waits for a worker_done alone; --types narrows what wakes
 # the wait and changes nothing else about the call.
