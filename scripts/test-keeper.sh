@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Isolated fake-dependency tests for scripts/keeper.sh.
-# No network, no Orca, no launchd: gh, orca, claim.sh, launch-wave.sh and lock.sh
-# are fakes injected through PATH and KEEPER_* environment variables.
+# No network, no Orca, no launchd: gh, claim.sh, launch-wave.sh and lock.sh are
+# fakes injected through PATH and KEEPER_* environment variables; orca is a fake
+# outside PATH, named by ISS_ORCA (the one Orca replacement variable).
 
 set -u
 
@@ -11,6 +12,9 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/keeper-test.XXXXXX")
 trap 'chmod -R u+w "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
 
 BIN=$WORK/bin
+# The fake orca lives outside PATH on purpose: keeper.sh must reach Orca only
+# through ISS_ORCA, never through an `orca` that happens to be on PATH.
+ORCA_BIN=$WORK/orca-bin
 REPO_PATH=$WORK/repo
 WT=$WORK/wt/spec-19
 PASSED=0
@@ -93,7 +97,7 @@ encoded_path() { # same encoding keeper.sh uses for ~/.claude/projects
   printf '%s' "$1" | sed 's#[^A-Za-z0-9]#-#g'
 }
 
-mkdir -p "$BIN" "$WORK/home" "$WORK/projects" "$WORK/runs" "$WORK/codex-runs" \
+mkdir -p "$BIN" "$ORCA_BIN" "$WORK/home" "$WORK/projects" "$WORK/runs" "$WORK/codex-runs" \
   "$WORK/launch-state" "$WT" 2>/dev/null || exit 1
 
 git init -q "$REPO_PATH" 2>/dev/null || exit 1
@@ -126,7 +130,7 @@ printf 'fake gh: unexpected arguments: %s\n' "$*" >&2
 exit 2
 EOF
 
-cat >"$BIN/orca" <<'EOF'
+cat >"$ORCA_BIN/orca" <<'EOF'
 #!/usr/bin/env bash
 set -u
 case "${1:-} ${2:-}" in
@@ -202,7 +206,18 @@ printf 'fake lock: unexpected arguments: %s\n' "$*" >&2
 exit 2
 EOF
 
-chmod +x "$BIN/gh" "$BIN/orca" "$BIN/claim.sh" "$BIN/launch-wave.sh" "$BIN/lock.sh"
+chmod +x "$BIN/gh" "$ORCA_BIN/orca" "$BIN/claim.sh" "$BIN/launch-wave.sh" "$BIN/lock.sh"
+
+# Guard rail: this machine has a real `orca` on PATH. The one on the tests' PATH
+# refuses every call, so a keeper.sh that stops going through ISS_ORCA fails
+# here instead of quietly reading the real Orca.
+cat >"$BIN/orca" <<'EOF'
+#!/usr/bin/env bash
+printf 'PATH orca called: %s\n' "$*" >>"$ORCA_LOG"
+printf 'test-keeper: orca on PATH was called instead of ISS_ORCA\n' >&2
+exit 99
+EOF
+chmod +x "$BIN/orca"
 
 # --- fixtures ----------------------------------------------------------------
 
@@ -255,7 +270,7 @@ run_keeper() { # out [keeper arguments]
       KEEPER_CLAIM="$BIN/claim.sh" \
       KEEPER_LAUNCH_WAVE="$BIN/launch-wave.sh" \
       KEEPER_LOCK="$BIN/lock.sh" \
-      KEEPER_ORCA="$BIN/orca" \
+      ISS_ORCA="$ORCA_BIN/orca" \
       KEEPER_GH="$BIN/gh" \
       KEEPER_NOTIFY_CMD='printf "%s\n" "$KEEPER_NOTIFY_MESSAGE" >>"$NOTIFY_LOG"' \
       KEEPER_STALL_MIN="${STALL_MIN:-45}" \

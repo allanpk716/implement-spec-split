@@ -31,8 +31,10 @@
 #                        KEEPER_NOTIFY_TITLE and KEEPER_NOTIFY_MESSAGE
 #   KEEPER_LOG           action log (default ~/ops/var/log/spec-keeper.actions.log)
 #   KEEPER_PAUSED        pause flag (default <state dir>/paused)
-#   KEEPER_LOCK, KEEPER_CLAIM, KEEPER_LAUNCH_WAVE, KEEPER_ORCA, KEEPER_GH
+#   KEEPER_LOCK, KEEPER_CLAIM, KEEPER_LAUNCH_WAVE, KEEPER_GH
 #                        overrides for the scripts and CLIs, used by the tests
+#   ISS_ORCA             the Orca executable (default `orca`), read by
+#                        scripts/lib-orca.sh; every Orca call goes through it
 #
 # Exit codes: 0 round finished (also when paused or when another round holds the
 # lock), 64 usage error, 1 unexpected failure.
@@ -42,9 +44,10 @@ set -u
 SCRIPT_NAME=${0##*/}
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || exit 1
 SKILL_ROOT=$(cd -P -- "$SCRIPT_DIR/.." && pwd) || exit 1
+# shellcheck source=lib-orca.sh
+source "$SCRIPT_DIR/lib-orca.sh"
 
 GH=${KEEPER_GH:-gh}
-ORCA=${KEEPER_ORCA:-orca}
 GIT=${KEEPER_GIT:-git}
 CLAIM=${KEEPER_CLAIM:-$SKILL_ROOT/scripts/claim.sh}
 LAUNCH_WAVE=${KEEPER_LAUNCH_WAVE:-$SKILL_ROOT/find-next/scripts/launch-wave.sh}
@@ -70,7 +73,7 @@ directories, session transcripts and Orca; with --dry-run it writes nothing.
 
 Environment: KEEPER_STALL_MIN (45), KEEPER_MAX_RESUMES (3), KEEPER_NOTIFY_CMD,
 KEEPER_LOG, KEEPER_PAUSED, KEEPER_LOCK, KEEPER_CLAIM, KEEPER_LAUNCH_WAVE,
-KEEPER_ORCA, KEEPER_GH.
+KEEPER_GH, ISS_ORCA (the Orca executable, see lib-orca.sh).
 EOF
 }
 
@@ -157,7 +160,7 @@ RUNS_ROOT=${KEEPER_RUNS_DIR:-${ISS_STATE_DIR:-$HOME/.cache/implement-spec-split}
 CODEX_RUNS=${KEEPER_CODEX_RUNS:-${ISS_RUNS_ROOT:-$HOME/.cache/codex-runs}}
 PROJECTS=${KEEPER_CLAUDE_PROJECTS:-$HOME/.claude/projects}
 
-for tool in node "$GH" "$GIT" "$ORCA"; do
+for tool in node "$GH" "$GIT" "$(orca_exe)"; do
   command -v "$tool" >/dev/null 2>&1 ||
     { printf '%s: %s is required but was not found on PATH\n' "$SCRIPT_NAME" "$tool" >&2; exit 1; }
 done
@@ -736,7 +739,7 @@ EOF
       log_line "$REPO" "#$spec" WOULD_NUDGE "卡住 ${age}s 无写入；发送继续到 $handle"
       return 0
     fi
-    if "$ORCA" terminal send --terminal "$handle" --text "$NUDGE_TEXT" --enter >/dev/null 2>&1; then
+    if orca_terminal_send "$handle" "$NUDGE_TEXT" >/dev/null 2>&1; then
       state_op nudge-set "$REPO#$spec" "$(date +%s)" "$handle"
       log_line "$REPO" "#$spec" NUDGE "卡住 ${age}s 无写入；已发送继续到 $handle"
     else
@@ -761,7 +764,7 @@ EOF
     return 0
   fi
   if [ -n "$handle" ]; then
-    if "$ORCA" terminal close --terminal "$handle" --tab >/dev/null 2>&1; then
+    if orca_terminal_close "$handle" >/dev/null 2>&1; then
       log_line "$REPO" "#$spec" CLOSE_TERMINAL "$handle"
     else
       log_line "$REPO" "#$spec" ERROR "orca terminal close 失败：$handle"
@@ -867,10 +870,10 @@ run_round() {
   fi
 
   : >"$WORK/orca-repos.json"
-  "$ORCA" repo list --json >"$WORK/orca-repos.json" 2>/dev/null </dev/null || : >"$WORK/orca-repos.json"
+  orca_repo_list >"$WORK/orca-repos.json" 2>/dev/null </dev/null || : >"$WORK/orca-repos.json"
   ORCA_REPOS_FILE=$WORK/orca-repos.json
   : >"$WORK/terminals.json"
-  "$ORCA" terminal list --json >"$WORK/terminals.json" 2>/dev/null </dev/null || : >"$WORK/terminals.json"
+  orca_terminal_list >"$WORK/terminals.json" 2>/dev/null </dev/null || : >"$WORK/terminals.json"
   : >"$WORK/actions"
 
   list_repos >"$WORK/repos.txt"

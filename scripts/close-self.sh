@@ -13,9 +13,10 @@
 # Usage:
 #   close-self.sh [--remove-worktree <path>] [--dry-run]
 #
-# It needs ORCA_TAB_ID, ORCA_AGENT_PANE (<tabId>:<leafId>) and orca on PATH.
-# Outside Orca (any of them missing) it prints "skip: not in Orca" and exits 0
-# without doing anything.
+# It needs ORCA_TAB_ID, ORCA_AGENT_PANE (<tabId>:<leafId>) and Orca, the program
+# ISS_ORCA names (default `orca` on PATH; see lib-orca.sh). Outside Orca (any
+# of them missing) it prints "skip: not in Orca" and exits 0 without doing
+# anything.
 #
 # --remove-worktree <path> also removes a worktree:
 #   - when <path> is this terminal's own worktree, it must be clean and its
@@ -40,6 +41,8 @@ set -u
 
 SCRIPT_NAME=${0##*/}
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || exit 1
+# shellcheck source=lib-orca.sh
+source "$SCRIPT_DIR/lib-orca.sh"
 
 usage() {
   cat <<EOF
@@ -89,7 +92,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ -z "${ORCA_TAB_ID:-}" ] || [ -z "${ORCA_AGENT_PANE:-}" ] ||
-   ! command -v orca >/dev/null 2>&1; then
+   ! command -v "$(orca_exe)" >/dev/null 2>&1; then
   printf 'skip: not in Orca\n'
   exit 0
 fi
@@ -150,27 +153,10 @@ worktree_merged() {
 ERR_FILE=$(mktemp "${TMPDIR:-/tmp}/close-self.XXXXXX") || exit 1
 trap 'rm -f -- "$ERR_FILE" 2>/dev/null' EXIT
 
-if ! LIST=$(orca terminal list --json 2>"$ERR_FILE"); then
-  warn "orca terminal list failed: $(head -n 1 "$ERR_FILE" 2>/dev/null)"
-  exit 1
-fi
-
-FOUND=$(printf '%s' "$LIST" | TAB_ID="$TAB_ID" LEAF_ID="$LEAF_ID" node -e '
-  const fs = require("fs");
-  let value;
-  try { value = JSON.parse(fs.readFileSync(0, "utf8")); }
-  catch { process.exit(2); }
-  const terminals = value && value.result && Array.isArray(value.result.terminals)
-    ? value.result.terminals
-    : (value && Array.isArray(value.terminals) ? value.terminals : null);
-  if (!terminals) process.exit(2);
-  const terminal = terminals.find((item) =>
-    String(item.tabId || "") === process.env.TAB_ID &&
-    String(item.leafId || "") === process.env.LEAF_ID);
-  if (!terminal || !terminal.handle) process.exit(1);
-  process.stdout.write(String(terminal.handle) + "\t" + String(terminal.worktreePath || ""));
-') || {
+# The handle comes from Orca here and is used at once; it is never kept.
+FOUND=$(orca_terminal_by_pane "$TAB_ID" "$LEAF_ID" 2>"$ERR_FILE") || {
   case $? in
+    3) warn "orca terminal list failed: $(head -n 1 "$ERR_FILE" 2>/dev/null)" ;;
     2) warn "could not parse orca terminal list --json output" ;;
     *) warn "no Orca terminal matches tab $TAB_ID leaf $LEAF_ID" ;;
   esac
@@ -196,7 +182,7 @@ close_terminal() {
     printf 'dry-run: orca terminal close --terminal %s --tab\n' "$HANDLE"
     return 0
   fi
-  orca terminal close --terminal "$HANDLE" --tab
+  orca_terminal_close "$HANDLE"
 }
 
 if [ -z "$REMOVE" ]; then
@@ -237,7 +223,7 @@ if [ -n "$WT_NORM" ] && [ "$REMOVE_NORM" = "$WT_NORM" ]; then
     exit 0
   fi
   # This ends the session, so nothing may follow it.
-  orca worktree rm --worktree "path:$REMOVE_NORM" --force --delete-branch
+  orca_worktree_rm "$REMOVE_NORM"
   exit $?
 fi
 
