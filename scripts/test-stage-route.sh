@@ -1186,6 +1186,36 @@ else
 fi
 expect_file_has 'bash scripts/test-stage-route.sh' 'MAINTAINING registers the test in its self-test list' "$ROOT/MAINTAINING.md"
 
+# The user documents describe the Stage route table, not the two old switches
+# (#37). scripts/judgment-model.sh, its skill and its test stay until #38 deletes
+# them, and MAINTAINING's numbered decision records keep the old names as history,
+# so none of those is in this list.
+LINK='ln -s ~/.claude/skills/implement-spec-split/grill-router ~/.claude/skills/grill-router'
+for doc in README.md docs/setup.md docs/setup.en.md; do
+  expect_file_has "$LINK" "$doc documents the router skill symlink" "$ROOT/$doc"
+  expect_file_has '/grill-router' "$doc documents the slash command" "$ROOT/$doc"
+  expect_file_has 'scripts/stage-route.sh' "$doc documents the router script" "$ROOT/$doc"
+  expect_file_has 'migrate' "$doc documents carrying the old switches over" "$ROOT/$doc"
+done
+expect_file_has '/grill-router' 'MAINTAINING points at the slash command' "$ROOT/MAINTAINING.md"
+for doc in README.md docs/setup.md docs/setup.en.md GLOSSARY.md hooks/README.md \
+  templates/global-claude-md.md templates/global-claude-md.en.md docs/codex-backend.md; do
+  if grep -Fq '/judgment-model' "$ROOT/$doc" || grep -Fq '/worker-model' "$ROOT/$doc"; then
+    record FAIL "$doc no longer names the old switch commands"
+  else
+    record PASS "$doc no longer names the old switch commands"
+  fi
+done
+# The glossary entries that used to name the switch point at the Stage route.
+for term in 'Judgment model' 'Worker model' 'Design session' 'Opus review'; do
+  definition=$(grep -F -A1 -- "**$term**:" "$ROOT/GLOSSARY.md" | sed -n '2p')
+  if [ -n "$definition" ] && printf '%s\n' "$definition" | grep -Fq 'Stage route'; then
+    record PASS "the glossary's $term entry points at the Stage route"
+  else
+    record FAIL "the glossary's $term entry points at the Stage route" "$definition"
+  fi
+done
+
 # --- summary ---
 
 if [ "$FAILED" -gt 0 ]; then

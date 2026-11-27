@@ -393,6 +393,12 @@ expect_stdout_has 'grill=opus review=glm-5.4' 'help shows setting both roles in 
 # design route in the same table (issue #34).
 
 # The user-facing command is the judgment-model skill, symlinked like the others.
+# It stays until #38 deletes it with the script and the test. No user document
+# describes it any more: SKILL.md and find-next/SKILL.md describe the Stage route
+# table (#33), grill-feature/SKILL.md and grill-map/SKILL.md point at
+# /grill-router (#34), README.md, docs/setup.md, docs/setup.en.md and the
+# glossary entries describe /grill-router (#37, pinned in test-stage-route.sh),
+# and MAINTAINING.md keeps the old names only in its numbered decision records.
 ROOT=$(cd "$HERE/.." && pwd)
 SKILL=$ROOT/judgment-model/SKILL.md
 expect_file_has 'name: judgment-model' 'the judgment-model skill has its name' "$SKILL"
@@ -402,14 +408,6 @@ expect_file_has 'scripts/judgment-model.sh use' 'the skill runs the switch scrip
 expect_file_has '原样照抄' 'the skill relays the script status lines verbatim' "$SKILL"
 expect_file_has 'claude-glm --resume' 'the skill tells how an open Design session carries on' "$SKILL"
 expect_file_has 'grill=opus review=glm-5.4' 'the skill shows setting both roles in one command' "$SKILL"
-LINK='ln -s ~/.claude/skills/implement-spec-split/judgment-model ~/.claude/skills/judgment-model'
-for doc in README.md docs/setup.md docs/setup.en.md; do
-  expect_file_has "$LINK" "$doc documents the skill symlink" "$ROOT/$doc"
-  expect_file_has '/judgment-model' "$doc documents the slash command" "$ROOT/$doc"
-done
-# SKILL.md and find-next/SKILL.md describe the Stage route table instead (#33);
-# grill-feature/SKILL.md and grill-map/SKILL.md point at /grill-router (#34).
-expect_file_has '/judgment-model' 'MAINTAINING.md points at the slash command' "$ROOT/MAINTAINING.md"
 
 if [ "$FAILED" -gt 0 ]; then
   printf 'Artifacts: %s\n' "$WORK"
