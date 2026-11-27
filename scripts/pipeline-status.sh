@@ -33,10 +33,14 @@ tracker documentation instead.
                          spec_numbers, tickets[]}; specs[] {number, title, kind, state,
                          status landed|needs_tickets|ready|running|interrupted|shelved|human, map
                          (number or null), has_tickets, tickets[] {number, title, state,
-                         shelved, human}, tickets_total, tickets_closed, claim {state
-                         active|reserved|interrupted|idle, branch, worktree, claimed_at}
+                         shelved, human, shared_counter}, tickets_total, tickets_closed, claim
+                         {state active|reserved|interrupted|idle, branch, worktree, claimed_at}
                          or null, depends_on, extra_blockers}; loose_specs[] (Specs
                          without a map); next_wave (same object as --order --json).
+                         Ticket flags come from GitHub labels or the body: `human` is the
+                         `ready-for-human` label, `shared_counter` the `shared-counter` label
+                         (a Ticket that bumps a shared counter; frontier.sh releases one such
+                         Ticket at a time).
 
 PIPELINE_STATUS_NOW may set an ISO-8601 current time for deterministic stale-claim tests.
 PIPELINE_STATUS_ORCA_TERMINALS_JSON may name a file holding `orca terminal list --json`
@@ -523,6 +527,7 @@ if (mode === 'collect') {
       title: issue ? issue.title : '',
       shelved: issue ? isShelved(issue) : false,
       human: issue ? hasLabel(issue, 'ready-for-human') : false,
+      sharedCounter: issue ? hasLabel(issue, 'shared-counter') : false,
     };
   }
 
@@ -1623,6 +1628,7 @@ if (mode === 'order') {
       state: child.state,
       shelved: isShelved(child),
       human: child.human === true || hasLabel(child, 'ready-for-human'),
+      shared_counter: child.sharedCounter === true || hasLabel(child, 'shared-counter'),
     });
     const specIssue = (number) => {
       const issue = issueByNumber.get(Number(number));
