@@ -50,6 +50,18 @@ _Avoid_: strong-model review (ambiguous in a GLM session, where "opus" maps to G
 The model that stands in for Opus in each of two roles: `review` (every Opus review) and `grill` (Design sessions). Each role is Opus, or the substitute the user names with its own global switch (`/judgment-model`, backed by `scripts/judgment-model.sh` and stored in `~/.claude/state/judgment-model`), today only glm-5.4; one command sets both roles. Both wrappers read their own role on every call, so a session that is already executing changes model at its next review or new Design session. Separate from the Worker model, which has its own switch (`/worker-model`).
 _Avoid_: strong model, fallback model (the switch is the user's decision, never an automatic downgrade)
 
+**Stage**:
+One of the six kinds of work the pipeline routes to an executor: orchestration, design (grilling), research and drafting, implementation, review, and diagnosis. Each Stage has its own executor choice, which the user switches globally; a switch takes effect at the Stage's next dispatch or new session, never mid-call.
+_Avoid_: phase, step (Steps are the numbered instructions inside a skill)
+
+**Stage route**:
+The executor assigned to one Stage: a Launcher profile, a model and a reasoning effort, optionally with an expiry after which the Stage returns to its default. Only combinations that have passed a smoke test may be routed. The user sets all routes with one command (`/grill-router`); it replaces the Judgment model and Worker model switches.
+_Avoid_: model switch, model mapping
+
+**Launcher profile**:
+A named way to start an executor that this project maintains (for example the official Claude launcher, the GLM launcher, the flash launcher, codex on GLM): how it starts, how a model and reasoning effort are passed to it, and whether it has a headless form. Stage routes name Launcher profiles rather than Orca agents, because Orca cannot register custom launchers.
+_Avoid_: harness (when meaning the route entry), agent slot
+
 ## Work
 
 **Spec**:

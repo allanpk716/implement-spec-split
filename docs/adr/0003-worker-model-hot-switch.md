@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0004
+---
+
 # Worker model 可由用户全局热切换（独立开关，v1 只管 codex 路径）
 
 ADR 0002 给了判断模型一个用户开关；Worker model（GLOSSARY.md：External worker 的 harness 对话的模型）没有对等开关，由「哪条路径在干活」决定：`--impl codex` 的 Run 照 SKILL.md 显式传 `--model glm-5.4`；find-next 的 codex worker 和全局分工（阶段 3）里的日常派活不传 `--model`，用 `codex-worker.sh` 的默认值；`config.toml` 的 `model` 对 worker 不起作用，因为 wrapper 永远显式传 `-m`（MAINTAINING.md 第 27 条踩过这个坑）。所以只改脚本默认值对正在跑的 Run 无效，而「正在跑的 Run 下一次派发就换模型」正是要做的事。热切换只能在出口脚本里做：会话内子代理的型号在启动器 `exec` 时由环境变量钉死，flash 会话更是 `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` 强制 glm-5.4，任何状态文件都切不动它——这是 ADR 0002 让出口脚本每次调用时读开关的根据，也是它否决「会话内映射」的先例。用户定（2026-11-27）：给 Worker model 一个与 `/judgment-model` 同构、但独立的开关。`scripts/worker-model.sh`，状态文件 `~/.claude/state/worker-model`（`worker=<model>`、`worker.until=<epoch 秒>`），薄技能 `/worker-model`（`disable-model-invocation: true`，只能由用户敲：会话看到额度或 429 错误时可能自己调用它把模型降了）。允许值 `glm-5.4`（默认）`glm-5.3` `glm-5.3-flash`，可带 `--until` / `--for` 到期回默认，`use glm-5.4` 即复位。`codex-worker.sh` 每次新起 worker（fresh run）时读它：开关非默认就压过 `--model`，否则用显式 `--model`，否则用默认；Resume 不读开关，沿用第一段保存的模型。覆盖范围一刀切：所有 `codex-worker.sh` 调用。v1 只管 codex 路径。默认值只在 `worker-model.sh` 定义一次，wrapper 和 selftest 用 `--print default` 向它要。

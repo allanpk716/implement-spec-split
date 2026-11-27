@@ -1,0 +1,38 @@
+---
+status: accepted
+supersedes: ADR-0002, ADR-0003
+---
+
+# 阶段路由表 + Orca 执行层：3+1 个入口，每个阶段可全局热切换启动档案、模型和思考强度
+
+用户定（2026-11-27）：主线是 flash 主会话（Orca 的 `openclaude` 槽位）敲 grill 或 find-next 命令，然后各流程用各自的会话和模型推进；目标是确定性的工作流，每个阶段能单独指定模型，并能全局热切换。ADR 0002、0003 只覆盖了审查、讨论和 codex 路径，默认路径（flash 会话 + 会话内子代理实现）上的写代码阶段两个开关都管不到；两个开关各有一个命令、一个状态文件和约 150 行近似代码。决定：
+
+- **入口只有 3+1 个**：`/grill-feature`、`/grill-map`、`/find-next` 三个工作命令，加一个设置命令 `/grill-router`。`/judgment-model`、`/worker-model` 删除，不留别名（`/grill-router` 首次运行迁移旧状态文件里没到期的设置）。`implement-spec-split` 只由 find-next 在内部拉起，不再是用户命令。`/grill-feature` 讨论完、规格发布后自动接 find-next；`/grill-map` 同样自动接，find-next 会停在合成提问那一步。
+- **六个 Stage，一张 Stage route 表**（GLOSSARY.md）：编排、讨论、调研起草、实现、审查、诊断，每项为（Launcher profile, 模型, 思考强度, 可选到期）。下一次派发或下一次新会话生效，不中途换。编排在 v1 锁定为 flash。只接受跑过冒烟测试的组合；审查与实现同模型时当场警告一次，不拦。默认表见 Consequences。
+- **执行方式由阶段固定，用户只选档案**：编排、讨论、实现由 Orca orchestration 托管（交互式 worker，生命周期交给 Orca）；调研起草、审查、诊断是 headless（`claude -p` / `codex exec`），保留退出码和只读违规检查的契约。
+- **Launcher profile 由本项目维护，不用 Orca agent id**：Orca 不能注册自定义 agent（stablyai/orca#2284），`openclaude` 槽位不接受 `--model`。GLM 启动器走「`orca terminal create --command "<launcher> --model … --effort …"` + `worker-start --terminal`」收编（`docs/orca-smoke-2026-11-27.md` 实测通过，含嵌套 worktree）。
+- **工作区是三层树**：主会话 → 规格（`new-child`）→ 票（`new-child`，`--base-branch spec-<n>`），侧栏可折叠；票合入后、规格落地后释放并删除工作区，停车的保留。`progress-tab.sh` 退役。merger 改为脚本，冲突才起 worker。
+- **规格会话入口靠脚本验证结果**：`worker-start` 把 Orca 的 preamble 放在 spec 前，`/implement-spec-split N` 由模型自己调用 Skill（实测 flash 会照做，但不是机制保证）。`launch-wave` 在限定时间内检查认领记录是否出现，没出现就停掉重派一次，再失败停车。
+- **flash 主会话及其拉起的流程里，五个非编排阶段一律经路由表派发**，会话内用 Agent 工具做实现或审查由 hook 拦。CC 原生订阅会话保持现状（会话内子代理照用），只有经 `codex-worker.sh` 派出的 worker 受路由表影响：带 `--read-only` 读「调研起草」，否则读「实现」。
+
+## Considered Options
+
+- **只换生命周期底座、模型分工不动**（调研稿 `20261127_1027_…Orca换底座方案.md` 的方案）：否决。它保留「`--impl agent` 会话内子代理不动」，而会话内子代理没有出口脚本，实现阶段永远切不了，与用户的核心诉求冲突。生命周期换底座的部分保留，作为本 ADR 的执行层。
+- **路由表直接写 Orca agent id**：否决，见上文 #2284 与 `openclaude` 不支持 `--model`。Orca 以后支持自定义 agent 时只改档案，表不动。
+- **审查、诊断也改成 Orca worker**：否决。`worker-start` 只起 TUI，没有 per-dispatch 工具白名单、没有退出码；无人值守会自动采纳审查结论，额度停车和失败必须分得清。
+- **保留两个旧开关当别名**：否决，用户要入口少。
+- **原生会话也强制走路由表并拦子代理**：先同意后撤回。原生会话是用户在场的手动场景，保持现状。
+- **票的实现 worker 在规格工作区里开终端标签**：否决，用户不要一堆标签；改为嵌套子工作区。
+- **规格会话入口改回 `worktree create --prompt`（命令行展开，确定）**：否决，那样拿不到 Orca 的 worker 生命周期；改用脚本检查认领记录。
+
+## Consequences
+
+- 默认路由（与上线前实际行为一致，只有实现阶段换了执行方式）：编排 claude-flash（锁定）；讨论 claude-official / opus / high；调研起草 codex-glm / glm-5.4 / high；实现 claude-glm / glm-5.4 / high；审查 claude-official / opus / high；诊断同审查。
+- **实现和 fix 用 `--bare`**：实测同一极小任务 18.6K → 1.2K input tokens。`--bare` 不加载 CLAUDE.md、技能、插件和 hooks，规则改由 `--append-system-prompt-file` 注入一份精简规则，需要的 MCP 用 `--mcp-config` 加。实现 worker 身上原来靠 hook 的硬拦降为提示词，由合入前的脚本门（新提交、工作区干净、测试通过）和审查兜底。`--bare` 在 TUI + 收编下是否可用是规格的第一个验证项。
+- 每层会话只带上一层的产物：规格 issue → 票的 Brief（含规格开始前一次 headless 探索写下的相关文件和调用关系），不带上一层的过程。
+- 走收编路线时 Orca 的 Dispatch 不记模型（`launch.effective.model` 为 null），模型由派发脚本写进落地报告、停车报告和最终报告，三份报告都打印完整路由表。
+- Orca 的 orchestration 标 Experimental，API 两周十余次变更：所有 Orca 调用收敛到一个 `lib-orca.sh`。派发必须显式 `--run`，否则 Orca 按继承的终端环境认定协调者，消息会投到错误的会话（实测踩到）。
+- `orca worktree rm` 删父工作区会把子工作区变孤儿：清理顺序必须先票后规格。`new-child` 默认保留工作区，`worker-release` 不删工作区，脚本要显式删除。
+- 主会话或协调终端关闭不影响下层；新终端 `orca orchestration run-use --id <run>` 接管。keeper.sh 与 Orca 心跳并行一段时间再定去留（Orca 官方不许凭 `unverifiable` 自动恢复）。
+- `pi-worker.sh` 退役；`codex-worker.sh` 保留为 headless 执行器。
+- ADR 0001 的「会话不许自己换模型」仍成立：换模型只能是用户经 `/grill-router` 改表，脚本执行。`/grill-router` 是 `disable-model-invocation`，与旧开关一样是软约束。

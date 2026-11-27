@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0004
+---
+
 # 判断模型可由用户全局热切换到 glm-5.4（不自动降级）
 
 ADR 0001 规定 Opus 不可用时停下、不降级。2026-11-26 Opus 的周额度用到 99%（`orca account list` 的读数），要到周五 10:00 才重置，期间整条管线的结论性判断都没有着落。用户定：由用户拨一个全局开关，把用 Opus 的地方切到 glm-5.4。开关是用户的明确决定，不是系统自己降级。开关分两个角色，一条命令可以同时设：`grill`（Design session 讨论）和 `review`（Opus review 的三类）。分开是因为两类风险不同：讨论有用户在场，好坏当场看得出来，又是长会话；审查多数时候无人值守，意见会被自动采纳并落地。用 Opus 的出口只有两个：`scripts/opus-review.sh`（Opus review）和 `scripts/design-session.sh`（Design session）。两个脚本每次被调用时读 `~/.claude/state/judgment-model`，所以已经在执行的会话在下一次审查时就换模型，不用重启，也不用改会话里的指令。今天只支持 glm-5.4：审查经 `claude-glm` 执行（`--model opus` 在这个启动器里映射到 glm-5.4），Design session 在 Orca 终端里起 `claude-glm`，交接协议不变。
