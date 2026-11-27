@@ -251,7 +251,30 @@ printf 'fake lock: unexpected arguments: %s\n' "$*" >&2
 exit 2
 EOF
 
-chmod +x "$BIN/gh" "$ORCA_BIN/orca" "$BIN/claim.sh" "$BIN/launch-wave.sh" "$BIN/lock.sh"
+# The sweep keeper calls once a round (规格 #26): records its arguments and
+# answers with the lines sweep-worktrees.sh prints -- a kept worktree and a
+# summary, plus a removal when the fixture has sweep-remove and a would-be
+# removal when it has sweep-would -- or fails when asked to (sweep-fail).
+cat >"$BIN/sweep-worktrees.sh" <<'EOF'
+#!/usr/bin/env bash
+set -u
+printf '%s\n' "$*" >> "$SWEEP_LOG"
+if [ -f "$FIXTURE_DIR/sweep-fail" ]; then
+  printf 'fake sweep: orca offline\n' >&2
+  exit 1
+fi
+printf 'test/repo\tkeep\t/w/repo\t主工作区，绝不删\n'
+if [ -f "$FIXTURE_DIR/sweep-remove" ]; then
+  printf 'test/repo\tremoved\t/w/wt-spec-22\t遗弃工作区：无 worker、无认领、未停车、干净且已并入 origin/main\n'
+fi
+if [ -f "$FIXTURE_DIR/sweep-would" ]; then
+  printf 'test/repo\twould-remove\t/w/wt-spec-22\t遗弃工作区：无 worker、无认领、未停车、干净且已并入 origin/main\n'
+fi
+printf 'test/repo\tsummary\t-\tremoved=1 would-remove=0 keep=1 skip=0 failed=0\n'
+exit 0
+EOF
+
+chmod +x "$BIN/gh" "$ORCA_BIN/orca" "$BIN/claim.sh" "$BIN/launch-wave.sh" "$BIN/lock.sh" "$BIN/sweep-worktrees.sh"
 
 # Guard rail: this machine has a real `orca` on PATH. The one on the tests' PATH
 # refuses every call, so a keeper.sh that stops going through ISS_ORCA fails
@@ -269,6 +292,8 @@ chmod +x "$BIN/orca"
 FIXTURE=$WORK/fixture
 STATE=$WORK/state.json
 NOTIFY_LOG=$WORK/notify.log
+SWEEP_LOG=$WORK/sweep.log
+SWEEP_SCRIPT=$BIN/sweep-worktrees.sh
 
 new_fixture() {
   FIXTURE=$WORK/fx-$1
@@ -280,7 +305,9 @@ new_fixture() {
   : >"$WORK/claim.log"
   : >"$WORK/launch.log"
   : >"$NOTIFY_LOG"
-  rm -f "$STATE"
+  : >"$SWEEP_LOG"
+  SWEEP_SCRIPT=$BIN/sweep-worktrees.sh
+  rm -f "$STATE" "$(dirname -- "$STATE")/paused"
   rm -rf "$WORK/projects" "$WORK/runs" "$WORK/codex-runs" "$WORK/launch-state"
   mkdir -p "$WORK/projects" "$WORK/runs" "$WORK/codex-runs" "$WORK/launch-state"
   cat >"$WORK/launch-state/test__repo.json" <<'JSON'
@@ -309,7 +336,8 @@ run_keeper() { # out [keeper arguments]
       FIXTURE_DIR="$FIXTURE" GH_LOG="$WORK/gh.log" ORCA_LOG="$WORK/orca.log" \
       ORCA_QUERY_LOG="$WORK/orca-query.log" \
       CLAIM_LOG="$WORK/claim.log" LAUNCH_LOG="$WORK/launch.log" \
-      NOTIFY_LOG="$NOTIFY_LOG" \
+      NOTIFY_LOG="$NOTIFY_LOG" SWEEP_LOG="$SWEEP_LOG" \
+      KEEPER_SWEEP="$SWEEP_SCRIPT" \
       KEEPER_CLAUDE_PROJECTS="$WORK/projects" \
       KEEPER_RUNS_DIR="$WORK/runs" \
       KEEPER_CODEX_RUNS="$WORK/codex-runs" \
@@ -936,6 +964,55 @@ run_keeper "$WORK/paused.out"
 expect_exit 0 "paused: exits 0"
 expect_has "PAUSED" "paused: logs the pause" "$WORK/paused.out"
 expect_count "" 0 "paused: gh is not called" "$WORK/gh.log"
+expect_count "" 0 "paused: the sweep is not called" "$SWEEP_LOG"
+
+# --- the sweep of abandoned worktrees (规格 #26) ------------------------------
+# Once a round, after the repositories, in keeper's own mode: a real round
+# logs every removal, --dry-run passes --dry-run on and logs what would go,
+# --repo is passed through, and a sweep that fails is reported, never fatal.
+
+new_fixture sweep
+touch "$FIXTURE/sweep-remove"
+run_keeper "$WORK/sweep.out"
+expect_exit 0 "sweep: exits 0"
+expect_count "" 1 "sweep: called once, with no argument" "$SWEEP_LOG"
+expect_same "" "$(cat "$SWEEP_LOG")" "sweep: a plain round passes no argument"
+expect_has $'\tSWEEP\t' "sweep: the summary is logged" "$WORK/sweep.out"
+expect_has "removed=1" "sweep: the summary carries the counts" "$WORK/sweep.out"
+expect_has $'\tREMOVE_WORKTREE\t' "sweep: a removal is logged" "$WORK/sweep.out"
+expect_has "/w/wt-spec-22" "sweep: the removal names the worktree" "$WORK/sweep.out"
+expect_without "/w/repo" "sweep: a kept worktree is not logged one by one" "$WORK/sweep.out"
+expect_count "" 0 "sweep: the round asks no orca action for it" "$WORK/orca.log"
+
+new_fixture sweep-dry
+touch "$FIXTURE/sweep-would"
+run_keeper "$WORK/sweep-dry.out" --dry-run
+expect_exit 0 "sweep --dry-run: exits 0"
+expect_same "--dry-run" "$(cat "$SWEEP_LOG")" "sweep --dry-run: --dry-run is passed on"
+expect_has $'\tWOULD_REMOVE_WORKTREE\t' "sweep --dry-run: logs what would go" "$WORK/sweep-dry.out"
+expect_without $'\tREMOVE_WORKTREE\t' "sweep --dry-run: logs no removal" "$WORK/sweep-dry.out"
+
+new_fixture sweep-repo
+run_keeper "$WORK/sweep-repo.out" --repo test/repo
+expect_exit 0 "sweep --repo: exits 0"
+expect_has "--repo test/repo" "sweep --repo: --repo is passed on" "$SWEEP_LOG"
+
+new_fixture sweep-fail
+touch "$FIXTURE/sweep-fail"
+run_keeper "$WORK/sweep-fail.out"
+expect_exit 0 "sweep failure: exits 0"
+expect_has "sweep-worktrees.sh" "sweep failure: is reported with the script's name" "$WORK/sweep-fail.out"
+expect_has "orca offline" "sweep failure: carries the sweep's message" "$WORK/sweep-fail.out"
+expect_has $'\tERROR\t' "sweep failure: is logged as an error" "$WORK/sweep-fail.out"
+expect_has $'\tROUND\tend' "sweep failure: the round still ends" "$WORK/sweep-fail.out"
+
+new_fixture sweep-missing
+SWEEP_SCRIPT=$BIN/no-such-sweep.sh
+run_keeper "$WORK/sweep-missing.out"
+SWEEP_SCRIPT=$BIN/sweep-worktrees.sh
+expect_exit 0 "sweep missing: exits 0"
+expect_has "sweep-worktrees.sh" "sweep missing: is reported" "$WORK/sweep-missing.out"
+expect_has $'\tSKIP\t' "sweep missing: is a skip" "$WORK/sweep-missing.out"
 
 printf '\n%s\n' "passed=$PASSED failed=$FAILED"
 [ "$FAILED" -eq 0 ]
