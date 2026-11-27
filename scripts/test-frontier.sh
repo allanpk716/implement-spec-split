@@ -66,7 +66,7 @@ SPEC_ARG=10
 run_frontier() {
   output=$1
   shift
-  env FIXTURE_DIR="${FRONTIER_FIXTURE:-$FIXTURE}" PATH="$BIN:$PATH" "$@" \
+  env FIXTURE_DIR="$FIXTURE" PATH="$BIN:$PATH" "$@" \
     bash "$SCRIPT" --repo test/repo --spec "$SPEC_ARG" > "$output" 2> "${output}.err"
   RUN_EXIT=$?
 }
@@ -214,8 +214,9 @@ fi
 # tickets that pass the other frontier conditions frontier.sh releases only the
 # lowest-numbered one; the rest wait in `# blocked`, naming it. A labelled
 # ticket that is blocked, human or shelved is not eligible and takes no slot.
-# Each scenario is the Spec's own fixture directory, swapped in via
-# FRONTIER_FIXTURE. Expected outputs are hand-written, not recomputed.
+# Each scenario is the Spec's own fixture directory, swapped in by overriding
+# FIXTURE_DIR on the run_frontier call. Expected outputs are hand-written, not
+# recomputed.
 WORK=$WORK node > /dev/null <<'NODE'
 const fs = require('fs');
 const work = process.env.WORK;
@@ -303,7 +304,7 @@ NODE
 run_counter_case() {
   scenario=$1
   output=$2
-  FRONTIER_FIXTURE="$WORK/$scenario" run_frontier "$output"
+  run_frontier "$output" FIXTURE_DIR="$WORK/$scenario"
   awk '/^# /{exit} {print}' "$output" > "${output%.out}-frontier.out"
 }
 
