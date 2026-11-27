@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # List unfinished work in the wayfinder -> to-spec -> to-tickets -> implement pipeline.
+# --order's --apart pairs keep two Specs out of one wave, and keep the idle side out of
+# the new wave while the other is in flight (running, or resumed first); see usage().
 
 set -u
 
