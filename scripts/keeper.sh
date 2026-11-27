@@ -240,9 +240,11 @@ state_op() { # count|add|seen|notify|nudge-get|nudge-set|nudge-clear key [value.
       save();
     } else if (op === "nudge-get") {
       const nudge = state.nudges[key];
-      if (nudge && nudge.at) process.stdout.write(String(nudge.at) + "\x1f" + String(nudge.terminal || ""));
+      // The pane of the nudged terminal, never its handle: the handle is asked
+      // of Orca again when it is used (rule 3 of lib-orca.sh).
+      if (nudge && nudge.at) process.stdout.write([nudge.at, nudge.tabId || "", nudge.leafId || ""].join("\x1f"));
     } else if (op === "nudge-set") {
-      state.nudges[key] = {at: Number(process.argv[3]) || now, terminal: process.argv[4] || ""};
+      state.nudges[key] = {at: Number(process.argv[3]) || now, tabId: process.argv[4] || "", leafId: process.argv[5] || ""};
       save();
     } else if (op === "nudge-clear") {
       if (state.nudges[key]) { delete state.nudges[key]; save(); }
@@ -570,7 +572,7 @@ report_info() { # spec number -> kind<US>id<US>url<US>category<US>recover_at<US>
 
 # One agent terminal in the Spec worktree: no progress tab, preferring the agent
 # the launch state names and otherwise the most recently active one.
-terminal_pick() { # worktree spec launch_agent -> handle<US>title<US>agent
+terminal_pick() { # worktree spec launch_agent -> handle<US>title<US>agent<US>tabId<US>leafId
   node -e '
     const fs = require("fs");
     const wanted = process.argv[2];
@@ -594,10 +596,11 @@ terminal_pick() { # worktree spec launch_agent -> handle<US>title<US>agent
       const score = identity === agent ? 2 : 1;
       const at = Number(terminal.lastOutputAt || 0);
       if (!best || score > best.score || (score === best.score && at > best.at)) {
-        best = {score, at, handle: String(terminal.handle || ""), title, identity};
+        best = {score, at, handle: String(terminal.handle || ""), title, identity,
+          tabId: String(terminal.tabId || ""), leafId: String(terminal.leafId || "")};
       }
     }
-    if (best) process.stdout.write([best.handle, best.title, best.identity].join("\x1f"));
+    if (best) process.stdout.write([best.handle, best.title, best.identity, best.tabId, best.leafId].join("\x1f"));
   ' "$WORK/terminals.json" "$1" "$2" "$3"
 }
 
@@ -726,11 +729,11 @@ EOF
     return 0
   fi
 
-  local nudge handle at
+  local nudge handle at tab leaf picked found status title agent
   nudge=$(state_op nudge-get "$REPO#$spec")
   if [ -z "$nudge" ]; then
-    handle=$(terminal_pick "$worktree" "$spec" "$LAUNCH_AGENT")
-    handle=${handle%%$'\x1f'*}
+    picked=$(terminal_pick "$worktree" "$spec" "$LAUNCH_AGENT")
+    IFS=$'\x1f' read -r handle title agent tab leaf <<<"$picked"
     if [ -z "$handle" ]; then
       log_line "$REPO" "#$spec" SKIP "卡住 ${age}s 无写入，但找不到会话终端：$worktree"
       return 0
@@ -740,7 +743,9 @@ EOF
       return 0
     fi
     if orca_terminal_send "$handle" "$NUDGE_TEXT" >/dev/null 2>&1; then
-      state_op nudge-set "$REPO#$spec" "$(date +%s)" "$handle"
+      # Only the pane is kept between rounds; the handle is not (rule 3 of
+      # lib-orca.sh), so the close asks Orca for it again.
+      state_op nudge-set "$REPO#$spec" "$(date +%s)" "$tab" "$leaf"
       log_line "$REPO" "#$spec" NUDGE "卡住 ${age}s 无写入；已发送继续到 $handle"
     else
       log_line "$REPO" "#$spec" ERROR "orca terminal send 失败：$handle"
@@ -748,14 +753,30 @@ EOF
     return 0
   fi
 
-  at=${nudge%%$'\x1f'*}
-  handle=${nudge#*$'\x1f'}
+  IFS=$'\x1f' read -r at tab leaf <<<"$nudge"
   if [ $(( now - at )) -lt "$STALL_SEC" ]; then
     log_line "$REPO" "#$spec" WAIT "已发送继续，仍在等待（$(( now - at ))s）"
     return 0
   fi
   if ! can_resume "$spec"; then
     return 0
+  fi
+  # The handle is resolved here, from the pane, right before the close. A pane
+  # Orca no longer lists has no handle: the terminal is already closed. An Orca
+  # that cannot answer is not a closed terminal: it is logged as the failure it
+  # is, and the round goes on as it always did when a close failed. A record
+  # without a pane comes from the keeper version that kept the handle instead.
+  handle=
+  if [ -z "$tab" ] || [ -z "$leaf" ]; then
+    log_line "$REPO" "#$spec" SKIP "上一轮的 nudge 记录没有 pane，拿不到会话终端当前的 handle，不关终端"
+  else
+    status=0
+    found=$(orca_terminal_by_pane "$tab" "$leaf" 2>"$WORK/orca-pane.err") || status=$?
+    case "$status" in
+      0) handle=${found%%$'\t'*} ;;
+      1) log_line "$REPO" "#$spec" SKIP "会话终端（pane ${tab}/${leaf}）已不在 Orca 的终端列表里，不关终端" ;;
+      *) log_line "$REPO" "#$spec" ERROR "orca terminal list 失败，拿不到会话终端（pane ${tab}/${leaf}）的 handle：$(head -n 1 "$WORK/orca-pane.err" 2>/dev/null)" ;;
+    esac
   fi
   if [ "$DRY" -eq 1 ]; then
     [ -n "$handle" ] && log_line "$REPO" "#$spec" WOULD_CLOSE_TERMINAL "$handle"
