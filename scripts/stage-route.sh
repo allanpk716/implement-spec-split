@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # The Stage route table (GLOSSARY.md "Stage route", ADR 0004): which Launcher
 # profile, model and reasoning effort each of the six stages runs on, with an
-# optional expiry. It replaces the two older switches, scripts/judgment-model.sh
-# and scripts/worker-model.sh, and coexists with them until every reader has
-# moved here (issues #32, #33, #34) and the old scripts are deleted (#38). The
-# settings those switches leave in effect are carried into this table on the
-# first run (see "Migration" below), so an upgrade loses nothing in use.
+# optional expiry. It replaces the two older model switches, deleted once every
+# reader had moved here (issues #32, #33, #34, #38). The settings those switches
+# left in effect are carried into this table on the first run (see "Migration"
+# below), so an upgrade loses nothing in use.
 #
 # A change takes effect at the stage's next dispatch or next new session. A
 # session or worker that is already executing is never switched mid-call.

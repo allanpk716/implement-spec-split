@@ -1146,7 +1146,11 @@ expect_file_has 'grill-map' 'README documents the map skill symlink' "$ROOT/READ
 expect_file_has 'grill-feature' 'setup documents the feature skill symlink' "$ROOT/docs/setup.md"
 expect_file_has 'grill-map' 'setup documents the map skill symlink' "$ROOT/docs/setup.md"
 expect_file_has 'bash scripts/test-design-session.sh' 'MAINTAINING registers the new test' "$ROOT/MAINTAINING.md"
-expect_file_has 'bash scripts/test-judgment-model.sh' 'MAINTAINING registers the switch test' "$ROOT/MAINTAINING.md"
+if grep -Fq 'bash scripts/test-judgment-model.sh' "$ROOT/MAINTAINING.md"; then
+  record FAIL 'MAINTAINING no longer registers the deleted switch test'
+else
+  record PASS 'MAINTAINING no longer registers the deleted switch test'
+fi
 expect_file_has 'grill-feature / grill-map 收到 handoff 后自动接 find-next 推进模式' \
   'MAINTAINING records the find-next hand-over decision' "$ROOT/MAINTAINING.md"
 expect_file_has 'scripts/stage-route.sh' 'README documents the Stage route table' "$ROOT/README.md"

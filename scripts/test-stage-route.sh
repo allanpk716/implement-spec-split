@@ -1186,10 +1186,15 @@ else
 fi
 expect_file_has 'bash scripts/test-stage-route.sh' 'MAINTAINING registers the test in its self-test list' "$ROOT/MAINTAINING.md"
 
+# The two old switches are deleted, leaving no alias (#38): their scripts,
+# skills and tests are gone for good.
+for old in scripts/judgment-model.sh judgment-model scripts/test-judgment-model.sh \
+  scripts/worker-model.sh worker-model scripts/test-worker-model.sh; do
+  expect_file_missing "the old switch $old is deleted" "$ROOT/$old"
+done
 # The user documents describe the Stage route table, not the two old switches
-# (#37). scripts/judgment-model.sh, its skill and its test stay until #38 deletes
-# them, and MAINTAINING's numbered decision records keep the old names as history,
-# so none of those is in this list.
+# (#37). MAINTAINING's numbered decision records keep the old names as history,
+# so that file is not in this list.
 LINK='ln -s ~/.claude/skills/implement-spec-split/grill-router ~/.claude/skills/grill-router'
 for doc in README.md docs/setup.md docs/setup.en.md; do
   expect_file_has "$LINK" "$doc documents the router skill symlink" "$ROOT/$doc"
