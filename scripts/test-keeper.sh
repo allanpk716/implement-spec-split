@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Isolated fake-dependency tests for scripts/keeper.sh.
-# No network, no Orca, no launchd: gh, orca, claim.sh, launch-wave.sh and lock.sh
-# are fakes injected through PATH and KEEPER_* environment variables.
+# No network, no Orca, no launchd: gh, claim.sh, launch-wave.sh and lock.sh are
+# fakes injected through PATH and KEEPER_* environment variables; orca is a fake
+# outside PATH, named by ISS_ORCA (the one Orca replacement variable).
 
 set -u
 
@@ -11,6 +12,9 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/keeper-test.XXXXXX")
 trap 'chmod -R u+w "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
 
 BIN=$WORK/bin
+# The fake orca lives outside PATH on purpose: keeper.sh must reach Orca only
+# through ISS_ORCA, never through an `orca` that happens to be on PATH.
+ORCA_BIN=$WORK/orca-bin
 REPO_PATH=$WORK/repo
 WT=$WORK/wt/spec-19
 PASSED=0
@@ -93,7 +97,7 @@ encoded_path() { # same encoding keeper.sh uses for ~/.claude/projects
   printf '%s' "$1" | sed 's#[^A-Za-z0-9]#-#g'
 }
 
-mkdir -p "$BIN" "$WORK/home" "$WORK/projects" "$WORK/runs" "$WORK/codex-runs" \
+mkdir -p "$BIN" "$ORCA_BIN" "$WORK/home" "$WORK/projects" "$WORK/runs" "$WORK/codex-runs" \
   "$WORK/launch-state" "$WT" 2>/dev/null || exit 1
 
 git init -q "$REPO_PATH" 2>/dev/null || exit 1
@@ -126,7 +130,7 @@ printf 'fake gh: unexpected arguments: %s\n' "$*" >&2
 exit 2
 EOF
 
-cat >"$BIN/orca" <<'EOF'
+cat >"$ORCA_BIN/orca" <<'EOF'
 #!/usr/bin/env bash
 set -u
 case "${1:-} ${2:-}" in
@@ -135,6 +139,10 @@ case "${1:-} ${2:-}" in
     exit 0
     ;;
   "terminal list")
+    if [ -f "$FIXTURE_DIR/orca-list-fail" ]; then
+      printf 'orca offline\n' >&2
+      exit 1
+    fi
     if [ -f "$FIXTURE_DIR/terminals.json" ]; then
       cat "$FIXTURE_DIR/terminals.json"
     else
@@ -202,7 +210,18 @@ printf 'fake lock: unexpected arguments: %s\n' "$*" >&2
 exit 2
 EOF
 
-chmod +x "$BIN/gh" "$BIN/orca" "$BIN/claim.sh" "$BIN/launch-wave.sh" "$BIN/lock.sh"
+chmod +x "$BIN/gh" "$ORCA_BIN/orca" "$BIN/claim.sh" "$BIN/launch-wave.sh" "$BIN/lock.sh"
+
+# Guard rail: this machine has a real `orca` on PATH. The one on the tests' PATH
+# refuses every call, so a keeper.sh that stops going through ISS_ORCA fails
+# here instead of quietly reading the real Orca.
+cat >"$BIN/orca" <<'EOF'
+#!/usr/bin/env bash
+printf 'PATH orca called: %s\n' "$*" >>"$ORCA_LOG"
+printf 'test-keeper: orca on PATH was called instead of ISS_ORCA\n' >&2
+exit 99
+EOF
+chmod +x "$BIN/orca"
 
 # --- fixtures ----------------------------------------------------------------
 
@@ -255,7 +274,7 @@ run_keeper() { # out [keeper arguments]
       KEEPER_CLAIM="$BIN/claim.sh" \
       KEEPER_LAUNCH_WAVE="$BIN/launch-wave.sh" \
       KEEPER_LOCK="$BIN/lock.sh" \
-      KEEPER_ORCA="$BIN/orca" \
+      ISS_ORCA="$ORCA_BIN/orca" \
       KEEPER_GH="$BIN/gh" \
       KEEPER_NOTIFY_CMD='printf "%s\n" "$KEEPER_NOTIFY_MESSAGE" >>"$NOTIFY_LOG"' \
       KEEPER_STALL_MIN="${STALL_MIN:-45}" \
@@ -282,6 +301,26 @@ write_parking() { # body [created_at]
   cat >"$FIXTURE/comments-19.json" <<JSON
 [{"id": 9001, "created_at": "${2:-$(epoch_iso 0)}", "html_url": "https://example.test/issues/19#comment-9001", "body": $(printf '%s' "$1" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.stringify(s)))')}]
 JSON
+}
+
+stall_spec_19() { # an active claim whose transcript and Run directory went silent two hours ago
+  printf '19\tactive\t{"spec":19,"branch":"spec-19","worktree":"%s","pid":1}\n' "$WT" >>"$FIXTURE/claims.txt"
+  write_run implement "$(epoch_at -7200)"
+  write_transcript "$(epoch_at -7200)"
+}
+
+session_terminal() { # [handle] -> the Spec 19 session terminal, pane tab1/leaf1
+  printf '{"handle": "%s", "title": "Claude Code", "worktreePath": "%s",\n   "tabId": "tab1", "leafId": "leaf1", "agentIdentity": "claude", "lastOutputAt": 1}' \
+    "${1:-term_19}" "$WT"
+}
+
+write_terminals() { # terminal records... -> what the fake orca lists
+  local sep=
+  {
+    printf '{"ok": true, "result": {"terminals": ['
+    for record in "$@"; do printf '%s%s' "$sep" "$record"; sep=,; done
+    printf ']}}\n'
+  } >"$FIXTURE/terminals.json"
 }
 
 # --- quota parking, not yet recoverable --------------------------------------
@@ -384,11 +423,11 @@ write_transcript "$(epoch_at -7200)"
 cat >"$FIXTURE/terminals.json" <<JSON
 {"ok": true, "result": {"terminals": [
   {"handle": "term_19", "title": "Claude Code", "worktreePath": "$WT",
-   "tabId": "tab1", "agentIdentity": "claude", "lastOutputAt": 1},
+   "tabId": "tab1", "leafId": "leaf1", "agentIdentity": "claude", "lastOutputAt": 1},
   {"handle": "term_progress", "title": "spec-19 t28", "worktreePath": "$WT",
-   "tabId": "tab2", "agentIdentity": "claude", "lastOutputAt": 2},
+   "tabId": "tab2", "leafId": "leaf2", "agentIdentity": "claude", "lastOutputAt": 2},
   {"handle": "term_other", "title": "Claude Code", "worktreePath": "$WORK/elsewhere",
-   "tabId": "tab3", "agentIdentity": "claude", "lastOutputAt": 3}
+   "tabId": "tab3", "leafId": "leaf3", "agentIdentity": "claude", "lastOutputAt": 3}
 ]}}
 JSON
 STALL_MIN=0 run_keeper "$WORK/stall-1.out" --dry-run
@@ -414,6 +453,105 @@ expect_has "release 19 --force" "stalled round 2: releases the claim" "$WORK/cla
 expect_has "--only 19 --apply" "stalled round 2: resumes the spec" "$WORK/launch.log"
 expect_has $'\tRESUME\t' "stalled round 2: logs the resume" "$WORK/stall-3.out"
 expect_count "release 19 --force" 1 "stalled round 2: releases once" "$WORK/claim.log"
+
+# --- stalled session, round 2: the handle is asked of Orca again --------------
+# The handle the nudge round resolved is never reused across rounds (rule 3 of
+# lib-orca.sh): the close asks Orca for the nudged pane's current handle.
+
+new_fixture handle-drift
+stall_spec_19
+write_terminals "$(session_terminal)"
+STALL_MIN=0 run_keeper "$WORK/drift-1.out"
+expect_has "terminal send --terminal term_19" "handle drift round 1: nudges the session terminal" "$WORK/orca.log"
+# Orca re-issued the handle of that same pane between the rounds
+write_terminals "$(session_terminal term_19_moved)"
+STALL_MIN=0 run_keeper "$WORK/drift-2.out"
+expect_has "terminal close --terminal term_19_moved --tab" "handle drift round 2: closes the handle Orca gives now" "$WORK/orca.log"
+expect_without "terminal close --terminal term_19 --tab" "handle drift round 2: does not reuse the handle the nudge round kept" "$WORK/orca.log"
+
+# The session terminal was closed by hand and Orca gave its old handle to a
+# terminal of another worktree: that one must not be closed in its place.
+new_fixture terminal-closed
+stall_spec_19
+write_terminals "$(session_terminal)"
+STALL_MIN=0 run_keeper "$WORK/closed-1.out"
+expect_has "terminal send --terminal term_19" "terminal closed round 1: nudges the session terminal" "$WORK/orca.log"
+write_terminals '{"handle": "term_19", "title": "Claude Code", "worktreePath": "'"$WORK"'/elsewhere",
+   "tabId": "tab9", "leafId": "leaf9", "agentIdentity": "claude", "lastOutputAt": 3}'
+STALL_MIN=0 run_keeper "$WORK/closed-2.out"
+expect_exit 0 "terminal closed round 2: exits 0"
+expect_without "terminal close" "terminal closed round 2: closes nothing, not the terminal that took the old handle" "$WORK/orca.log"
+expect_has $'\tSKIP\t会话终端（pane tab1/leaf1）已不在 Orca 的终端列表里，不关终端' "terminal closed round 2: says the session terminal is gone" "$WORK/closed-2.out"
+expect_has "release 19 --force" "terminal closed round 2: releases the claim" "$WORK/claim.log"
+expect_has "--only 19 --apply" "terminal closed round 2: resumes the spec" "$WORK/launch.log"
+
+# Orca cannot answer at all: nothing is closed under a name nobody gave, the
+# failure is logged as such (not as a closed terminal), and the round goes on
+# the way it always did when a close failed.
+new_fixture orca-down
+stall_spec_19
+write_terminals "$(session_terminal)"
+STALL_MIN=0 run_keeper "$WORK/orca-down-1.out"
+expect_has "terminal send --terminal term_19" "orca down round 1: nudges the session terminal" "$WORK/orca.log"
+touch "$FIXTURE/orca-list-fail"
+STALL_MIN=0 run_keeper "$WORK/orca-down-2.out"
+expect_exit 0 "orca down round 2: exits 0"
+expect_without "terminal close" "orca down round 2: closes nothing" "$WORK/orca.log"
+expect_has $'\tERROR\t' "orca down round 2: logs the failure" "$WORK/orca-down-2.out"
+expect_has "orca offline" "orca down round 2: carries Orca's message" "$WORK/orca-down-2.out"
+expect_without "已不在 Orca 的终端列表里" "orca down round 2: does not mistake a failing Orca for a closed terminal" "$WORK/orca-down-2.out"
+expect_has "release 19 --force" "orca down round 2: still releases the claim" "$WORK/claim.log"
+expect_has "--only 19 --apply" "orca down round 2: still resumes the spec" "$WORK/launch.log"
+
+# --dry-run resolves the handle the same way and only prints what it would close
+new_fixture handle-drift-dry-run
+stall_spec_19
+write_terminals "$(session_terminal)"
+STALL_MIN=0 run_keeper "$WORK/drift-dry-1.out"
+expect_has "terminal send --terminal term_19" "handle drift dry-run round 1: nudges the session terminal" "$WORK/orca.log"
+write_terminals "$(session_terminal term_19_moved)"
+STALL_MIN=0 run_keeper "$WORK/drift-dry-2.out" --dry-run
+expect_exit 0 "handle drift dry-run round 2: exits 0"
+expect_has $'\tWOULD_CLOSE_TERMINAL\tterm_19_moved' "handle drift dry-run round 2: would close the handle Orca gives now" "$WORK/drift-dry-2.out"
+expect_count $'\tWOULD_CLOSE_TERMINAL\t' 1 "handle drift dry-run round 2: names that one terminal only, not the handle the nudge round kept" "$WORK/drift-dry-2.out"
+expect_without "terminal close" "handle drift dry-run round 2: closes nothing" "$WORK/orca.log"
+expect_count "release 19 --force" 0 "handle drift dry-run round 2: releases nothing" "$WORK/claim.log"
+expect_without "launched" "handle drift dry-run round 2: launches nothing" "$WORK/launch.log"
+
+# A nudge record from the keeper version before the pane was kept names only a
+# handle. That handle is not used either: such a record closes nothing on its
+# way out, and says so.
+new_fixture legacy-nudge-record
+stall_spec_19
+write_terminals "$(session_terminal)"
+node -e '
+  const fs = require("fs");
+  fs.writeFileSync(process.argv[1], JSON.stringify({
+    version: 1, resumes: {}, notified: {},
+    nudges: {"test/repo#19": {at: Math.floor(Date.now() / 1000) - 3600, terminal: "term_19"}}
+  }, null, 2));
+' "$STATE"
+STALL_MIN=0 run_keeper "$WORK/legacy-nudge.out"
+expect_exit 0 "legacy nudge record: exits 0"
+expect_without "terminal close" "legacy nudge record: its handle closes nothing" "$WORK/orca.log"
+expect_has $'\tSKIP\t上一轮的 nudge 记录没有 pane' "legacy nudge record: says why nothing is closed" "$WORK/legacy-nudge.out"
+expect_has "release 19 --force" "legacy nudge record: releases the claim" "$WORK/claim.log"
+expect_has "--only 19 --apply" "legacy nudge record: resumes the spec" "$WORK/launch.log"
+
+# Before the second STALL_MIN has passed the round only waits, whatever the
+# handle is now: nothing is resolved for a close, nothing is closed.
+new_fixture still-waiting
+stall_spec_19
+write_terminals "$(session_terminal)"
+STALL_MIN=45 run_keeper "$WORK/wait-1.out"
+expect_has $'\tNUDGE\t' "still waiting round 1: nudges" "$WORK/wait-1.out"
+write_terminals "$(session_terminal term_19_moved)"
+STALL_MIN=45 run_keeper "$WORK/wait-2.out"
+expect_exit 0 "still waiting round 2: exits 0"
+expect_has $'\tWAIT\t' "still waiting round 2: waits" "$WORK/wait-2.out"
+expect_without "terminal close" "still waiting round 2: closes nothing" "$WORK/orca.log"
+expect_count "release 19 --force" 0 "still waiting round 2: releases nothing" "$WORK/claim.log"
+expect_without "launched" "still waiting round 2: launches nothing" "$WORK/launch.log"
 
 # --- fresh writes: no action -------------------------------------------------
 

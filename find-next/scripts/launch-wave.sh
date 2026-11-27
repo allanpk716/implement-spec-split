@@ -184,7 +184,10 @@ fi
 PIPELINE_STATUS=${ISS_PIPELINE_STATUS:-$SKILL_ROOT/scripts/pipeline-status.sh}
 CLAIM=${ISS_CLAIM:-$SKILL_ROOT/scripts/claim.sh}
 MAX_WORKERS_CMD=${ISS_MAX_WORKERS_CMD:-$SKILL_ROOT/scripts/max-workers.sh}
-ORCA=${ISS_ORCA:-orca}
+# Orca is reached only through the public library; ISS_ORCA, read there, names the
+# executable.
+# shellcheck source=../../scripts/lib-orca.sh
+source "$SKILL_ROOT/scripts/lib-orca.sh"
 # Git Bash rewrites a leading-slash argument passed to a native program as a POSIX path,
 # so `--prompt "/implement-spec-split 28 ..."` reached orca as
 # "C:/Program Files/Git/implement-spec-split 28 ...". Exempt only that prefix; worktree
@@ -497,7 +500,7 @@ NODE
 }
 
 orca_worktrees() {
-  ORCA_LIST=$("$ORCA" worktree list --json 2>/dev/null)
+  ORCA_LIST=$(orca_worktree_list 2>/dev/null)
   # Pass the JSON via a temp file: on Windows/MSYS the worktree list can exceed
   # the ~32KB per-argument limit and `node -e ... "$ORCA_LIST"` dies with
   # "Argument list too long" (exit 126), making Orca detection fail.
@@ -583,7 +586,7 @@ if [ "$APPLY" -eq 0 ]; then
   fi
 
   IN_ORCA=0
-  if "$ORCA" status --json > "$run_out" 2> "$run_err" && orca_worktrees; then
+  if orca_status > "$run_out" 2> "$run_err" && orca_worktrees; then
     IN_ORCA=1
   fi
 
@@ -626,7 +629,7 @@ EOF
   exit 0
 fi
 
-if ! "$ORCA" status --json > "$run_out" 2> "$run_err" || ! orca_worktrees; then
+if ! orca_status > "$run_out" 2> "$run_err" || ! orca_worktrees; then
   printf '%s\n' '不在 Orca 里，无法自动启动。' >&2
   exit 2
 fi
@@ -731,8 +734,8 @@ while IFS=$'\t' read -r kind spec command_json worktree_json; do
     fi
     resume_worktree=$(printf '%s\n' "$reserve_output" | sed -n '1p')
     if in_orca "$worktree"; then
-      if "$ORCA" agent launch --agent "$LAUNCH_AGENT" --worktree "path:$resume_worktree" \
-        --prompt "$command" --json < /dev/null > "$run_out" 2> "$run_err"; then
+      if orca_agent_launch "$LAUNCH_AGENT" "$resume_worktree" "$command" \
+        < /dev/null > "$run_out" 2> "$run_err"; then
         printf '#%s 已启动：%s\n' "$spec" "$resume_worktree"
         started=$((started + 1))
       else
@@ -743,10 +746,9 @@ while IFS=$'\t' read -r kind spec command_json worktree_json; do
     else
       escaped_worktree=$(printf '%q' "$worktree")
       escaped_command=$(printf '%q' "$command")
-      if "$ORCA" terminal create --worktree "path:$MAIN_WORKTREE" \
-        --title "spec-$spec" \
-        --command "cd $escaped_worktree && $MANUAL_AGENT $escaped_command" \
-        --json < /dev/null > "$run_out" 2> "$run_err"; then
+      if orca_terminal_create "$MAIN_WORKTREE" "spec-$spec" \
+        "cd $escaped_worktree && $MANUAL_AGENT $escaped_command" \
+        < /dev/null > "$run_out" 2> "$run_err"; then
         printf '#%s 已启动：%s（挂在主工作树的终端标签 spec-%s）\n' \
           "$spec" "$worktree" "$spec"
         started=$((started + 1))
@@ -776,9 +778,8 @@ while IFS=$'\t' read -r kind spec command_json worktree_json; do
     continue
   fi
 
-  if "$ORCA" worktree create --repo "path:$MAIN_WORKTREE" --name "spec-$spec" \
-    --branch "spec-$spec" --base-branch "origin/$MAIN_BRANCH" --issue "$spec" \
-    --no-parent --agent "$LAUNCH_AGENT" --prompt "$command" --json < /dev/null > "$run_out" 2> "$run_err"; then
+  if orca_worktree_create "$MAIN_WORKTREE" "spec-$spec" "spec-$spec" "origin/$MAIN_BRANCH" \
+    "$spec" "$LAUNCH_AGENT" "$command" < /dev/null > "$run_out" 2> "$run_err"; then
     created=$(extract_created_worktree "$(cat "$run_out")")
     [ -n "$created" ] || created='路径未知'
     printf '#%s 已启动：%s\n' "$spec" "$created"

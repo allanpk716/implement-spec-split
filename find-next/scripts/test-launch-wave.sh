@@ -1,13 +1,23 @@
 #!/usr/bin/env bash
 # Isolated fake-dependency tests for find-next/scripts/launch-wave.sh.
+# orca is a fake outside PATH, named by ISS_ORCA (the one Orca replacement
+# variable, read by scripts/lib-orca.sh); the `orca` on the tests' PATH refuses
+# every call.
 
 set -u
+
+# A flash orchestrator session exports FLASH_ORCHESTRATOR=1, which switches
+# launch-wave.sh into flash mode (agent backend by default, OpenClaude
+# sessions). Only the flash block below sets the variable; every other case
+# runs as an ordinary session, whatever session started this test.
+unset FLASH_ORCHESTRATOR
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 SCRIPT=$ROOT/find-next/scripts/launch-wave.sh
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/launch-wave-test.XXXXXX")
 OLD_SCRIPT=$WORK/old-launch-wave.sh
 BIN=$WORK/bin
+ORCA_BIN=$WORK/orca-bin
 REPO=$WORK/git-repo
 ORIGIN=$WORK/test/repo.git  # path ends in the --repo slug the script checks
 WT222=$WORK/spec-222
@@ -31,6 +41,7 @@ ORCA_LIST=$WORK/orca-list.json
 ORCA_LIST_NO_MAIN=$WORK/orca-list-no-main.json
 ORCA_LIST_LARGE=$WORK/orca-list-large.json
 ORCA_LOG=$WORK/orca.log
+ORCA_GUARD_LOG=$WORK/orca-guard.log
 CLAIM_LOG=$WORK/claim.log
 MAX_LOG=$WORK/max-workers.log
 PIPELINE_LOG=$WORK/pipeline.log
@@ -137,7 +148,20 @@ expect_sequence() {
   fi
 }
 
-mkdir -p "$BIN" "$REPO" "$WORKER_STATE_DIR" "$LAUNCH_STATE_DIR" || exit 1
+# The fake orca logs its command and then one line per argument, so a whole
+# log (or a tail of one) can be compared with the calls a test expects.
+expect_log() {
+  expected=$1
+  name=$2
+  file=$3
+  if [ "$(cat "$file" 2>/dev/null)" = "$expected" ]; then
+    record PASS "$name"
+  else
+    record FAIL "$name" "$(diff <(printf '%s\n' "$expected") "$file" 2>/dev/null | tail -n 6 | tr '\n' ' ')"
+  fi
+}
+
+mkdir -p "$BIN" "$ORCA_BIN" "$REPO" "$WORKER_STATE_DIR" "$LAUNCH_STATE_DIR" || exit 1
 git show pre-flash-orchestrator:find-next/scripts/launch-wave.sh > "$OLD_SCRIPT"
 chmod +x "$OLD_SCRIPT"
 cat > "$BIN/date" <<'EOF'
@@ -412,7 +436,9 @@ printf '%s\n' 'CLAIM_RELEASE' >> "$LAUNCH_SEQUENCE_LOG"
 EOF
 chmod +x "$BIN/fake-claim"
 
-cat > "$BIN/fake-orca" <<'EOF'
+# The fake orca lives outside PATH on purpose: launch-wave.sh must reach Orca
+# only through ISS_ORCA, never through an `orca` that happens to be on PATH.
+cat > "$ORCA_BIN/orca" <<'EOF'
 #!/usr/bin/env bash
 set -u
 printf '%s\n' 'orca' >> "$LAUNCH_ORCA_LOG"
@@ -474,7 +500,18 @@ case "$1" in
   *) exit 2 ;;
 esac
 EOF
-chmod +x "$BIN/fake-orca"
+chmod +x "$ORCA_BIN/orca"
+
+# Guard rail: this machine has a real `orca` on PATH. The one on the tests' PATH
+# refuses every call, so a launch-wave.sh that stops going through ISS_ORCA
+# fails here instead of quietly reading the real Orca.
+cat > "$BIN/orca" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$LAUNCH_ORCA_GUARD_LOG"
+printf 'test-launch-wave: orca on PATH was called instead of ISS_ORCA\n' >&2
+exit 99
+EOF
+chmod +x "$BIN/orca"
 
 run_launch() {
   output=$1
@@ -492,10 +529,12 @@ run_launch() {
       LAUNCH_RESUME_DEFAULT="$WT222" \
       LAUNCH_PIPELINE_LOG="$PIPELINE_LOG" LAUNCH_CLAIM_LOG="$CLAIM_LOG" \
       LAUNCH_MAX_LOG="$MAX_LOG" LAUNCH_ORCA_LOG="$ORCA_LOG" \
+      LAUNCH_ORCA_GUARD_LOG="$ORCA_GUARD_LOG" \
       LAUNCH_SEQUENCE_LOG="$SEQUENCE_LOG" \
       ISS_PIPELINE_STATUS="${ISS_PIPELINE_STATUS_OVERRIDE:-$BIN/fake-pipeline}" \
       ISS_CLAIM="$BIN/fake-claim" \
-      ISS_MAX_WORKERS_CMD="$BIN/fake-max-workers" ISS_ORCA="$BIN/fake-orca" \
+      ISS_MAX_WORKERS_CMD="$BIN/fake-max-workers" \
+      ISS_ORCA="${ISS_ORCA_OVERRIDE:-$ORCA_BIN/orca}" \
       ISS_LOCK="$ROOT/scripts/lock.sh" \
       ISS_LAUNCH_STATE_DIR="${LAUNCH_STATE_DIR_OVERRIDE:-$LAUNCH_STATE_DIR}" \
       ISS_STATE_DIR="${LAUNCH_WORKER_STATE_DIR_OVERRIDE:-$WORKER_STATE_DIR}" \
@@ -523,6 +562,8 @@ expect_has --workers 'pipeline receives worker total' "$PIPELINE_LOG"
 expect_has --json 'dry run asks pipeline for JSON' "$PIPELINE_LOG"
 expect_without 'reserve' 'dry run makes no claim' "$CLAIM_LOG"
 expect_without 'create' 'dry run creates no Orca worktree' "$ORCA_LOG"
+expect_log "$(printf 'orca\nstatus\n--json\norca\nworktree\nlist\n--json')" \
+  'dry run asks Orca for its status and the worktree list, nothing else' "$ORCA_LOG"
 cat > "$WORK/dry.expected" <<EOF
 开发顺序（同时 2 份，共 4 个 worker）
 先恢复：#222 #224 #238
@@ -542,6 +583,22 @@ if cmp -s "$WORK/dry.out" "$WORK/dry.expected"; then
 else
   record FAIL 'dry run without flash is byte-for-byte unchanged' \
     "$(diff -u "$WORK/dry.expected" "$WORK/dry.out" | tail -n 5)"
+fi
+
+# --- ISS_ORCA is the only way to reach orca -----------------------------------
+# An `orca` on PATH must not be used when ISS_ORCA names a program that does
+# not exist: then this is not an Orca session and the run is manual.
+: > "$ORCA_LOG"; : > "$ORCA_GUARD_LOG"
+ISS_ORCA_OVERRIDE=$WORK/no-such-orca run_launch "$WORK/no-orca.out"
+unset ISS_ORCA_OVERRIDE
+expect_exit 0 "a missing ISS_ORCA program exits 0 in a dry run"
+expect_has '不在 Orca 里，请在各 worktree 手动运行：' \
+  "a missing ISS_ORCA program prints the manual heading" "$WORK/no-orca.out"
+if [ -s "$ORCA_GUARD_LOG" ]; then
+  record FAIL 'a missing ISS_ORCA program never falls back to the orca on PATH' \
+    "$(cat "$ORCA_GUARD_LOG")"
+else
+  record PASS 'a missing ISS_ORCA program never falls back to the orca on PATH'
 fi
 
 LARGE_ORCA_LIST_BYTES=$(wc -c < "$ORCA_LIST_LARGE" | tr -d '[:space:]')
@@ -773,6 +830,10 @@ expect_has '--impl agent --agent-model sonnet' \
 expect_arg_after --agent openclaude 'flash apply uses OpenClaude' "$ORCA_LOG"
 expect_has '/implement-spec-split 237 --impl agent --agent-model sonnet --auto-land --parallel 2' \
   'flash apply launches the agent-backed command' "$ORCA_LOG"
+# Every Orca call of an apply, verbatim: status and the worktree list once,
+# then the one worktree create.
+expect_log "$(printf 'orca\nstatus\n--json\norca\nworktree\nlist\n--json\norca\nworktree\ncreate\n--repo\npath:%s\n--name\nspec-237\n--branch\nspec-237\n--base-branch\norigin/master\n--issue\n237\n--no-parent\n--agent\nopenclaude\n--prompt\n/implement-spec-split 237 --impl agent --agent-model sonnet --auto-land --parallel 2\n--json' "$MAIN_WORKTREE_PATH")" \
+  'flash apply makes exactly these Orca calls with these arguments' "$ORCA_LOG"
 if node -e '
   const fs = require("fs");
   const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
@@ -808,6 +869,8 @@ fi
 run_launch "$WORK/flash-resume.out" --apply --only 222
 expect_exit 0 "flash resume succeeds"
 expect_arg_after --agent openclaude 'flash resume uses OpenClaude' "$ORCA_LOG"
+expect_log "$(printf 'orca\nstatus\n--json\norca\nworktree\nlist\n--json\norca\nagent\nlaunch\n--agent\nopenclaude\n--worktree\npath:%s\n--prompt\n/implement-spec-split 222 --impl agent --agent-model sonnet --auto-land --parallel 2\n--json' "$WT222")" \
+  'flash resume makes exactly these Orca calls with these arguments' "$ORCA_LOG"
 
 : > "$CLAIM_LOG"; : > "$ORCA_LOG"; : > "$SEQUENCE_LOG"
 LAUNCH_PLAN_FILE_OVERRIDE=$FLASH_ONLY_INVISIBLE_PLAN
@@ -823,6 +886,8 @@ FLASH_ESCAPED_COMMAND=$(printf '%q' \
   '/implement-spec-split 224 --impl agent --agent-model sonnet --parallel 2')
 expect_has "cd $FLASH_ESCAPED_WT224 && claude-flash $FLASH_ESCAPED_COMMAND" \
   'flash terminal command uses claude-flash' "$ORCA_LOG"
+expect_log "$(printf 'orca\nstatus\n--json\norca\nworktree\nlist\n--json\norca\nterminal\ncreate\n--worktree\npath:%s\n--title\nspec-224\n--command\ncd %s && claude-flash %s\n--json' "$MAIN_WORKTREE_PATH" "$FLASH_ESCAPED_WT224" "$FLASH_ESCAPED_COMMAND")" \
+  'flash invisible resume makes exactly these Orca calls with these arguments' "$ORCA_LOG"
 unset LAUNCH_PLAN_FILE_OVERRIDE LAUNCH_PLAN_TEXT_FILE_OVERRIDE
 ISS_PIPELINE_STATUS_OVERRIDE=$BIN/fake-pipeline-dynamic
 export ISS_PIPELINE_STATUS_OVERRIDE
@@ -1270,6 +1335,13 @@ LAUNCH_REPO_OVERRIDE=other/repo run_launch "$WORK/mismatch.out" --apply
 expect_exit 1 "repo that is not this checkout's origin is refused"
 expect_has 'does not match' 'mismatch names the problem' "$WORK/mismatch.out.err"
 expect_without 'create' 'mismatch never calls Orca' "$ORCA_LOG"
+
+# Every run above put the refusing `orca` on PATH; none may have reached it.
+if [ -s "$ORCA_GUARD_LOG" ]; then
+  record FAIL 'no run calls the orca on PATH instead of ISS_ORCA' "$(cat "$ORCA_GUARD_LOG")"
+else
+  record PASS 'no run calls the orca on PATH instead of ISS_ORCA'
+fi
 
 if [ "$FAILED" -eq 0 ]; then
   printf 'Summary: %d passed, 0 failed\n' "$PASSED"

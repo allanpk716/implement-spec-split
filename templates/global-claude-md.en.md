@@ -45,7 +45,7 @@ Invocation (all scripts are in `~/.claude/skills/implement-spec-split/scripts/`)
 
    MCP is off by default: add `--mcp all` for research that needs web search, `--mcp ssh-manager` for remote-server work (several names may be comma-separated); omit it for coding tasks.
 
-   The Worker model (default glm-5.4) is decided by the user's global switch `/worker-model` (`scripts/worker-model.sh`, ADR 0003); do not pass `--model` to the wrapper — it is overridden while the switch is off the default.
+   The codex worker's model and reasoning effort come from the Stage route table's matching Stage (research with `--read-only`, implementation otherwise; both default to glm-5.4 / high) and are set by the user with `/grill-router`. Do not pass `--model` (`--thinking` likewise) to the wrapper: it is overridden while the route is off its default.
 3. When it finishes, read `<run-directory>/status.json` and `result.md`.
 
 **Briefs must be self-contained**: state the goal, relevant file paths and line numbers, root-cause analysis, the desired approach to changes, acceptance criteria (which tests/commands to run), and out-of-scope areas. The worker cannot read our conversation. The Brief must also include two rules:

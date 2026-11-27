@@ -133,12 +133,11 @@ After a wayfinder discussion leaves you with a pile of tickets and no idea which
 
 Maps and tickets marked shelved (搁置) are skipped. The implementation stage is not scanned; that is `/implement-spec-split --status`.
 
-**Install**: symlink it into the skills directory (on Windows use `mklink /J`, or copy). Symlink the two model switch commands the same way (`/judgment-model` for the judgment model, `/worker-model` for the Worker model), both described in Stage 4:
+**Install**: symlink it into the skills directory (on Windows use `mklink /J`, or copy). Symlink the Stage route command `/grill-router` the same way; it is described in Stage 4:
 
 ```bash
 ln -s ~/.claude/skills/implement-spec-split/find-next ~/.claude/skills/find-next
-ln -s ~/.claude/skills/implement-spec-split/judgment-model ~/.claude/skills/judgment-model
-ln -s ~/.claude/skills/implement-spec-split/worker-model ~/.claude/skills/worker-model
+ln -s ~/.claude/skills/implement-spec-split/grill-router ~/.claude/skills/grill-router
 ```
 
 **Use**: `/find-next [--worker codex|pi|self]`, or just ask "what's next". For the whole picture use `/find-next --list` (or ask "what is left"): it lists every to-do (in progress, needs tickets, needs a spec, open decisions, unfinished bookkeeping, loose issues) without a worker. To write every missing spec at once use `/find-next --batch`: codex workers draft a spec plus its tickets per group, you confirm once, then they are published and you get a start order for `/implement-spec-split`.
@@ -174,7 +173,7 @@ This makes `codex exec` do work with GLM. Both Stage 1's `--impl codex` and Stag
    requires_openai_auth = true
    ```
 
-   The provider name must be `custom`: the wrappers pin the provider and model with `-c model_provider=custom -m <model>`, where `<model>` is the Worker model switch's effective value (`/worker-model`, default `glm-5.4`; see "The Worker model switch" in Stage 4); the `model` key in `config.toml` has no effect on a worker. To change the model use `/worker-model`, and do not pass `--model` to `codex-worker.sh` (it is overridden while the switch is off the default). Do not put the key in this repository.
+   The provider name must be `custom`: the wrappers pin the provider with `-c model_provider=custom` and pass the model with `-m`; the model and reasoning effort come from the Stage route table (`scripts/stage-route.sh`, default `glm-5.4` / `high`). If the model is not `glm-5.4`, set the `implementation` and `research` stages to a combination in the verified catalog with `/grill-router` (for example `/grill-router use implementation=codex-glm/glm-5.3/high research=codex-glm/glm-5.3/high`) instead of passing `--model` to `codex-worker.sh`. Do not put the key in this repository.
 
    If you follow Zhipu's official Codex recipe (direct to `open.bigmodel.cn`), its provider is named `ZAI`: rename both `model_provider = "ZAI"` and `[model_providers.ZAI]` to `custom`; `name = "ZAI"` can stay (codex 0.164+ requires a non-empty `name`). Otherwise the worker fails with `model_providers.custom: provider name must not be empty`. Support for other provider names is tracked in issue #6.
 
@@ -375,7 +374,7 @@ Everyday scheduling spends no subscription quota: the main session (Orchestrator
 
 **Prerequisites**
 
-- Stage 0 (symlink install) and Stage 3 (the delegate-guard hook) are in place; the `/grill-feature` and `/grill-map` symlinks are installed per the README.
+- Stage 0 (symlink install) and Stage 3 (the delegate-guard hook) are in place; the `/grill-feature`, `/grill-map` and `/grill-router` symlinks are installed per the README.
 - `claude-glm` is set up (the Stage 2 GLM endpoint and API key): `claude-flash` reuses its endpoint and `~/ops/state/claude-glm/apikey` and never copies the key.
 - Install the launcher (the four-piece set lives in `~/ops/services/claude-flash/`; see its README.md):
 
@@ -397,78 +396,47 @@ Everyday scheduling spends no subscription quota: the main session (Orchestrator
 
 **The two design entry points (Design session)**
 
-- `/grill-feature <idea>`: small features. The flash main session calls `scripts/design-session.sh` to open an official-Opus Design session, then blocks and burns no tokens; Orca switches to that session automatically and you discuss with Opus directly. When the discussion ends it does to-spec, to-tickets, commit and push on the spot, writes a handoff summary and notifies flash to continue, switching back to the main session automatically; flash reads only the summary.
-- `/grill-map <map or idea>`: large modules (wayfinder maps). Same flow; saying "先到这" ends it early and research tickets go back to flash for subagents to investigate.
+- `/grill-feature <idea>`: small features. The flash main session calls `scripts/design-session.sh` to open a Design session (started on the design Stage route, official Opus by default), then blocks and burns no tokens; Orca switches to that session automatically and you discuss with Opus directly. When the discussion ends it does to-spec, to-tickets, commit and push on the spot, writes a handoff summary and notifies flash to continue, switching back to the main session automatically; flash reads the summary and goes on to run `/find-next` 推进模式 in the main session (drafting, publishing, the first wave and 总控 all happen there).
+- `/grill-map <map or idea>`: large modules (wayfinder maps). Same flow; once connected, find-next stops at its synthesized question round for you. Saying "先到这" ends it early: find-next is not connected then, and flash only relays the map state and next step from the handoff summary.
 - A Design session's run directory is `~/.cache/implement-spec-split/design/<repo>-<time>-<kind>/`; the handoff summary is its `handoff.md`.
 
 **Spec sessions and Opus review**
 
 - In a flash main session, `/find-next` has launch-wave open spec sessions through the OpenClaude slot (i.e. flash) with `--impl agent` by default (glm-5.4 subagents implement), so a spec runs start to finish without subscription quota.
-- Code review, draft review and consecutive-failure diagnosis inside a flash spec session never run in-session (an "opus" subagent in a GLM session is actually GLM — a fake review); they always call `scripts/opus-review.sh`, which runs outside the session on official Opus: `--kind code` (a branch/fixed point), `--kind draft` (a spec/ticket draft), `--kind diagnose` (a failure; recommends continue / re-brief / stop). Any non-zero exit parks the run with an explanation (meanings in the script's header comment); no automatic retry, no GLM downgrade, no in-session self-review.
+- Code review, draft review and consecutive-failure diagnosis inside a flash spec session never run in-session (an "opus" subagent in a GLM session is actually GLM — a fake review); they always call `scripts/opus-review.sh`, which runs outside the session on the review or diagnosis Stage route (official Opus by default): `--kind code` (a branch/fixed point), `--kind draft` (a spec/ticket draft), `--kind diagnose` (a failure; recommends continue / re-brief / stop). Any non-zero exit parks the run with an explanation (meanings in the script's header comment); no automatic retry, no GLM downgrade, no in-session self-review.
 
-**The judgment model switch: glm-5.4 when Opus quota runs out**
+**The Stage route table: which launcher, model and effort each Stage runs on (`/grill-router`)**
 
-When Opus quota is exhausted, one slash command in any Claude Code session (the thin `judgment-model/` skill, symlinked as above) decides what stands in for Opus. The switch has two roles, and one command can set both:
-
-- `grill`: Design session discussions, i.e. `/grill-feature`, `/grill-map`, and the ones find-next opens when you reply 「展开」.
-- `review`: everywhere else Opus is used, i.e. all three Opus reviews (code, draft, diagnose).
+Which Launcher profile, model and reasoning effort the design, research, implementation, review and diagnosis Stages run on is one global table (the thin `grill-router/` skill, symlinked as above; ADR 0004). The orchestration Stage is locked to flash and cannot be changed. When Opus quota runs out, one slash command in any Claude Code session sends review and design to glm-5.4, and one command can set several Stages:
 
 ```text
-/judgment-model                                   # show what each role uses
-/judgment-model grill on opus, the rest on glm 5.4   # one command sets both
-/judgment-model the rest on glm-5.4 until 7:00 tomorrow  # only review, back to opus by itself then
-/judgment-model grill on glm-5.4 for 5 hours          # only grill
-/judgment-model glm-5.4                            # both on glm-5.4, until you switch back
-/judgment-model opus                               # both back
+/grill-router                                      # show the six routes
+/grill-router review on glm 5.4, grill on glm 5.4    # one command sets both
+/grill-router review on glm-5.4 until 7:00 tomorrow   # only review, back to the default by itself then
+/grill-router grill on glm, effort medium, for 5 hours  # only design, effort included
+/grill-router review back to default                  # put review back on its default route
 ```
 
-Outside a session the script does the same. Write one or two `role=model` settings; a model without a role sets both roles:
+Outside a session the script does the same. `use` takes one or more `stage=profile/model/effort` settings and leaves the other Stages alone; setting a Stage back to its default route takes it out of the table:
 
 ```bash
-S=~/.claude/skills/implement-spec-split/scripts/judgment-model.sh
-$S grill=opus review=glm-5.4                        # both roles in one command
-$S review=glm-5.4 --until 2026-11-28T07:00:00+08:00  # back to opus by itself at that time
-$S review=glm-5.4 --for 5h                          # or: for the next 5 hours (30m, 2d12h also work)
-$S glm-5.4                                          # both roles; no time means it stays
-$S                                                  # show the current setting
-$S opus                                             # both back
+S=~/.claude/skills/implement-spec-split/scripts/stage-route.sh
+$S use review=claude-glm/glm-5.4/high design=claude-glm/glm-5.4/medium   # both in one command
+$S use review=claude-glm/glm-5.4/medium --until 2026-11-28T07:00:00+08:00  # back to the default at that time
+$S use review=claude-glm/glm-5.4/medium --for 5h                          # or: for the next 5 hours (30m, 2d12h also work)
+$S use review=claude/opus/high                                           # back on the default route
+$S                                                                      # show the current routes
+$S migrate                                                              # carry the old switches' unexpired settings over
 ```
 
-- The setting is `~/.claude/state/judgment-model`, applies to every repository and session on this machine, and keeps a model and an expiry per role ([ADR 0002](adr/0002-judgment-model-hot-switch.md)).
-- `opus-review.sh` reads `review` and `design-session.sh` reads `grill`, each on every call, so **flash spec sessions and find-next sessions that are already running need no restart**: after `review` is switched, the review in progress is still Opus; the next one is glm-5.4.
-- Under the switch a review runs through `claude-glm` (`--model opus` maps to glm-5.4 there); stderr says so, and the findings file starts with `判断模型：glm-5.4…`. glm-5.4 reviewing code written by glm-5.4 is weaker than Opus: watch for that line when you read a landing report.
-- Design sessions read the switch only when they are **opened** (the `grill` role): after the switch, `/grill-feature` and `/grill-map` open a glm-5.4 session (an Orca terminal running `claude-glm`, which makes the mock pages itself instead of handing them to a worker); the handoff and the wait are unchanged.
+- The six Stages and their defaults: orchestration `claude-flash` / glm-5.3-flash (locked); design `claude` / opus / high; research `codex-glm` / glm-5.4 / high; implementation `claude-glm` / glm-5.4 / high; review and diagnosis `claude` / opus / high. The `claude` profile is the official subscription's bare `claude`, `claude-glm` and `claude-flash` are the two GLM launchers, and `codex-glm` is codex run through `codex-worker.sh`. A status line that is off its default names the way back after 切回用.
+- Which script reads which line: `design-session.sh` reads design; `opus-review.sh --kind code|draft` reads review and `--kind diagnose` reads diagnosis; `codex-worker.sh` reads research with `--read-only` and implementation otherwise. Each reads the table once per dispatch, so **flash spec sessions and find-next sessions that are already running need no restart**: a change does not touch the dispatch in progress; the next one runs on the new route.
+- The table is `~/.claude/state/stage-route` and applies to every repository and session on this machine. Only (profile, model) pairs that passed a smoke test are accepted; anything else is exit code 64 and leaves the table unchanged. Efforts are low, medium, high, xhigh and max (codex has no max). An expired line, a combination outside the catalog or a damaged file falls back to the default and says so on stderr. When review and implementation are set to the same model there is one warning (no change of model for review), never a block.
+- A review still leaves the session through `opus-review.sh`, never an in-session subagent; on glm-5.4 it runs through `claude-glm`, and stderr and the findings file's first line both name the route (stage, profile, model, effort). glm-5.4 reviewing code written by glm-5.4 is weaker than Opus: watch for that line when you read a landing report.
+- Design sessions read the design route only when they are **opened**: after the switch, `/grill-feature` and `/grill-map` open a glm-5.4 session (an Orca terminal running that launcher, which makes the mock pages itself instead of handing them to a worker); the handoff and the wait are unchanged.
 - A Design session that is already open on Opus cannot change model. To carry on in the same conversation, run `claude-glm --resume` in a terminal of that repository and pick it from the list; the handoff contract is still in that conversation, and the run directory and the wait are unchanged. If the wait timed out, continue it with the `design-session.sh --attach <run dir>` command printed on stderr.
 - Nothing switches by itself: an Opus review that fails on quota (exit code 3) still parks as `quota`, and a parked spec is still resumed by keeper after its 可恢复时间. Switching is your decision.
-
-**The Worker model switch: changing the model codex workers run on**
-
-The model codex workers (External workers) run on is decided by a second user switch, independent of the judgment model switch ([ADR 0003](adr/0003-worker-model-hot-switch.md)). It governs every call that goes through `codex-worker.sh`, flash or not: the implementing roles of `--impl codex` Runs, the codex workers find-next dispatches (research, decision and drafting), and the everyday hand-offs of Stage 3. The default is `glm-5.4`; it can be switched to `glm-5.3` or `glm-5.3-flash`. Type it in any Claude Code session (the thin `worker-model/` skill, symlinked as above):
-
-```text
-/worker-model                                   # show the current status
-/worker-model use glm-5.3                       # switch to glm-5.3, until you switch back
-/worker-model use glm-5.3-flash until 7:00 tomorrow  # switch to flash, back to the default by itself then
-/worker-model use glm-5.3 for 5 hours           # for the next 5 hours
-/worker-model use glm-5.4                       # reset: back to the default, --model is honoured again
-```
-
-Outside a session the script does the same:
-
-```bash
-S=~/.claude/skills/implement-spec-split/scripts/worker-model.sh
-$S use glm-5.3                                            # switch; no time means it stays
-$S use glm-5.3-flash --until 2026-11-28T07:00:00+08:00   # back to the default by itself at that time
-$S use glm-5.3-flash --for 5h                             # or: for the next 5 hours (30m, 2d12h also work)
-$S                                                       # show the current status
-$S use glm-5.4                                           # reset
-```
-
-- The setting is `~/.claude/state/worker-model` and applies to every repository and session on this machine. `codex-worker.sh` reads it every time it starts a worker, so **a Run or find-next session that is already running needs no restart**: its next dispatch uses the new model; a worker already running is unchanged, and a Resume keeps its first segment's model.
-- Priority: the switch (when off the default) > an explicit `--model` from the caller > the default. While the switch is in effect `--model` is overridden, and the wrapper writes one line, `Worker model 开关生效：…`, to stderr and to the run directory's `stderr.log` (the model, any overridden `--model`, the expiry, whether the model is in the worker catalog, and the reset command); `status.json`'s `model` records the model actually used. In everyday use, do not pass `--model` to the wrapper.
-- `glm-5.3-flash` has not been verified on the codex path and is not in the `models.json` model catalog. Before switching to it, verify: `scripts/selftest-codex.sh --only L1 --model glm-5.3-flash`; when the error points at the model or the catalog, add an entry to `~/.codex/models.json` (`input_modalities: ["text"]`, `supported_reasoning_levels` as for `glm-5.3`, `context_window` at 1M for now) and rerun `scripts/setup-worker-home.sh` (editing `~/.codex-worker/models.json` directly is overwritten by the next rerun; before rerunning, check the top-level `model_provider` in `~/.codex/config.toml`, which is copied into the worker home as is). `/worker-model use glm-5.3-flash` only warns, never refuses, when the catalog lacks the model. Passing L1 only proves the endpoint accepts the model; it does not prove the `high` reasoning level or the 1M context work.
-- Not covered: `--impl pi`, `--impl agent` (including the default agent backend in a flash environment, whose subagent models the launcher decides), keeper and run-phase. In a flash environment only an explicit `--impl codex` Run with `WORKER_ALLOW_FLASH=1` goes through the wrapper and the switch. On a machine that never calls `codex-worker.sh` (train3060) the switch is inert; do not install the `/worker-model` symlink there.
-- Only the user switches: the thin skill sets `disable-model-invocation`, so a session cannot invoke it; that is a soft constraint (a session can still run the script through Bash), the same as `/judgment-model`. When both switches are off their defaults, an unattended Run still lands automatically, and the landing report, the parking report (under `### 现状`) and the final report all state both switches.
+- **Upgrading from the old switches**: if the version you had installed the `judgment-model` and `worker-model` switches, remove their two symlinks from `~/.claude/skills/` and symlink `grill-router` as above. The first `/grill-router` run (or the first time any dispatch script reads the table) carries every old setting that has not expired into the table: effort high, expiry as it was; what cannot be carried (a model outside the verified catalog, e.g. the old worker switch's glm-5.3-flash) keeps its old file and says so. After that only `/grill-router migrate` carries anything over again.
 
 **The flash boundary**
 
@@ -486,6 +454,7 @@ Both repositories carry the bookmark tag `pre-flash-orchestrator`, and the globa
 
 - **Update**: `cd ~/.claude/skills/implement-spec-split && git pull`. Templates and scripts take effect immediately; the hook takes effect on its next call.
 - **Update the division rules**: after `templates/global-claude-md.md` changes in this repository, manually synchronize it to `~/.claude/CLAUDE.md` (the global file is outside repository management).
+- **Upgrade to the Stage route table**: if the version you had installed the `judgment-model` and `worker-model` switches, remove their two symlinks from `~/.claude/skills/` and symlink `grill-router`; the first `/grill-router` run carries the old settings over (see Stage 4).
 - **Pause the division of labour**: remove the delegate-guard entry from `settings.json` and remove the division section from CLAUDE.md.
 - **Change machines**: three things must move: the cloned repository (Stage 0), `~/.codex/config.toml` and the proxy (Stage 2), and the CLAUDE.md division section plus the hook registration in `settings.json` (Stage 3). Cloning the repository alone is not enough.
 

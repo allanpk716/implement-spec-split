@@ -21,7 +21,7 @@ The coding-agent CLI program an External worker runs in (codex or pi); it decide
 _Avoid_: codex worker / pi worker when the model matters, agent CLI
 
 **Worker model**:
-The model an External worker's harness talks to (GLM-5.4 today); chosen separately from the harness, so one harness can serve different models and one model can run under different harnesses. On the codex path it is the user's own global switch (`/worker-model`, backed by `scripts/worker-model.sh` and stored in `~/.claude/state/worker-model`; default glm-5.4, ADR 0003): every `codex-worker.sh` fresh run reads it, so a Run that is already executing changes model at its next dispatch, while a Resume keeps the model of its first segment. v1 switches the codex path only (pi and the `agent` backend are not switched). Separate from the Judgment model, which has its own switch.
+The model an External worker's harness talks to (GLM-5.4 today); chosen separately from the harness, so one harness can serve different models and one model can run under different harnesses. On the codex path the Stage routes decide it: a dispatch with `--read-only` runs the research route, any other dispatch the implementation route, both set by the user with `/grill-router`. Every fresh `codex-worker.sh` run reads the table, so a Run that is already executing changes model at its next dispatch, while a Resume keeps the model and effort of its first segment. v1 routes the codex path only: pi and the `agent` backend keep their own model choice.
 _Avoid_: implement model, backend model
 
 **Implement backend**:
@@ -39,16 +39,16 @@ The exploration, implementer, merger and fix roles; everything except review.
 The Standards and Spec reviewers of `mattpocock-skills:code-review`; always In-session subagents on a strong model (non-flash sessions only; in Flash mode every review runs out-of-session via `opus-review.sh`).
 
 **Design session**:
-A separate Claude Code session on the official subscription (Opus) that the Orchestrator opens through Orca for a design discussion (grill-with-docs, a wayfinder grilling ticket); the user talks to it directly, and it carries the discussion through to-spec before handing control back. When the Judgment model is switched to a substitute, it is an Orca terminal running that model's launcher instead, with the same handoff.
+A separate Claude Code session that the Orchestrator opens through Orca for a design discussion (grill-with-docs, a wayfinder grilling ticket); the user talks to it directly, and it carries the discussion through to-spec before handing control back. It runs the design Stage route: an Orca terminal started on the routed Launcher profile with its model and effort (the official subscription's Opus by default), with the same handoff whatever the route.
 _Avoid_: Opus session, grill session, hop
 
 **Opus review**:
-A non-interactive judgment pass run outside the Orchestrator's session that reads a diff or draft and returns findings for the Orchestrator to act on. It runs on the official subscription's Opus, or on the switched Judgment model, in which case the findings file's first line names that model.
+A non-interactive judgment pass run outside the Orchestrator's session that reads a diff or draft and returns findings for the Orchestrator to act on. It runs on the review or diagnosis Stage route (the official subscription's Opus by default, otherwise the routed Launcher profile, model and effort), and the findings file's first line names the route.
 _Avoid_: strong-model review (ambiguous in a GLM session, where "opus" maps to GLM)
 
 **Judgment model**:
-The model that stands in for Opus in each of two roles: `review` (every Opus review) and `grill` (Design sessions). Each role is Opus, or the substitute the user names with its own global switch (`/judgment-model`, backed by `scripts/judgment-model.sh` and stored in `~/.claude/state/judgment-model`), today only glm-5.4; one command sets both roles. Both wrappers read their own role on every call, so a session that is already executing changes model at its next review or new Design session. Separate from the Worker model, which has its own switch (`/worker-model`).
-_Avoid_: strong model, fallback model (the switch is the user's decision, never an automatic downgrade)
+The model that stands in for Opus wherever a judgment is made: every Opus review, and each Design session. It is Opus, or the substitute the user routes the review, diagnosis and design Stages to with `/grill-router` (today glm-5.4). The Stage routes replaced the two-role switch that used to set it: each dispatch reads its Stage's route, so a session that is already executing changes model at its next review or new Design session.
+_Avoid_: strong model, fallback model (the route is the user's decision, never an automatic downgrade)
 
 **Stage**:
 One of the six kinds of work the pipeline routes to an executor: orchestration, design (grilling), research and drafting, implementation, review, and diagnosis. Each Stage has its own executor choice, which the user switches globally; a switch takes effect at the Stage's next dispatch or new session, never mid-call.

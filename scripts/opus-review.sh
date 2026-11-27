@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Run one Opus review: a non-interactive judgment pass on the official Claude
-# subscription, outside the calling Orchestrator session.
+# Run one Opus review: a non-interactive judgment pass outside the calling
+# Orchestrator session, on the model the Stage route table names for the stage.
 #
 # Usage:
 #   opus-review.sh --kind code --input <branch-or-fixed-point>
@@ -20,19 +20,26 @@
 # “需要人取舍”. --cwd defaults to the current directory. --timeout defaults to
 # 3600 seconds for code and 1200 seconds for draft and diagnose.
 #
-# This wrapper removes GLM/proxy Anthropic environment mappings before invoking
-# claude, then runs `claude -p --model opus` with read-only tools. Claude's final
-# standard output is written atomically to --out. It never downgrades to GLM
-# on its own.
+# Stage route (GLOSSARY.md "Stage route", ADR 0004). The route is read from the
+# table (scripts/stage-route.sh, which only the user changes, as /grill-router)
+# on every invocation, so a session that is already executing switches at its
+# next review: --kind code and draft read the review stage, --kind diagnose the
+# diagnosis stage. The launcher, --model and --effort all come from the route.
+# This wrapper removes the GLM/proxy Anthropic environment mappings and then
+# runs the route's launcher headless with read-only tools: the claude profile
+# is the official claude; any other profile (claude-glm today) is its own
+# launcher, which sets its GLM mappings on top of the same clean environment,
+# exactly as it does for a session the user starts by hand. When the profile is
+# not claude, official Opus is not called: the route is reported on stderr. A
+# code review's two review-axis subagents are pinned to opus on every profile,
+# never to the route's model name: the Agent tool takes only the aliases
+# sonnet|opus|haiku|fable, and the GLM launcher maps opus to its GLM model. The
+# repair retry runs on the same route. The model is never changed here, and
+# nothing falls back to another one.
 #
-# Judgment model switch: the `review` role of the setting managed by
-# scripts/judgment-model.sh is read on every invocation, so a session that is
-# already executing switches at its next review. When it names glm-5.4, the
-# same call runs through the launcher named by ISS_GLM_LAUNCHER (default:
-# claude-glm), where `--model opus` maps to glm-5.4; official Opus is not
-# called, the switch is reported on stderr, and the findings file starts with
-# a line naming the model that
-# produced it. With opus, or any unreadable setting, nothing changes here.
+# Every findings file starts with the route that produced it, on the default
+# route as on a switched one, then a blank line, then the model's findings:
+#   路由：审查（review）claude-glm / glm-5.4 / medium · 2026-11-27 16:30:00 +0800
 #
 # Exit codes:
 #   0  success; findings are in --out
@@ -40,10 +47,12 @@
 #   3  quota exhausted or rate limited
 #   4  transient service or network unavailability
 #   5  timed out
-#   6  other claude or findings-write error
+#   6  other launcher or findings-write error, among them the route's launcher
+#      not found in PATH
 #   7  findings under “需要人取舍” still lack a 推荐： or 可自动采纳：是|否
 #      line after one repair retry; the offending items are listed on stderr
-#  64  bad usage
+#  64  bad usage, among it a route that cannot be read from the Stage route
+#      table: nothing starts with an empty model
 
 set -u
 
@@ -141,25 +150,61 @@ OUT_DIR=$(dirname "$OUT")
 [ -d "$OUT_DIR" ] || die "--out parent directory must exist: $OUT_DIR"
 [ ! -d "$OUT" ] || die "--out must be a file, not a directory: $OUT"
 
-# Read once per invocation: the review role. Anything unreadable means opus.
-HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-JUDGMENT_MODEL=$("$HERE/judgment-model.sh" --print review 2>/dev/null || true)
-case "$JUDGMENT_MODEL" in
-  glm-5.4) ;;
-  *) JUDGMENT_MODEL=opus ;;
+# Read once per invocation: the route of the stage this kind judges on, from the
+# Stage route table. A route that cannot be read is a usage error: the table is
+# the only source of the model, so nothing starts with an empty one.
+case "$KIND" in
+  code|draft) STAGE=review; STAGE_LABEL='审查（review）' ;;
+  diagnose) STAGE=diagnosis; STAGE_LABEL='诊断（diagnosis）' ;;
 esac
-GLM_LAUNCHER=${ISS_GLM_LAUNCHER:-claude-glm}
-if [ "$JUDGMENT_MODEL" != opus ]; then
-  command -v "${GLM_LAUNCHER%% *}" >/dev/null 2>&1 || {
-    echo "opus-review: the judgment model switch for review names $JUDGMENT_MODEL, but its launcher '${GLM_LAUNCHER%% *}' was not found in PATH" >&2
-    exit 6
-  }
-  echo "opus-review: the judgment model switch for review is $JUDGMENT_MODEL (set by the user with scripts/judgment-model.sh): this review runs on $JUDGMENT_MODEL through '$GLM_LAUNCHER'; official Opus is not called" >&2
-fi
-if [ "$JUDGMENT_MODEL" = opus ]; then
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+
+# Prints one field of the stage's route as the table names it, or exits 64.
+# The table's own hints (a line outside the catalog, an unreadable file, the
+# first run's migration notes) went to stderr from the --launch read before
+# this one and are silenced here, where they would only repeat.
+route_field() {
+  local value
+  value=$("$HERE/stage-route.sh" --print "$STAGE" "$1" 2>/dev/null) ||
+    die "cannot read the $STAGE route's $1 from the Stage route table (scripts/stage-route.sh --print $STAGE $1 exited $?)"
+  [ -n "$value" ] || die "scripts/stage-route.sh --print $STAGE $1 printed nothing for the $STAGE route"
+  printf '%s' "$value"
+}
+
+# The command that starts the route's profile headless with the route's model
+# and effort, one argument per line, the launcher first. The model is in the
+# profile's own form on the command line (the GLM launchers take glm-5.4[1m]);
+# the reports below name it as the table does.
+LAUNCH=$("$HERE/stage-route.sh" --launch "$STAGE" headless) ||
+  die "cannot read the $STAGE route's launch command from the Stage route table (scripts/stage-route.sh --launch $STAGE headless exited $?)"
+[ -n "$LAUNCH" ] || die "scripts/stage-route.sh --launch printed nothing for the $STAGE route"
+ROUTE_ARGS=()
+while IFS= read -r arg; do ROUTE_ARGS+=("$arg"); done <<< "$LAUNCH"
+ROUTE_PROFILE=$(route_field profile)
+ROUTE_MODEL=$(route_field model)
+ROUTE_EFFORT=$(route_field effort)
+
+# Only the claude profiles start a headless Claude Code review: the review and
+# diagnosis stages are verified for claude and claude-glm alone (the table's
+# catalog).
+LAUNCHER=${ROUTE_ARGS[0]:-}
+case "$LAUNCHER" in
+  claude|claude-glm|claude-flash) ;;
+  *) die "the $STAGE route is $ROUTE_PROFILE / $ROUTE_MODEL / $ROUTE_EFFORT, and the profile '$LAUNCHER' cannot run a headless review" ;;
+esac
+command -v "$LAUNCHER" >/dev/null 2>&1 || {
+  echo "opus-review: the $STAGE route is $ROUTE_PROFILE / $ROUTE_MODEL / $ROUTE_EFFORT, but its launcher '$LAUNCHER' was not found in PATH" >&2
+  exit 6
+}
+
+# The route is the user's decision, never a downgrade made here. Official Opus
+# is called only by the claude profile on the model opus; any other route is
+# said on stderr, and the prompt names the model executing it.
+if [ "$ROUTE_PROFILE/$ROUTE_MODEL" = claude/opus ]; then
   REVIEWER_LINE="You are an Opus review running outside the calling session."
 else
-  REVIEWER_LINE="You are an Opus review running outside the calling session, executed by $JUDGMENT_MODEL, the model the user switched to in place of Opus."
+  echo "opus-review: the $STAGE route is $ROUTE_PROFILE / $ROUTE_MODEL / $ROUTE_EFFORT (set by the user with /grill-router, scripts/stage-route.sh): this review runs on $ROUTE_MODEL through '$LAUNCHER'; official Opus is not called" >&2
+  REVIEWER_LINE="You are an Opus review running outside the calling session, executed by $ROUTE_MODEL, the model the user's $STAGE route names in place of Opus."
 fi
 
 ALLOWED_TOOLS=(
@@ -188,14 +233,20 @@ DISALLOWED_TOOLS=(
   WebFetch
   WebSearch
 )
+# The route's launch command comes first, so the array starts with the
+# launcher itself; the tool lists and the permission rule are the same on every
+# route.
 CLAUDE_ARGS=(
-  -p
-  --model opus
+  "${ROUTE_ARGS[@]}"
   --allowedTools "${ALLOWED_TOOLS[@]}"
   --disallowedTools "${DISALLOWED_TOOLS[@]}"
   --permission-prompts none
 )
 
+# The review axes are pinned to opus on every profile, never to $ROUTE_MODEL:
+# the Agent tool's model takes only the aliases sonnet|opus|haiku|fable, and the
+# GLM launcher maps opus to its GLM model, so the route's own name (glm-5.4)
+# would be rejected by the tool's schema.
 case "$KIND" in
   code)
     PROMPT="$REVIEWER_LINE
@@ -261,11 +312,6 @@ Output requirements:
     ;;
 esac
 
-command -v claude >/dev/null 2>&1 || {
-  echo "opus-review: claude executable not found in PATH" >&2
-  exit 6
-}
-
 run_claude() {
   local prompt=$1
   (
@@ -278,13 +324,9 @@ run_claude() {
       fi
     done < <(env)
     cd "$CWD" || exit 6
-    # The substitute launcher sets its own GLM mappings on top of this clean
+    # A GLM launcher sets its own GLM mappings on top of this clean
     # environment, exactly as it does for a session the user starts by hand.
-    if [ "$JUDGMENT_MODEL" = opus ]; then
-      exec claude "${CLAUDE_ARGS[@]}" "$prompt"
-    else
-      exec $GLM_LAUNCHER "${CLAUDE_ARGS[@]}" "$prompt"
-    fi
+    exec "${CLAUDE_ARGS[@]}" "$prompt"
   )
 }
 
@@ -506,16 +548,16 @@ case "$MISSING_MARKS" in
     ;;
 esac
 
-# A substitute judgment model is weaker than the Opus review the Orchestrator
-# expects, so every consumer of the findings sees which model produced them.
-if [ "$JUDGMENT_MODEL" != opus ]; then
-  PROVENANCE_TMP=$(mktemp "$OUT.tmp.XXXXXX") || exit 6
-  { printf '判断模型：%s（用户用 judgment-model.sh 切换，代替 Opus）· %s\n\n' \
-      "$JUDGMENT_MODEL" "$(date '+%Y-%m-%d %H:%M:%S %z')"
-    cat "$OUTPUT_TMP"
-  } > "$PROVENANCE_TMP" || { rm -f "$PROVENANCE_TMP"; exit 6; }
-  mv -f "$PROVENANCE_TMP" "$OUTPUT_TMP" || { rm -f "$PROVENANCE_TMP"; exit 6; }
-fi
+# Every findings file names the route that produced it on its first line: a
+# route other than the official Opus one is not the review the Orchestrator
+# expects, and on the default route the same line is what lets a report tell
+# the two apart.
+PROVENANCE_TMP=$(mktemp "$OUT.tmp.XXXXXX") || exit 6
+{ printf '路由：%s%s / %s / %s · %s\n\n' \
+    "$STAGE_LABEL" "$ROUTE_PROFILE" "$ROUTE_MODEL" "$ROUTE_EFFORT" "$(date '+%Y-%m-%d %H:%M:%S %z')"
+  cat "$OUTPUT_TMP"
+} > "$PROVENANCE_TMP" || { rm -f "$PROVENANCE_TMP"; exit 6; }
+mv -f "$PROVENANCE_TMP" "$OUTPUT_TMP" || { rm -f "$PROVENANCE_TMP"; exit 6; }
 
 if ! mv -f "$OUTPUT_TMP" "$OUT"; then
   echo "opus-review: cannot write findings to $OUT" >&2

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Isolated tests for scripts/pipeline-status.sh. Generated mktemp directories
 # are deliberately retained on both pass and failure, as safe debugging aids.
+# orca is a fake outside PATH, named by ISS_ORCA (the one Orca replacement
+# variable, read by scripts/lib-orca.sh); the `orca` on the tests' PATH refuses
+# every call.
 
 set -u
 
@@ -9,6 +12,7 @@ SCRIPT=$ROOT/scripts/pipeline-status.sh
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/pipeline-status-test.XXXXXX")
 FIXTURE=$WORK/fixture
 BIN=$WORK/bin
+ORCA_BIN=$WORK/orca-bin
 REPO=$WORK/git-repo
 NOT_REPO=$WORK/not-a-repo
 PASSED=0
@@ -87,7 +91,7 @@ expect_equal() {
   fi
 }
 
-mkdir -p "$FIXTURE" "$BIN" "$REPO" "$NOT_REPO" || exit 1
+mkdir -p "$FIXTURE" "$BIN" "$ORCA_BIN" "$REPO" "$NOT_REPO" || exit 1
 
 FIXTURE=$FIXTURE node > /dev/null <<'NODE'
 const fs = require('fs');
@@ -364,6 +368,40 @@ case "$*" in
 esac
 EOF
 chmod +x "$BIN/gh"
+
+# The fake orca lives outside PATH on purpose: pipeline-status.sh must reach
+# Orca only through ISS_ORCA, never through an `orca` that happens to be on
+# PATH. `terminal list` answers with the file FAKE_ORCA_TERMINALS names, or
+# fails when FAKE_ORCA_FAIL is 1.
+cat > "$ORCA_BIN/orca" <<'EOF'
+#!/usr/bin/env bash
+set -u
+printf '%s\n' "$*" >> "$ORCA_LOG"
+case "${1:-} ${2:-}" in
+  "terminal list")
+    if [ "${FAKE_ORCA_FAIL:-0}" = 1 ]; then
+      printf '%s\n' 'fake orca: offline' >&2
+      exit 1
+    fi
+    cat "$FAKE_ORCA_TERMINALS"
+    exit $?
+    ;;
+esac
+printf 'fake orca: unexpected arguments: %s\n' "$*" >&2
+exit 2
+EOF
+chmod +x "$ORCA_BIN/orca"
+
+# Guard rail: this machine has a real `orca` on PATH. The one on the tests' PATH
+# refuses every call, so a pipeline-status.sh that spawns orca itself fails here
+# instead of quietly reading the real Orca.
+cat > "$BIN/orca" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$ORCA_GUARD_LOG"
+printf 'test-pipeline-status: orca on PATH was called instead of ISS_ORCA\n' >&2
+exit 99
+EOF
+chmod +x "$BIN/orca"
 
 git -C "$REPO" init --quiet
 git -C "$REPO" config user.name 'Pipeline Status Test'
@@ -704,6 +742,10 @@ JSON
 printf '%s\n' 'not json' > "$WORK/orca-broken.json"
 ORCA_TERMINALS=$WORK/orca-terminals.json
 
+ORCA_LOG=$WORK/orca.log
+ORCA_GUARD_LOG=$WORK/orca-guard.log
+: > "$ORCA_GUARD_LOG"
+
 run_status() {
   cwd=$1
   output=$2
@@ -712,8 +754,16 @@ run_status() {
     FIXTURE_DIR="$FIXTURE"
     PATH="$BIN:$PATH"
     PIPELINE_STATUS_NOW=2026-11-15T12:00:00Z
-    PIPELINE_STATUS_ORCA_TERMINALS_JSON="$ORCA_TERMINALS"
+    ISS_ORCA="$ORCA_BIN/orca"
+    ORCA_LOG="$ORCA_LOG" ORCA_GUARD_LOG="$ORCA_GUARD_LOG"
+    FAKE_ORCA_TERMINALS="$ORCA_TERMINALS"
   )
+  # By default the script reads the terminal list from the fixture file. A case
+  # that sets ORCA_FIXTURE_UNSET=1 leaves that seam alone, so the script asks
+  # Orca itself, through the library, and the fake answers with the same file.
+  if [ "${ORCA_FIXTURE_UNSET:-0}" != 1 ]; then
+    status_env+=("PIPELINE_STATUS_ORCA_TERMINALS_JSON=$ORCA_TERMINALS")
+  fi
   (
     cd "$cwd" || exit 125
     env "${status_env[@]}" \
@@ -819,6 +869,62 @@ expect_exit 0 "scan succeeds when Orca output is unusable"
 expect_has '（Orca 不可用，未判断）' 'unusable Orca leaves orphan claims unchecked' "$WORK/all-no-orca.out"
 expect_has '- #116 [wayfinder:research] Stale claimed decision' 'stale claims still listed without Orca' "$WORK/all-no-orca.out"
 
+# Without the fixture file the script asks Orca itself. Orca is reached through
+# scripts/lib-orca.sh: the program ISS_ORCA names gets `terminal list --json`
+# and nothing else, and the orca on PATH is never touched.
+ORCA_FIXTURE_UNSET=1
+export ORCA_FIXTURE_UNSET
+: > "$ORCA_LOG"
+run_status "$REPO" "$WORK/all-orca.out" --all
+expect_exit 0 "all fixture scan succeeds with Orca asked for the terminals"
+expect_has '- #115 [wayfinder:grilling] Claim exactly at cutoff（地图 #21，已认领：allan，更新于 2026-11-12T12:00:00Z，Orca 里没有提到它的活会话）' \
+  'terminals from Orca orphan a claim no live agent names' "$WORK/all-orca.out"
+expect_has '- #119 [wayfinder:task] Fresh claim watched elsewhere（地图 #21' \
+  'terminals from Orca orphan a claim named only in another repository' "$WORK/all-orca.out"
+expect_section_without '认领但没有活会话' '#118 ' \
+  'terminals from Orca keep a claim named by a live local agent' "$WORK/all-orca.out"
+expect_section_without '认领但没有活会话' '（Orca 不可用' \
+  'an Orca asked through the library counts as available' "$WORK/all-orca.out"
+if [ "$(cat "$ORCA_LOG")" = 'terminal list --json' ]; then
+  record PASS 'the program ISS_ORCA names gets terminal list --json, once'
+else
+  record FAIL 'the program ISS_ORCA names gets terminal list --json, once' \
+    "got [$(tr '\n' '|' < "$ORCA_LOG")]"
+fi
+if [ -s "$ORCA_GUARD_LOG" ]; then
+  record FAIL 'Orca is never the orca on PATH' "$(cat "$ORCA_GUARD_LOG")"
+else
+  record PASS 'Orca is never the orca on PATH'
+fi
+
+FAKE_ORCA_FAIL=1
+export FAKE_ORCA_FAIL
+: > "$ORCA_LOG"
+run_status "$REPO" "$WORK/all-orca-down.out" --all
+unset FAKE_ORCA_FAIL
+expect_exit 0 "scan succeeds when the Orca call fails"
+expect_has '（Orca 不可用，未判断）' 'a failing Orca leaves orphan claims unchecked' "$WORK/all-orca-down.out"
+expect_has '- #116 [wayfinder:research] Stale claimed decision' \
+  'stale claims still listed when the Orca call fails' "$WORK/all-orca-down.out"
+expect_has 'terminal list --json' 'the failing Orca was asked' "$ORCA_LOG"
+
+ORCA_TERMINALS=$WORK/orca-broken.json
+run_status "$REPO" "$WORK/all-orca-broken.out" --all
+ORCA_TERMINALS=$WORK/orca-terminals.json
+expect_exit 0 "scan succeeds when what Orca prints is unusable"
+expect_has '（Orca 不可用，未判断）' 'unusable Orca output leaves orphan claims unchecked' \
+  "$WORK/all-orca-broken.out"
+
+# The default output has no orphan-claim section, so Orca is not asked at all.
+: > "$ORCA_LOG"
+run_status "$REPO" "$WORK/main-orca.out"
+if [ -s "$ORCA_LOG" ]; then
+  record FAIL 'without --all Orca is not asked for terminals' "$(cat "$ORCA_LOG")"
+else
+  record PASS 'without --all Orca is not asked for terminals'
+fi
+unset ORCA_FIXTURE_UNSET
+
 run_status "$REPO" "$WORK/order-shelved.out" --order --parallel 20 --cmd-suffix ''
 expect_exit 0 "development order excludes shelved-only spec"
 expect_without '#160' 'shelved-only spec is absent from order' "$WORK/order-shelved.out"
@@ -908,6 +1014,8 @@ rm -f "$REPO/.git/implement-spec-split/claims/spec-88.json" \
   "$REPO/.git/implement-spec-split/claims/spec-95.json"
 run_status "$REPO" "$WORK/help.out" --help
 expect_has '--graph' 'help documents --graph' "$WORK/help.out"
+expect_has 'PIPELINE_STATUS_ORCA_TERMINALS_JSON' 'help documents the terminal-list fixture file' "$WORK/help.out"
+expect_without 'PIPELINE_STATUS_ORCA may' 'help no longer documents a per-script Orca executable' "$WORK/help.out"
 run_status "$REPO" "$WORK/graph-order.out" --order --parallel 20 --cmd-suffix ''
 expect_exit 0 "order text output still works with graph fixtures"
 
@@ -1319,6 +1427,13 @@ expect_exit 0 "graph marks human-only specs and human tickets"
 RUN_EXIT=$?
 expect_exit 1 "gh failure exits nonzero"
 expect_has 'gh api failed while listing issues' 'gh failure names the failing stage' "$WORK/gh-failure.err"
+
+# Every run above put the refusing `orca` on PATH; none may have reached it.
+if [ -s "$ORCA_GUARD_LOG" ]; then
+  record FAIL 'no run calls the orca on PATH instead of ISS_ORCA' "$(cat "$ORCA_GUARD_LOG")"
+else
+  record PASS 'no run calls the orca on PATH instead of ISS_ORCA'
+fi
 
 if [ "$FAILED" -eq 0 ]; then
   printf 'Summary: %d passed, 0 failed\n' "$PASSED"

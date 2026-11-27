@@ -12,14 +12,22 @@
 #   codex-worker.sh --resume --run-dir <dir> [--time-limit ..] [--idle-timeout ..]
 #                    [--retries ..] [--retry-wait ..] [--no-slot]
 #
-# The model (-m) is the Worker model switch's effective value (scripts/worker-model.sh,
-# ~/.claude/state/worker-model; ADR 0003). On every fresh run the wrapper reads the
-# switch: when it is not on the default the switch wins over --model, otherwise an
-# explicit --model is used, otherwise the switch's default. While the switch is in
-# effect one line on stderr (also appended to the run dir's stderr.log) names the
-# model, any overridden --model, the expiry and the reset command. status.json.model
-# and resume.json.model record the model actually used. A Resume does not read the
-# switch: it keeps the model the first segment saved.
+# The model (-m) and the reasoning effort (model_reasoning_effort) come from the Stage
+# route table (GLOSSARY.md "Stage route", ADR 0004; scripts/stage-route.sh,
+# ~/.claude/state/stage-route): a dispatch with --read-only is the research stage, any
+# other the implementation stage. The wrapper always runs the codex-glm Launcher
+# profile whatever profile the route names, and takes from the route only its model
+# and effort; a route whose model or effort codex-glm does not take is a usage error
+# (exit 64) that names the route and its reset command (/grill-router). Priority: the
+# route when it is not the stage's default (its model or effort differs from the
+# default's), then an explicit --model / --thinking, then the default route. On every
+# fresh run one line on stderr (also appended to the run dir's stderr.log) names the
+# route; off the default it also names any overridden --model / --thinking, the expiry
+# and the reset command. status.json and resume.json record the route in effect, as
+# the table names it (profile, model, effort): the codex worker always runs through
+# codex-glm and takes only the route's model and effort, so profile is the table's
+# entry (claude-glm by default), not the launcher that ran. A Resume does not read the
+# table: it keeps what the first segment saved.
 #
 # Contract and semantics match pi-worker.sh. --time-limit is one segment's hard budget:
 # it spans every attempt and retry wait since the segment started, and each attempt gets
@@ -102,20 +110,23 @@
 #
 # Test hooks: CODEX_WORKER_CODEX swaps the codex executable; CODEX_WORKER_BASE_URL swaps
 # the provider endpoint; CODEX_WORKER_POLL overrides the watchdog interval. TEST ONLY:
-# CODEX_WORKER_TEST_BREAK_FINGERPRINT_END=1 makes the end-of-segment fingerprint fail.
+# CODEX_WORKER_TEST_BREAK_FINGERPRINT_END=1 makes the end-of-segment fingerprint fail;
+# CODEX_WORKER_STAGE_ROUTE swaps the Stage route table script (stage-route.sh).
 
 set -u
 
 HERE=$(cd "$(dirname "$0")" && pwd)
+STAGE_ROUTE="${CODEX_WORKER_STAGE_ROUTE:-$HERE/stage-route.sh}"
 
-# The default model is defined only in worker-model.sh (DEFAULT_MODEL); a fresh run
-# asks for it in resolve_worker_model below. An explicit --model fills this in first.
+# The default model is defined only in the Stage route table (stage-route.sh); a fresh
+# run asks for it in resolve_stage_route below. An explicit --model fills this in first.
 MODEL=""
 TIME_LIMIT=1800
 IDLE_TIMEOUT=600
 RETRIES=2
 RETRY_WAIT=60
 THINKING=""
+ROUTE_PROFILE=""
 CWD=""
 BRIEF=""
 RUN_DIR=""
@@ -602,35 +613,140 @@ format_until() {
   ' "$1" 2>/dev/null || printf '@%s' "$1"
 }
 
-# Resolves the Worker model of a fresh run (ADR 0003). Priority: the switch when it
-# is not on the default, then an explicit --model, then the switch's default. The
-# switch script is a hard dependency on purpose: when it prints nothing the run
-# exits 64 here rather than start codex with an empty -m.
-resolve_worker_model() {
-  local switch_model switch_default switch_until catalog detail=""
-  switch_model=$("$HERE/worker-model.sh" --print 2>/dev/null || true)
-  [ -n "$switch_model" ] || die "worker-model.sh --print returned nothing"
-  switch_default=$("$HERE/worker-model.sh" --print default 2>/dev/null || true)
-  [ -n "$switch_default" ] || die "worker-model.sh --print default returned nothing"
-  if [ "$switch_model" = "$switch_default" ]; then
-    $GOT_MODEL || MODEL="$switch_model"
-    return 0
+# What the codex-glm Launcher profile runs, mirroring its lines of the verified
+# catalog in stage-route.sh: the models listed for it and the efforts it takes (codex
+# has no max). Keep the two in step.
+CODEX_PROFILE_MODELS='glm-5.4 glm-5.3'
+CODEX_PROFILE_EFFORTS='low medium high xhigh'
+
+# Prints yes, no or unknown: is $1 listed in the worker home's model catalog, the file
+# named by model_catalog_json in its config.toml? unknown means the catalog cannot be
+# read, and the caller skips the check then. A dispatch-time hint only (a failure
+# attribution, never a refusal): the table's verified catalog is the repository's own
+# global whitelist and does not look at this machine; the two coexist.
+catalog_status() {
+  WORKER_HOME_W="$(winpath "$WORKER_HOME")" CATALOG_MODEL="$1" node -e '
+    const fs = require("fs"), path = require("path"), os = require("os");
+    const unknown = () => { console.log("unknown"); process.exit(0); };
+    let text;
+    try { text = fs.readFileSync(path.join(process.env.WORKER_HOME_W, "config.toml"), "utf8"); }
+    catch { unknown(); }
+    let catalog = null;
+    for (const line of text.split(/\r?\n/)) {
+      if (/^\s*\[/.test(line)) break; // model_catalog_json is a root key
+      const match = line.match(/^\s*model_catalog_json\s*=\s*(?:"((?:\\.|[^"\\])*)"|\x27([^\x27]*)\x27|([^#\s]+))\s*(?:#.*)?$/);
+      if (!match) continue;
+      if (match[3] !== undefined) catalog = match[3];
+      else if (match[2] !== undefined) catalog = match[2];
+      else { try { catalog = JSON.parse("\"" + match[1] + "\""); } catch { catalog = match[1]; } }
+    }
+    if (!catalog) unknown();
+    if (catalog === "~" || catalog.startsWith("~/")) catalog = path.join(os.homedir(), catalog.slice(1));
+    let data;
+    try { data = JSON.parse(fs.readFileSync(catalog, "utf8")); }
+    catch { unknown(); }
+    // The catalog is {"models": [{"slug": ...}]} today; walking every string keeps the
+    // check honest if the entry key changes.
+    const names = new Set();
+    const walk = value => {
+      if (typeof value === "string") names.add(value);
+      else if (Array.isArray(value)) value.forEach(walk);
+      else if (value && typeof value === "object") Object.values(value).forEach(walk);
+    };
+    walk(data);
+    console.log(names.has(process.env.CATALOG_MODEL) ? "yes" : "no");
+  ' 2>/dev/null || echo unknown
+}
+
+# The Stage route of a fresh run (GLOSSARY.md "Stage route", ADR 0004): research with
+# --read-only, implementation otherwise. Reads the route into ROUTE_PROFILE, ROUTE_MODEL,
+# ROUTE_EFFORT and ROUTE_UNTIL, then sets MODEL and THINKING to what codex is started
+# on, and says the route on stderr and in stderr.log. stage-route.sh is a hard
+# dependency on purpose: when it cannot answer, the run exits 64 here rather than start
+# codex without a route.
+ROUTE_TABLE=
+ROUTE_STAGE=
+ROUTE_VALUE=
+route_read() {
+  # Reads one field of ROUTE_STAGE's route into ROUTE_VALUE from ROUTE_TABLE: the
+  # dispatch's own table, or /dev/null for the stage's default route (a table without a
+  # line reads as the default). The table's hints go to $2. `until` may be empty; every
+  # other field must have a value.
+  local field=$1
+  ROUTE_VALUE=$(ISS_STAGE_ROUTE_FILE="$ROUTE_TABLE" "$STAGE_ROUTE" --print "$ROUTE_STAGE" "$field" 2>"$2") ||
+    die "$STAGE_ROUTE --print $ROUTE_STAGE $field exited $? for $ROUTE_TABLE; not starting codex without a route"
+  [ -n "$ROUTE_VALUE" ] || [ "$field" = until ] ||
+    die "$STAGE_ROUTE --print $ROUTE_STAGE $field returned nothing for $ROUTE_TABLE; not starting codex without a route"
+}
+
+resolve_stage_route() {
+  local hints default_route default_model default_effort label line notes= why= off_default=false
+  if $READ_ONLY; then ROUTE_STAGE=research; label='调研起草（research）'
+  else ROUTE_STAGE=implementation; label='实现（implementation）'; fi
+  ROUTE_TABLE=${ISS_STAGE_ROUTE_FILE:-$HOME/.claude/state/stage-route}
+  hints=$(mktemp "$RUN_DIR/route-hints.XXXXXX") || die "cannot write a temporary file in $RUN_DIR"
+  route_read profile "$hints"
+  ROUTE_PROFILE=$ROUTE_VALUE
+  # The table's own hints (an unknown or unreadable line) explain a fallback to the
+  # default; the run dir should hold them too.
+  if [ -s "$hints" ]; then
+    cat "$hints" >&2
+    cat "$hints" >> "$STDERR" 2>/dev/null
   fi
-  switch_until=$("$HERE/worker-model.sh" --print until 2>/dev/null || true)
-  if $GOT_MODEL; then detail="覆盖 --model $MODEL"; fi
-  case "$switch_until" in
-    ''|*[!0-9]*) ;;
-    *) detail="${detail:+${detail}；}到期 $(format_until "$switch_until")" ;;
+  rm -f "$hints"
+  route_read model /dev/null; ROUTE_MODEL=$ROUTE_VALUE
+  route_read effort /dev/null; ROUTE_EFFORT=$ROUTE_VALUE
+  route_read until /dev/null; ROUTE_UNTIL=$ROUTE_VALUE
+  # /dev/null is a table that is there but holds no line, so every stage reads as its
+  # default; a path that does not exist would make stage-route.sh run its first-run
+  # migration and write a table there.
+  ROUTE_TABLE=/dev/null
+  route_read profile /dev/null; default_route=$ROUTE_VALUE
+  route_read model /dev/null; default_model=$ROUTE_VALUE
+  route_read effort /dev/null; default_effort=$ROUTE_VALUE
+  default_route="$default_route/$default_model/$default_effort"
+  # codex-glm runs whatever profile the route names, so the model and the effort must
+  # be ones it takes.
+  case " $CODEX_PROFILE_MODELS " in
+    *" $ROUTE_MODEL "*) ;;
+    *) why="模型 $ROUTE_MODEL 不在 codex-glm 档案的已验证组合里（${CODEX_PROFILE_MODELS// /, }）" ;;
   esac
-  # The catalog warning of `use` appears once, when the switch is set; a switch with
-  # a two-day expiry fails every dispatch two days later with only a model name in
-  # stderr. Say here, per dispatch, when the model is not in the worker catalog. Information
-  # only: the switch is the user's decision and is applied regardless.
-  catalog=$(CODEX_WORKER_HOME="$WORKER_HOME" "$HERE/worker-model.sh" --print catalog 2>/dev/null || true)
-  if [ "$catalog" = no ]; then detail="${detail:+${detail}；}不在 worker 目录，L1 未验"; fi
-  detail="${detail:+${detail}；}复位 /worker-model use $switch_default"
-  emit_notice "Worker model 开关生效：${switch_model}（${detail}）"
-  MODEL="$switch_model"
+  if [ -z "$why" ]; then
+    case " $CODEX_PROFILE_EFFORTS " in
+      *" $ROUTE_EFFORT "*) ;;
+      *) why="思考强度 $ROUTE_EFFORT 不是 codex-glm 接受的（${CODEX_PROFILE_EFFORTS// /, }）" ;;
+    esac
+  fi
+  [ -z "$why" ] ||
+    die "路由的${label}阶段是 ${ROUTE_PROFILE} / ${ROUTE_MODEL} / ${ROUTE_EFFORT}：${why}，codex worker 跑不了；不启动 codex。复位：/grill-router use ${ROUTE_STAGE}=${default_route}"
+  if [ "$ROUTE_MODEL" != "$default_model" ] || [ "$ROUTE_EFFORT" != "$default_effort" ]; then
+    # Off the default: the route wins over an explicit --model / --thinking.
+    off_default=true
+    if $GOT_MODEL; then notes="覆盖 --model $MODEL"; fi
+    if $GOT_THINKING; then notes="${notes:+${notes}；}覆盖 --thinking $THINKING"; fi
+    MODEL="$ROUTE_MODEL"; THINKING="$ROUTE_EFFORT"
+    # The route is written the way stage-route.sh's status line writes it.
+    line="阶段路由生效：${label}：${ROUTE_PROFILE} / ${ROUTE_MODEL} / ${ROUTE_EFFORT}"
+    case "$ROUTE_UNTIL" in
+      ''|*[!0-9]*) ;;
+      *) notes="${notes:+${notes}；}到期 $(format_until "$ROUTE_UNTIL")" ;;
+    esac
+  else
+    $GOT_MODEL || MODEL="$ROUTE_MODEL"
+    $GOT_THINKING || THINKING="$ROUTE_EFFORT"
+    line="阶段路由：${label}：${ROUTE_PROFILE} / ${ROUTE_MODEL} / ${ROUTE_EFFORT}（默认）"
+    if $GOT_MODEL; then notes="--model $MODEL 生效"; fi
+    if $GOT_THINKING; then notes="${notes:+${notes}；}--thinking $THINKING 生效"; fi
+  fi
+  # The catalog hint of the worker home: said per dispatch when the model codex is
+  # started on is not in it. Information only; the reset command stays the last part.
+  if [ "$(catalog_status "$MODEL")" = no ]; then
+    notes="${notes:+${notes}；}不在 worker 目录，L1 未验"
+  fi
+  if $off_default; then
+    notes="${notes:+${notes}；}复位 /grill-router use ${ROUTE_STAGE}=${default_route}"
+  fi
+  emit_notice "${line}${notes:+；$notes}"
 }
 
 write_state() {
@@ -638,6 +754,7 @@ write_state() {
   for s in ${SKILLS[@]+"${SKILLS[@]}"}; do skills_nl+="$(winpath "$s")"$'\n'; done
   for s in ${ADD_DIRS[@]+"${ADD_DIRS[@]}"}; do add_nl+="$(winpath "$s")"$'\n'; done
   RUN_DIR_W="$(winpath "$RUN_DIR")" CWD_W="$(winpath "$CWD")" MODEL="$MODEL" THINKING="$THINKING" \
+  ROUTE_PROFILE="$ROUTE_PROFILE" \
   SESSION_ID="$SESSION_ID" BASE_HEAD="$BASE_HEAD" SEGMENTS="$SEGMENTS" ATTEMPTS="$ATTEMPT" \
   CODEX_HOME_W="$(winpath "$WORKER_HOME")" \
   READ_ONLY="$READ_ONLY" \
@@ -648,7 +765,8 @@ write_state() {
     const s = {
       cwd: e.CWD_W, model: e.MODEL,
       skills: (e.SKILLS_NL || "").split("\n").filter(Boolean),
-      thinking: e.THINKING || "", add_dirs: (e.ADD_NL || "").split("\n").filter(Boolean),
+      thinking: e.THINKING || "", profile: e.ROUTE_PROFILE || "",
+      add_dirs: (e.ADD_NL || "").split("\n").filter(Boolean),
       session_id: e.SESSION_ID, base_head: e.BASE_HEAD || "", segments: +e.SEGMENTS,
       attempts: +e.ATTEMPTS,
       codex_home: e.CODEX_HOME_W,
@@ -693,6 +811,12 @@ if $RESUME; then
       if (typeof s.mcp !== "string") { console.error("resume.json: mcp must be a string"); process.exit(1); }
       mcp = clean(s.mcp);
     }
+    // State saved before the Stage route table has no profile: it resumes with none.
+    let profile = "";
+    if ("profile" in s) {
+      if (typeof s.profile !== "string") { console.error("resume.json: profile must be a string"); process.exit(1); }
+      profile = clean(s.profile);
+    }
     let codexHome = "";
     if ("codex_home" in s) {
       if (typeof s.codex_home !== "string" || !s.codex_home.trim()) {
@@ -703,7 +827,8 @@ if $RESUME; then
     }
     const out = [
       "cwd\t" + str(s.cwd, "cwd"), "model\t" + str(s.model, "model"),
-      "thinking\t" + str(s.thinking, "thinking"), "session_id\t" + str(s.session_id, "session_id"),
+      "thinking\t" + str(s.thinking, "thinking"), "profile\t" + profile,
+      "session_id\t" + str(s.session_id, "session_id"),
       "base_head\t" + str(s.base_head, "base_head"), "segments\t" + int(s.segments, "segments", 1),
       "attempts\t" + int(s.attempts, "attempts", 0),
       "read_only\t" + (readOnly ? "true" : "false"),
@@ -717,7 +842,7 @@ if $RESUME; then
   SKILLS=(); ADD_DIRS=()
   while IFS=$'\t' read -r k v; do
     case "$k" in
-      cwd) CWD="$v" ;; model) MODEL="$v" ;; thinking) THINKING="$v" ;;
+      cwd) CWD="$v" ;; model) MODEL="$v" ;; thinking) THINKING="$v" ;; profile) ROUTE_PROFILE="$v" ;;
       session_id) SESSION_ID="$v" ;; base_head) BASE_HEAD="$v" ;;
       segments) SEGMENTS="$v" ;; attempts) ATTEMPT="$v" ;;
       read_only) READ_ONLY="$v" ;;
@@ -773,9 +898,11 @@ else
   if $READ_ONLY; then workspace_fingerprint "$CWD" "$RUN_DIR/fingerprint-start.json" || die "--read-only: could not fingerprint $CWD"; fi
   SEGMENTS=1; ATTEMPT=0
   CODEX_HOME_FOR_CODEX="$(winpath "$WORKER_HOME")"
-  resolve_worker_model
-  # Never start codex with an empty -m: an explicit `--model ""` with the switch on the default.
+  resolve_stage_route
+  # Never start codex on an empty -m or effort: an explicit `--model ""` / `--thinking ""`
+  # while the stage is on its default route.
   [ -n "$MODEL" ] || die "--model must not be empty"
+  [ -n "$THINKING" ] || die "--thinking must not be empty"
   write_state
   emit_worker_home_warning
 fi
@@ -800,7 +927,8 @@ write_status() {
   DIRTY=false
   [ -n "$(git -C "$CWD" status --porcelain 2>/dev/null)" ] && DIRTY=true
   STATUS="$STATUS" ERROR="$ERROR" ATTEMPTS="${SEG_ATTEMPT:-0}" SEGMENTS="$SEGMENTS" \
-  DURATION="$((END - START))" MODEL="$MODEL" SESSION_ID="$SESSION_ID" BASE_HEAD="$BASE_HEAD" \
+  DURATION="$((END - START))" MODEL="$MODEL" THINKING="$THINKING" ROUTE_PROFILE="$ROUTE_PROFILE" \
+  SESSION_ID="$SESSION_ID" BASE_HEAD="$BASE_HEAD" \
   HEAD_NOW="$HEAD_NOW" COMMITS="$COMMITS" DIRTY="$DIRTY" SALVAGED="${SALVAGED:-false}" \
   READ_ONLY="$READ_ONLY" READ_ONLY_VIOLATION="${READ_ONLY_VIOLATION:-false}" CHANGED_PATHS="${CHANGED_PATHS:-[]}" \
   WORKER_SLOT="${WORKER_SLOT:-}" QUEUED_SECONDS="${QUEUED_SECONDS:-0}" \
@@ -809,7 +937,8 @@ write_status() {
     const e = process.env;
     const s = {
       status: e.STATUS, error: e.ERROR || null, attempts: +e.ATTEMPTS, segments: +e.SEGMENTS,
-      duration_s: +e.DURATION, model: e.MODEL, session_id: e.SESSION_ID, cwd: e.CWD_W,
+      duration_s: +e.DURATION, model: e.MODEL, thinking: e.THINKING || "", profile: e.ROUTE_PROFILE || "",
+      session_id: e.SESSION_ID, cwd: e.CWD_W,
       run_dir: e.RUN_DIR_W, base_head: e.BASE_HEAD, head: e.HEAD_NOW,
       new_commits: +e.COMMITS, dirty: e.DIRTY === "true",
       result_file: (e.STATUS === "ok" || e.SALVAGED === "true") ? e.RUN_DIR_W + "/result.md" : null,

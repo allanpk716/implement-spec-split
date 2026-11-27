@@ -206,7 +206,9 @@ function commandText(result, command) {
 }
 
 function parseOrcaRegistry() {
-  const result = spawnSync("orca", ["repo", "list", "--json"], {
+  // Orca is not spawned here: the library runs it and names it (the way
+  // lib-owner.sh is sourced for claim_record_alive below).
+  const result = spawnSync("bash", ["-c", 'source "$1/lib-orca.sh" && orca_repo_list', "_", scriptDir], {
     encoding: "utf8", maxBuffer: 64 * 1024 * 1024,
   });
   let repos = null;

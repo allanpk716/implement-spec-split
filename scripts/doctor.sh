@@ -317,6 +317,11 @@ else
     else
       add stage3 FAIL "hook matcher \"$HOOK_MATCHER\" 未同时覆盖 Edit 和 Write" "The hook matcher \"$HOOK_MATCHER\" does not cover both Edit and Write" "参考 docs/setup.md 使用 Edit|Write|NotebookEdit" "Use Edit|Write|NotebookEdit as shown in docs/setup.md"
     fi
+    if matcher_covers "$HOOK_MATCHER" Bash; then
+      add stage3 PASS "hook matcher 覆盖 Bash" "The hook matcher covers Bash"
+    else
+      add stage3 FAIL "hook matcher \"$HOOK_MATCHER\" 未覆盖 Bash" "The hook matcher \"$HOOK_MATCHER\" does not cover Bash" "flash 模式拦不住 sed -i、heredoc、> / >> 重定向和 tee；参考 hooks/README.md 和 docs/setup.md 第 3 阶段，把 Bash 加进 matcher（Edit|Write|NotebookEdit|Bash）" "Flash mode cannot block sed -i, heredocs, > / >> redirects or tee; add Bash to the matcher as shown in hooks/README.md and docs/setup.md stage 3 (Edit|Write|NotebookEdit|Bash)"
+    fi
 
     if [ -z "$HOOK_PATH" ]; then
       add stage3 FAIL "无法从 hook command 解析 delegate-guard.js 路径" "Could not parse the delegate-guard.js path from the hook command" "使用 node <绝对路径>/delegate-guard.js" "Use node <absolute-path>/delegate-guard.js"

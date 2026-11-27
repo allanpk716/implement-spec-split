@@ -43,7 +43,7 @@ CC 原生套餐用量不够。Opus 的额度只花在判断上，体量大而判
 
    MCP 默认关闭：要联网搜索的调研任务加 `--mcp all`，要操作远程服务器的加 `--mcp ssh-manager`（可写多个服务名，逗号分隔）；写代码的任务不加。
 
-   Worker model（默认 glm-5.4）由用户的全局开关 `/worker-model` 决定（`scripts/worker-model.sh`，ADR 0003）；不要给 wrapper 传 `--model`，开关非默认时它会被覆盖。
+   codex worker 的模型和思考强度取自阶段路由表的对应阶段（带 `--read-only` 是「调研起草」，否则是「实现」；默认都是 glm-5.4 / high），由用户经 `/grill-router` 设置。不要给 wrapper 传 `--model`（`--thinking` 同理），路由非默认时它会被覆盖。
 3. 结束后读 `<运行目录>/status.json` 和 `result.md`。
 
 **Brief 要自包含**：写清目标、相关文件路径与行号、根因分析、期望的修改方式、验收标准（要跑哪些测试/命令）、不要碰的范围。worker 读不到我们的对话。Brief 里还要写两条：

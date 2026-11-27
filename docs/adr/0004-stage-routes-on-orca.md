@@ -27,7 +27,7 @@ supersedes: ADR-0002, ADR-0003
 
 ## Consequences
 
-- 默认路由（与上线前实际行为一致，只有实现阶段换了执行方式）：编排 claude-flash（锁定）；讨论 claude-official / opus / high；调研起草 codex-glm / glm-5.4 / high；实现 claude-glm / glm-5.4 / high；审查 claude-official / opus / high；诊断同审查。
+- 默认路由（与上线前实际行为一致，只有实现阶段换了执行方式）：编排 claude-flash（锁定）；讨论 claude / opus / high；调研起草 codex-glm / glm-5.4 / high；实现 claude-glm / glm-5.4 / high；审查 claude / opus / high；诊断同审查。
 - **实现和 fix 用 `--bare`**：实测同一极小任务 18.6K → 1.2K input tokens。`--bare` 不加载 CLAUDE.md、技能、插件和 hooks，规则改由 `--append-system-prompt-file` 注入一份精简规则，需要的 MCP 用 `--mcp-config` 加。实现 worker 身上原来靠 hook 的硬拦降为提示词，由合入前的脚本门（新提交、工作区干净、测试通过）和审查兜底。`--bare` 在 TUI + 收编下是否可用是规格的第一个验证项。
 - 每层会话只带上一层的产物：规格 issue → 票的 Brief（含规格开始前一次 headless 探索写下的相关文件和调用关系），不带上一层的过程。
 - 走收编路线时 Orca 的 Dispatch 不记模型（`launch.effective.model` 为 null），模型由派发脚本写进落地报告、停车报告和最终报告，三份报告都打印完整路由表，并读 worker 终端状态行核对实际模型，与路由表不符时警告、不拦。

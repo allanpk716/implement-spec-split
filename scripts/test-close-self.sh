@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # Tests for scripts/close-self.sh (fake orca and temporary git repositories).
+# close-self.sh reaches the fake orca only through ISS_ORCA, the one Orca
+# replacement variable (scripts/lib-orca.sh); the fake also sits on PATH for
+# progress-tab.sh, which close-self.sh runs and which is not on the library yet.
 
 set -u
 
@@ -101,6 +104,7 @@ run_close() { # OUT [arguments]
   shift
   env ORCA_TAB_ID="$TAB_ID" ORCA_AGENT_PANE="$PANE" ORCA_LOG="$ORCA_LOG" \
       ORCA_FIXTURE="$ORCA_FIXTURE" ORCA_WORKTREE_ID="${ORCA_WORKTREE_ID:-}" \
+      ISS_ORCA="${ISS_ORCA:-$BIN/orca}" \
       PATH="$BIN:$PATH" \
       bash "$SCRIPT" "$@" > "$out" 2> "$out.err"
   RUN_EXIT=$?
@@ -164,7 +168,7 @@ write_orca_fixture "$WORK/orca-other-tab.json" "$WT_CLEAN" tab-9 leaf-9
 # --- outside Orca -------------------------------------------------------------
 rm -f "$ORCA_LOG"
 env ORCA_TAB_ID= ORCA_AGENT_PANE= ORCA_LOG="$ORCA_LOG" ORCA_FIXTURE="$ORCA_FIXTURE" \
-    PATH="$BIN:$PATH" bash "$SCRIPT" > "$WORK/skip.out" 2> "$WORK/skip.err"
+    ISS_ORCA="$BIN/orca" PATH="$BIN:$PATH" bash "$SCRIPT" > "$WORK/skip.out" 2> "$WORK/skip.err"
 RUN_EXIT=$?
 expect_exit 0 "outside Orca exits 0"
 expect_has 'skip: not in Orca' "outside Orca prints skip" "$WORK/skip.out"
@@ -172,6 +176,19 @@ if [ -e "$ORCA_LOG" ]; then
   bad "outside Orca calls no orca" "$(cat "$ORCA_LOG")"
 else
   ok "outside Orca calls no orca"
+fi
+rm -f "$ORCA_LOG"
+
+# --- ISS_ORCA is the only way to reach orca -----------------------------------
+# An `orca` on PATH must not be used when ISS_ORCA names a program that does
+# not exist: then this is not an Orca session and nothing is closed.
+ISS_ORCA="$WORK/no-such-orca" run_close "$WORK/no-orca.out"
+expect_exit 0 "a missing ISS_ORCA program exits 0"
+expect_has 'skip: not in Orca' "a missing ISS_ORCA program prints skip" "$WORK/no-orca.out"
+if [ -e "$ORCA_LOG" ]; then
+  bad "a missing ISS_ORCA program never falls back to the orca on PATH" "$(cat "$ORCA_LOG")"
+else
+  ok "a missing ISS_ORCA program never falls back to the orca on PATH"
 fi
 rm -f "$ORCA_LOG"
 

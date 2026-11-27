@@ -138,13 +138,12 @@ spec 是一个 GitHub 父 issue，它的子 issue 就是 ticket，ticket 之间�
 ln -s ~/.claude/skills/implement-spec-split/find-next ~/.claude/skills/find-next
 ```
 
-再软链两个 Design session 薄包装技能和两个模型开关命令（判断模型 `/judgment-model`、Worker model `/worker-model`，都见阶段 4；Windows 同样用 `mklink /J` 或复制）：
+再软链两个 Design session 薄包装技能和阶段路由命令 `/grill-router`（用法见阶段 4；Windows 同样用 `mklink /J` 或复制）：
 
 ```bash
 ln -s ~/.claude/skills/implement-spec-split/grill-feature ~/.claude/skills/grill-feature
 ln -s ~/.claude/skills/implement-spec-split/grill-map ~/.claude/skills/grill-map
-ln -s ~/.claude/skills/implement-spec-split/judgment-model ~/.claude/skills/judgment-model
-ln -s ~/.claude/skills/implement-spec-split/worker-model ~/.claude/skills/worker-model
+ln -s ~/.claude/skills/implement-spec-split/grill-router ~/.claude/skills/grill-router
 ```
 
 **用法**：`/find-next [--worker codex|pi|self]`，也可以直接问「下一步做什么」。想看全貌时用 `/find-next --list`，或者直接问「还有什么没做完」：列出全部待办（正在实现、未拆票、缺规格、待讨论的决策票、状态没收尾、散票），不派 worker。决定接下来开发什么时用 `/find-next --batch --workers 4`（`--workers` 是全机 GLM worker 总数，`--specs` 是同时开几份规格，默认 2）：缺规格的票和有规格未拆票的规格，每组由一个 codex worker 起草，你确认一轮后统一发布；最后总是给出全仓库可以开发的规格的编号顺序和每个会话要跑的命令，你确认后它在 Orca 里自动开 worktree 并启动会话（不在 Orca 里时把命令复制到各个 worktree 运行）。一波合入后再跑一次开下一波。同一仓库同一时间只在一个会话里跑 `--batch`。
@@ -180,7 +179,7 @@ ln -s ~/.claude/skills/implement-spec-split/worker-model ~/.claude/skills/worker
    requires_openai_auth = true
    ```
 
-   provider 的名字必须是 `custom`：wrapper 用 `-c model_provider=custom -m <型号>` 钉死 provider 和模型，`<型号>` 取自 Worker model 开关（`/worker-model`，默认 `glm-5.4`，见阶段 4 的「Worker model 开关」），`config.toml` 里的 `model` 对 worker 不起作用。要换模型用 `/worker-model`，不要给 `codex-worker.sh` 传 `--model`（开关非默认时它会被覆盖）。key 不要写进本仓库。
+   provider 的名字必须是 `custom`：wrapper 用 `-c model_provider=custom -m <模型>` 钉死 provider 和模型，模型和思考强度取自阶段路由表（`scripts/stage-route.sh`，默认 `glm-5.4` / `high`）。模型不是 `glm-5.4` 时，用 `/grill-router` 把「实现」和「调研起草」两个阶段设到已验证目录里的组合（例如 `/grill-router use implementation=codex-glm/glm-5.3/high research=codex-glm/glm-5.3/high`），不要给 `codex-worker.sh` 传 `--model`。key 不要写进本仓库。
 
    照智谱官方 Codex 教程配置、直连 `open.bigmodel.cn` 的话，教程里的 provider 叫 `ZAI`：把 `model_provider = "ZAI"` 和 `[model_providers.ZAI]` 都改成 `custom`，`name = "ZAI"` 可以保留（codex 0.164 起 `name` 不能为空）。否则 worker 会报 `model_providers.custom: provider name must not be empty`。支持其他 provider 名见 issue #6。
 
@@ -381,7 +380,7 @@ node -e 'console.log(JSON.stringify({tool_name:"Write",tool_input:{file_path:"C:
 
 **前提**
 
-- 阶段 0（软链安装）和阶段 3（delegate-guard hook）已就绪；`/grill-feature`、`/grill-map` 两个软链按 README 安装。
+- 阶段 0（软链安装）和阶段 3（delegate-guard hook）已就绪；`/grill-feature`、`/grill-map`、`/grill-router` 三个软链按 README 安装。
 - `claude-glm` 已配好（阶段 2 的 GLM 端点与 API Key）：`claude-flash` 复用它的端点和 `~/ops/state/claude-glm/apikey`，不复制密钥。
 - 安装启动器（四件套在 `~/ops/services/claude-flash/`，详见其 README.md）：
 
@@ -403,78 +402,47 @@ node -e 'console.log(JSON.stringify({tool_name:"Write",tool_input:{file_path:"C:
 
 **两个设计入口（Design session）**
 
-- `/grill-feature <想法>`：小功能。flash 主会话调 `scripts/design-session.sh` 开出一个官方 Opus 的 Design session，然后阻塞等待、不耗 token；Orca 会自动切到那个会话，你直接和 Opus 讨论，讨论完它当场做 to-spec、to-tickets、commit、push，写交接摘要后通知 flash 继续并自动切回主会话，flash 只读摘要。
-- `/grill-map <地图或想法>`：大模块（wayfinder 地图）。同上；你说"先到这"就提前结束，research 票交回 flash 派子代理调查。
+- `/grill-feature <想法>`：小功能。flash 主会话调 `scripts/design-session.sh` 开出一个 Design session（按「讨论」阶段的路由启动，默认官方 Opus），然后阻塞等待、不耗 token；Orca 会自动切到那个会话，你直接和 Opus 讨论，讨论完它当场做 to-spec、to-tickets、commit、push，写交接摘要后通知 flash 继续并自动切回主会话，flash 读完摘要就在主会话接着跑 `/find-next` 推进模式（起草、发布、启动第 1 波、总控都在这里）。
+- `/grill-map <地图或想法>`：大模块（wayfinder 地图）。同上，接上后 find-next 停在合成提问那一步等你；你说"先到这"就提前结束，这时不接 find-next，flash 只转述交接摘要里的地图状态和下一步。
 - Design session 的运行目录在 `~/.cache/implement-spec-split/design/<repo>-<时间>-<kind>/`，交接摘要是其中的 `handoff.md`。
 
 **规格会话与 Opus review**
 
 - flash 主会话里跑 `/find-next` 时，launch-wave 用 OpenClaude 槽位（即 flash）开规格会话，默认 `--impl agent`（glm-5.4 子代理实现），一份规格从头跑到尾不占订阅额度。
-- flash 规格会话里的代码审核、草稿审读、连续失败诊断不落在会话内（GLM 会话里的 "opus" 子代理实际是 GLM，等于假审核），一律调 `scripts/opus-review.sh` 出会话用官方 Opus 执行：`--kind code`（审分支/固定点）、`--kind draft`（审规格/票草稿）、`--kind diagnose`（诊断失败、建议续跑/改 Brief/停车）。任何非 0 退出码都停车并说明（含义见脚本头注释），不自动重试、不降级 GLM、不会话内自审。
+- flash 规格会话里的代码审核、草稿审读、连续失败诊断不落在会话内（GLM 会话里的 "opus" 子代理实际是 GLM，等于假审核），一律调 `scripts/opus-review.sh` 出会话执行（按「审查」「诊断」阶段的路由，默认官方 Opus）：`--kind code`（审分支/固定点）、`--kind draft`（审规格/票草稿）、`--kind diagnose`（诊断失败、建议续跑/改 Brief/停车）。任何非 0 退出码都停车并说明（含义见脚本头注释），不自动重试、不降级 GLM、不会话内自审。
 
-**判断模型开关：Opus 没额度时切 glm-5.4**
+**阶段路由表：每个阶段用哪个启动器、模型和思考强度（`/grill-router`）**
 
-Opus 额度用尽时，在任意 Claude Code 会话里敲一条斜杠命令（薄包装技能 `judgment-model/`，按上文软链安装）。开关分两个角色，一条命令可以同时定两样：
-
-- `grill`：Design session 讨论，即 `/grill-feature`、`/grill-map` 和 find-next 里回「展开」开的讨论。
-- `review`：其余全部 Opus 用途，即 Opus review 的三类（代码审核、草稿审读、失败诊断）。
+讨论、调研起草、实现、审查、诊断各用哪个启动器档案、模型和思考强度，由一张全局路由表决定（薄包装技能 `grill-router/`，按上文软链安装；ADR 0004）。编排阶段锁定在 flash，不可改。Opus 没额度时，在任意 Claude Code 会话里敲一条斜杠命令就能把审查、讨论切到 glm-5.4，一条命令可以同时定几个阶段：
 
 ```text
-/judgment-model                                   # 查看两个角色当前各用什么
-/judgment-model 讨论用 opus，其他用 glm 5.4          # 一条命令同时定两样
-/judgment-model 其他用 glm-5.4 到 明早 7:00          # 只定其余的，到点自动回到 opus
-/judgment-model 讨论用 glm-5.4 持续 5 小时            # 只定讨论的
-/judgment-model glm-5.4                            # 两个都用 glm-5.4，一直生效
-/judgment-model opus                               # 两个都切回
+/grill-router                                      # 查看六个阶段当前的路由
+/grill-router 审查用 glm 5.4，讨论用 glm 5.4          # 一条命令同时定两样
+/grill-router 审查切到 glm-5.4 到 明早 7:00             # 只改审查，到点自动回到默认
+/grill-router 讨论切到 glm，强度 medium，持续 5 小时       # 只改讨论，连思考强度一起定
+/grill-router 审查切回默认                             # 把审查设回默认路由
 ```
 
-不在会话里时用脚本，效果相同。`角色=模型` 可以写一至两个；不带角色的模型表示两个角色都设：
+不在会话里时用脚本，效果相同。`use` 后面写一到多个 `阶段=档案/模型/思考强度`，没提到的阶段不动；设回默认路由就是离开表：
 
 ```bash
-S=~/.claude/skills/implement-spec-split/scripts/judgment-model.sh
-$S grill=opus review=glm-5.4                        # 一次设两样
-$S review=glm-5.4 --until 2026-11-28T07:00:00+08:00  # 到点自动回到 opus
-$S review=glm-5.4 --for 5h                          # 或：从现在起 5 小时（也支持 30m、2d12h）
-$S glm-5.4                                          # 两个角色都设；不带时间就一直生效
-$S                                                  # 查看当前状态
-$S opus                                             # 两个都切回
+S=~/.claude/skills/implement-spec-split/scripts/stage-route.sh
+$S use review=claude-glm/glm-5.4/high design=claude-glm/glm-5.4/medium   # 一次设两样
+$S use review=claude-glm/glm-5.4/medium --until 2026-11-28T07:00:00+08:00  # 到点自动回到默认
+$S use review=claude-glm/glm-5.4/medium --for 5h                          # 或：从现在起 5 小时（也支持 30m、2d12h）
+$S use review=claude/opus/high                                           # 设回默认路由
+$S                                                                      # 查看当前状态
+$S migrate                                                              # 迁移旧开关里未到期的设置
 ```
 
-- 开关是 `~/.claude/state/judgment-model`，对本机所有仓库、所有会话生效；两个角色各记各的模型和到期时间（[ADR 0002](adr/0002-judgment-model-hot-switch.md)）。
-- `opus-review.sh` 读 `review`，`design-session.sh` 读 `grill`，都是每次被调用时读，所以**已经在跑的 flash 规格会话和 find-next 会话不用重开**：`review` 切过去后，正在进行的这一次审查还是 Opus，下一次就是 glm-5.4。审查仍出会话走 `opus-review.sh`，只是该脚本改经 `claude-glm` 执行；不会变成会话内子代理。
-- 切换后审查经 `claude-glm` 执行（`--model opus` 在 claude-glm 里映射到 glm-5.4），stderr 会说明，findings 文件首行是 `判断模型：glm-5.4…`。glm-5.4 审 glm-5.4 写的代码不如 Opus，看落地报告时留意这一行。
-- Design session 只在**新开**时读开关（看的是 `grill`）：切过去后 `/grill-feature`、`/grill-map` 开出的是 glm-5.4 会话（Orca 终端里跑 `claude-glm`，界面 mock 由它自己做，不派 worker），交接和等待流程不变。
+- 六个阶段和默认路由：编排 `claude-flash` / glm-5.3-flash（锁定）；讨论 `claude` / opus / high；调研起草 `codex-glm` / glm-5.4 / high；实现 `claude-glm` / glm-5.4 / high；审查、诊断 `claude` / opus / high。档案 `claude` 是官方订阅的裸 `claude`，`claude-glm`、`claude-flash` 是两个 GLM 启动器，`codex-glm` 是经 `codex-worker.sh` 跑的 codex。不在默认上的那一行会在「切回用 /grill-router use」后面写出它的默认路由，照抄就是切回。
+- 哪个脚本读哪一行：`design-session.sh` 读「讨论」；`opus-review.sh --kind code|draft` 读「审查」、`--kind diagnose` 读「诊断」；`codex-worker.sh` 带 `--read-only` 读「调研起草」，否则读「实现」。都是每次派发时读一次，所以**已经在跑的 flash 规格会话和 find-next 会话不用重开**：路由改了以后，正在进行的这一次不受影响，下一次派发才生效。
+- 路由表是 `~/.claude/state/stage-route`，对本机所有仓库、所有会话生效。只接受冒烟测试过的（档案、模型）组合，目录外的写法退出码 64、不改表；思考强度可选 low、medium、high、xhigh、max（codex 没有 max）。到期、目录外的组合、文件损坏都自动回到默认并在 stderr 提示。审查和实现被设成同一个模型时警告一次（等于没换模型审查），不拦。
+- 审查出会话仍走 `opus-review.sh`，不会变成会话内子代理；切到 glm-5.4 后经 `claude-glm` 执行，stderr 和 findings 文件首行都写明本次路由（阶段、档案、模型、思考强度）。glm-5.4 审 glm-5.4 写的代码不如 Opus，看落地报告时留意这一行。
+- Design session 只在**新开**时读「讨论」路由：切过去后 `/grill-feature`、`/grill-map` 开出的是 glm-5.4 会话（Orca 终端里跑对应的启动器，界面 mock 由它自己做，不派 worker），交接和等待流程不变。
 - 已经开着的 Opus Design session 换不了模型。要在原对话上接着谈：在那个仓库的终端里运行 `claude-glm --resume`，从列表里选它；交接约定还在原对话里，运行目录和等待也不变。等待超时了，用 stderr 里打印的 `design-session.sh --attach <运行目录>` 续等。
 - 不会自动切换：Opus review 报额度错误（退出码 3）照旧按 `quota` 停车，已经停车的规格仍由 keeper 在可恢复时间之后恢复。切不切由你决定。
-
-**Worker model 开关：给 codex worker 换模型**
-
-codex worker（External worker）用的模型由另一个用户开关决定，和判断模型开关互相独立（[ADR 0003](adr/0003-worker-model-hot-switch.md)）。它管所有走 `codex-worker.sh` 的调用，不限于 flash：`--impl codex` 的实现角色、find-next 派的 codex worker（调研、决策、起草）、阶段 3 日常分工里的派活。默认 `glm-5.4`，可切到 `glm-5.3` 或 `glm-5.3-flash`。在任意 Claude Code 会话里敲（薄包装技能 `worker-model/`，按上文软链安装）：
-
-```text
-/worker-model                                   # 查看当前状态
-/worker-model use glm-5.3                       # 切到 glm-5.3，一直生效
-/worker-model use glm-5.3-flash 到 明早 7:00     # 切到 flash，到点自动回到默认
-/worker-model use glm-5.3 持续 5 小时             # 从现在起 5 小时
-/worker-model use glm-5.4                       # 复位：回到默认，--model 重新生效
-```
-
-不在会话里时用脚本，效果相同：
-
-```bash
-S=~/.claude/skills/implement-spec-split/scripts/worker-model.sh
-$S use glm-5.3                                            # 切换，不带时间就一直生效
-$S use glm-5.3-flash --until 2026-11-28T07:00:00+08:00   # 到点自动回到默认
-$S use glm-5.3-flash --for 5h                             # 或：从现在起 5 小时（也支持 30m、2d12h）
-$S                                                       # 查看当前状态
-$S use glm-5.4                                           # 复位
-```
-
-- 开关是 `~/.claude/state/worker-model`，对本机所有仓库、所有会话生效。`codex-worker.sh` 每次新起 worker 时读它，所以**已经在跑的 Run 和 find-next 会话不用重开**：下一次派发就是新模型；已经在跑的 worker 不变，续跑（Resume）仍用第一段的模型。
-- 优先级：开关（非默认时）> 调用方显式传的 `--model` > 默认。开关生效期间 `--model` 会被覆盖，wrapper 会在 stderr 和运行目录的 `stderr.log` 里写一行 `Worker model 开关生效：…`（型号、被覆盖的 `--model`、到期时间、是否在 worker 模型目录里、复位命令），`status.json` 的 `model` 记实际用的型号。日常用法不要给 wrapper 传 `--model`。
-- `glm-5.3-flash` 还没有在 codex 路径上实证，也不在 `models.json` 模型目录里。切到它之前先验证：`scripts/selftest-codex.sh --only L1 --model glm-5.3-flash`；报错指向型号或目录时，在 `~/.codex/models.json` 补条目（`input_modalities: ["text"]`，`supported_reasoning_levels` 照 `glm-5.3`，`context_window` 暂按 1M），重跑 `scripts/setup-worker-home.sh`（直接改 `~/.codex-worker/models.json` 会被下次重跑覆盖；重跑前看一眼 `~/.codex/config.toml` 顶层的 `model_provider`，它会被原样复制进 worker home）。`/worker-model use glm-5.3-flash` 遇到目录里没有的型号只警告、不拦。L1 通过也只证明端点接受该型号，不证明 `high` 推理档和 1M 上下文可用。
-- 不管的：`--impl pi`、`--impl agent`（含 flash 环境默认的 agent 后端，子代理型号由启动器决定）、keeper、run-phase。flash 环境里只有显式 `--impl codex` 并带 `WORKER_ALLOW_FLASH=1` 的 Run 才经过 wrapper、才受开关影响。不调 `codex-worker.sh` 的机器（如 train3060）上开关是惰性的，那边不要装 `/worker-model` 软链。
-- 只由用户切：薄技能设了 `disable-model-invocation`，会话不能自己调它；这只是软约束（会话仍可经 Bash 跑脚本），和 `/judgment-model` 一样。两个开关同时非默认时，无人值守 Run 照常自动落地，落地报告、停车报告（`### 现状` 下）和最终报告会同时写两个开关的状态。
+- **从旧版升级**：旧版装过 `judgment-model`、`worker-model` 两个开关的，删掉 `~/.claude/skills/` 下这两个软链，按上文软链 `grill-router`。第一次运行 `/grill-router`（任何派发脚本第一次读表也一样）会把旧设置里未到期的迁进路由表：思考强度取 high，到期时间照搬；迁不进的（模型不在已验证目录，例如旧 worker 开关的 glm-5.3-flash）保留旧文件并提示。之后只有 `/grill-router migrate` 会再迁一次。
 
 **flash 的边界**
 
@@ -492,6 +460,7 @@ $S use glm-5.4                                           # 复位
 
 - **更新**：`cd ~/.claude/skills/implement-spec-split && git pull`。模板和脚本立即生效；hook 下次调用即生效。
 - **分工规则更新**：仓库里的 `templates/global-claude-md.md` 改了之后，需要手动同步到 `~/.claude/CLAUDE.md`（全局文件不在仓库管理范围内）。
+- **升级到阶段路由表**：旧版装过 `judgment-model`、`worker-model` 两个开关的，删掉 `~/.claude/skills/` 下这两个软链、软链 `grill-router`；第一次运行 `/grill-router` 会迁移旧设置（见阶段 4）。
 - **暂停分工**：从 `settings.json` 删掉 delegate-guard 那一项，并从 CLAUDE.md 删掉分工一节。
 - **换机器**：要搬三样东西：克隆本仓库（阶段 0）、`~/.codex/config.toml` 与代理（阶段 2）、CLAUDE.md 分工一节和 `settings.json` 的 hook 注册（阶段 3）。只克隆仓库不够。
 

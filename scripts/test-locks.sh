@@ -18,9 +18,15 @@ export CODEX_WORKER_CODEX="$FAKE"
 export CODEX_WORKER_SKIP_PREFLIGHT=1
 export CODEX_WORKER_POLL=1
 export CODEX_WORKER_HOME="$TEST_ROOT/codex-home"
-# Keep the real Worker model switch out of the test: these workers pass no --model.
-export ISS_WORKER_MODEL_FILE="$TEST_ROOT/no-worker-model"
 export FAKE_CODEX_SCENARIO=slot-hold
+# codex-worker.sh reads the Stage route table on every fresh run: keep the machine's
+# real table out of the test, as selftest-codex.sh does (/dev/null is a table with no
+# line, so every stage reads as its default).
+export ISS_STAGE_ROUTE_FILE=/dev/null
+# codex-worker.sh refuses to run (exit 64) when FLASH_ORCHESTRATOR=1 without
+# WORKER_ALLOW_FLASH=1: the worker slot cases below run ordinary workers, so a
+# flash orchestrator session that started this test must not leak into them.
+unset FLASH_ORCHESTRATOR
 
 PASS=0
 FAIL=0

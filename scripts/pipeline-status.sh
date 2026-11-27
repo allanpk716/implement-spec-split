@@ -40,7 +40,8 @@ tracker documentation instead.
 
 PIPELINE_STATUS_NOW may set an ISO-8601 current time for deterministic stale-claim tests.
 PIPELINE_STATUS_ORCA_TERMINALS_JSON may name a file holding `orca terminal list --json`
-output, and PIPELINE_STATUS_ORCA may override the orca executable, for orphan-claim tests.
+output for orphan-claim tests; without it Orca is asked through scripts/lib-orca.sh,
+which reads ISS_ORCA to name the Orca executable.
 EOF
 }
 
@@ -50,6 +51,8 @@ die() {
 }
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# The one Orca call is made by the node code, which runs scripts/lib-orca.sh
+# instead of spawning orca; ISS_LIB_ORCA (pipeline_node) hands it the library.
 PID_START="$HERE/pid-start.sh"
 
 REPO=
@@ -163,7 +166,8 @@ PIPELINE_FILE=$WORK/pipeline.json
 pipeline_node() {
   mode=$1
   shift
-  ISS_PID_START_SCRIPT="$PID_START" node - "$mode" "$@" <<'NODE'
+  ISS_PID_START_SCRIPT="$PID_START" ISS_LIB_ORCA="$HERE/lib-orca.sh" \
+    node - "$mode" "$@" <<'NODE'
 const fs = require('fs');
 const path = require('path');
 const cp = require('child_process');
@@ -875,9 +879,10 @@ if (mode === 'collect') {
     let text;
     try {
       const fixture = process.env.PIPELINE_STATUS_ORCA_TERMINALS_JSON;
+      // Orca is not spawned here: the library runs it and names it.
       text = fixture
         ? fs.readFileSync(fixture, 'utf8')
-        : cp.execFileSync(process.env.PIPELINE_STATUS_ORCA || 'orca', ['terminal', 'list', '--json'], {
+        : cp.execFileSync('bash', ['-c', 'source "$1" && orca_terminal_list', '_', process.env.ISS_LIB_ORCA], {
           encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000,
         });
       const value = JSON.parse(text);
