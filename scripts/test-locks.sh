@@ -19,6 +19,9 @@ export CODEX_WORKER_SKIP_PREFLIGHT=1
 export CODEX_WORKER_POLL=1
 export CODEX_WORKER_HOME="$TEST_ROOT/codex-home"
 export FAKE_CODEX_SCENARIO=slot-hold
+# codex-worker.sh reads the Stage route table on every fresh run: keep the machine's
+# real table out of the test, as selftest-codex.sh does.
+export ISS_STAGE_ROUTE_FILE="$TEST_ROOT/no-stage-route"
 
 PASS=0
 FAIL=0
