@@ -294,7 +294,7 @@
 ## 自测
 
 - **批量发布**：`bash find-next/scripts/test-publish-batch.sh`。用假 `gh` 测校验、试运行、发布顺序、占位符回填、未决、交接留言、只拆票的已有规格组、发布后调用开发顺序脚本、发布后核对、`--only` 与中途失败后重跑，不访问网络。
-- **批量 Brief 生成**：`bash find-next/scripts/test-make-batch-briefs.sh`。用假 `gh` 测变量替换、上游技能版本选择与参数校验，只拆票的已有规格三种形态（有「实现票：」行、只有「地图：」行、两行都没有的手写规格，含 stderr 提示与子票不为 0 仍拒绝），以及 10 份 Brief 模板「环境约束」节逐字相同。
+- **批量 Brief 生成**：`bash find-next/scripts/test-make-batch-briefs.sh`。用假 `gh` 测变量替换、上游技能版本选择与参数校验，只拆票的已有规格三种形态（有「实现票：」行、只有「地图：」行、两行都没有的手写规格，含 stderr 提示与子票不为 0 仍拒绝），以及 10 份 Brief 模板「环境约束」节逐字相同，`--force` 覆盖既有 Brief（占位 Brief 覆盖并写出后续组、重跑换组重写、无既有文件照常生成）。
 - **流水线状态**：`bash scripts/test-pipeline-status.sh`。它用假 `gh` 和临时 git 仓库测独立规格、单票规格、原版父规格、旧父 issue 形状、缺规格分组、探索中的地图、分支接手、已合入的遗留分支、外部阻塞、`--order` 开发顺序（状态、排序、波次、`--apart`、循环依赖）、`ready-for-human` 执行票（`(人工)` 后缀、只剩人工票的规格不进「可以实现」/`--order`/波次、`--all` 提示「人工票待做」、`--graph` 的 `human`/`human_only`/`status: human`）和 gh 失败，不访问网络。
 - **前沿计算**：`bash scripts/test-frontier.sh`。用假 `gh` 和临时夹具跑真实 `pipeline-status.sh --graph`，测未阻塞票、只有已关闭阻塞的票、被挡票及其阻塞票、`ready-for-human` 票、搁置票的分节输出，前沿行在前且升序，未知规格、pipeline-status 失败、`blocked_by` 查询失败都 fail closed（stdout 为空），以及参数错误，不访问网络。
 - **unattended-stop-guard**：`node hooks/test-unattended-stop-guard.js`。临时 transcript + 临时 `ISS_STATE_DIR`/`TMPDIR`：非无人值守放行、done/waiting/parked 未自关 block、已自关放行、问句 block、非问句放行、找不到 `run.json` 只跑规则 B、`stop_hook_active` 循环上限、逃生口、坏 transcript fail open、6MB transcript 2 秒内判定，不访问网络。

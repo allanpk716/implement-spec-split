@@ -403,6 +403,29 @@ else
 fi
 expect_no_directory "$EXISTING/S2" 'existing-brief failure writes no later group'
 
+run_brief "$WORK/existing-force.out" --example 205 --force "$EXISTING" S1=62 S2=74
+expect_exit 0 'an existing brief is replaced with --force'
+expect_first_line '# 任务：为地图实现票 #62 起草一份规格和它的执行票（只写草稿，不发布）' \
+  'the placeholder brief is overwritten with --force' "$EXISTING/S1/brief.md"
+expect_has "$EXISTING/S2/brief.md" 'the later group is written too with --force' \
+  "$WORK/existing-force.out"
+
+FORCE_RERUN=$WORK/force-rerun
+run_brief "$WORK/force-first.out" --example 205 "$FORCE_RERUN" S1=62
+expect_exit 0 'brief generates before a --force rerun'
+run_brief "$WORK/force-rerun.out" --example 205 --force "$FORCE_RERUN" S1=63
+expect_exit 0 '--force rerun over a generated brief succeeds'
+expect_has '#63「Ticket beta」' '--force rerun rewrites the brief from the new group' \
+  "$FORCE_RERUN/S1/brief.md"
+expect_without '#62「Ticket alpha」' '--force rerun leaves nothing of the old group' \
+  "$FORCE_RERUN/S1/brief.md"
+
+FORCE_FRESH=$WORK/force-fresh
+run_brief "$WORK/force-fresh.out" --example 205 --force "$FORCE_FRESH" S1=62
+expect_exit 0 '--force without an existing brief generates normally'
+expect_first_line '# 任务：为地图实现票 #62 起草一份规格和它的执行票（只写草稿，不发布）' \
+  '--force fresh run writes the brief' "$FORCE_FRESH/S1/brief.md"
+
 # The environment-constraints section is pasted verbatim into every Brief template;
 # fail as soon as one copy drifts or goes missing.
 env_first=

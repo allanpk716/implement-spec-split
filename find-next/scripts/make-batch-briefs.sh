@@ -446,18 +446,11 @@ MAP_TEMPLATE=$SCRIPT_DIR/../templates/brief-map-spec-batch.md
 SKILLS_ROOT=${FIND_NEXT_SKILLS_ROOT:-$HOME/.claude/plugins/cache/mattpocock/mattpocock-skills}
 [ -d "$SKILLS_ROOT" ] || die "skills root was not found: $SKILLS_ROOT"
 
-index=0
-while [ "$index" -lt "${#GROUP_KEYS[@]}" ]; do
-  key=${GROUP_KEYS[$index]}
-  brief=$RUN_DIR/$key/brief.md
-  if [ -e "$brief" ] && [ "$FORCE" -ne 1 ]; then
-    die "brief already exists (use --force to replace it): $brief"
-  fi
-  index=$((index + 1))
-done
-
 set -- "$TEMPLATE" "$TICKETS_TEMPLATE" "$MAP_TEMPLATE" "$REPO_PATH" "$REPO" "$EXAMPLE" \
   "$RUN_DIR" "$SKILLS_ROOT"
+if [ "$FORCE" -eq 1 ]; then
+  set -- "$@" --force
+fi
 index=0
 while [ "$index" -lt "${#GROUP_KEYS[@]}" ]; do
   set -- "$@" --group "${GROUP_KEYS[$index]}" "${GROUP_NUMBERS[$index]}" \
@@ -480,6 +473,7 @@ const [
   templatePath, ticketsTemplatePath, mapTemplatePath, repoPath, repo, example, runDir,
   skillsRoot,
 ] = argv;
+const force = argv.includes('--force');
 const groups = [];
 const notes = new Map();
 for (let index = 0; index < argv.length; index++) {
@@ -773,7 +767,7 @@ for (const group of parsedGroups) {
 
 for (const {group} of renderedGroups) {
   const briefPath = path.join(group.dir, 'brief.md');
-  if (fs.existsSync(briefPath)) {
+  if (!force && fs.existsSync(briefPath)) {
     fail(`brief already exists (use --force to replace it): ${briefPath}`);
   }
 }
