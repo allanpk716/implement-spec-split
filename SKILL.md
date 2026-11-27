@@ -226,12 +226,15 @@ This batch lands without the user, typically to run overnight: `launch-wave.sh` 
 
 ### 现状
 <what is already merged into spec-<n>, tests, branch, run dirs>
+<the two route lines of "Report at the end">
 ```
 
 The two lines right after `## 停车报告` are mandatory and come before `### 需要你决定`:
 
 - `停车类别：quota|transient|decision|error|other`
 - `可恢复时间：<ISO 8601 含时区>|无`
+
+`### 现状` also carries the two route lines of "Report at the end": a park is exactly when the user needs to know who wrote and who reviewed. They go under `### 现状`, so the first section the supervisor relays verbatim and the two machine-readable lines keeper reads are untouched.
 
 | 类别 | 场景 | 可恢复时间 |
 |---|---|---|
@@ -247,7 +250,7 @@ No other wording for the next step ("回 find-next 选『先恢复』" and the l
 
 **Resuming after parking**: in Recovery, read the Spec issue's comments; the newest `## 拍板` comment after the newest `## 停车报告` holds the user's answers. Apply them (one fix role for all answers, then step 7's review only of that fix; open and close its progress tab as Progress tabs says) and continue to landing. The `## 拍板` answers count as authorised for this Run: do not park on the same items again.
 
-**Landing report**: after a successful unattended landing, post the final report (below) on the Spec issue as `## 落地报告`, condensed but in the same order as "Report at the end" (completion.txt verbatim, then the `## 结论` block with 要你做的, then details): tickets landed, review findings and how each was resolved, `### 自动拍板（可推翻）` (omit when empty), tickets left waiting for another Spec (`剩余：#<t> 等 #<spec>`, one line each), and the Specs step 9.5 started. The user reads it through find-next's supervisor or GitHub, not by reopening this session.
+**Landing report**: after a successful unattended landing, post the final report (below) on the Spec issue as `## 落地报告`, condensed but in the same order as "Report at the end" (completion.txt verbatim, then the `## 结论` block with 要你做的, then details): tickets landed, review findings and how each was resolved, `### 自动拍板（可推翻）` (omit when empty), tickets left waiting for another Spec (`剩余：#<t> 等 #<spec>`, one line each), the Specs step 9.5 started, and the two route lines of "Report at the end". The user reads it through find-next's supervisor or GitHub, not by reopening this session.
 
 
 ### spec-keeper (the daemon that resumes unattended Runs)
@@ -279,8 +282,8 @@ This mode is for a flash Orchestrator: the session itself is GLM, so a subagent 
 - **Step 9 conflicts**: dispatch a merger to resolve conflicts, but do not ask the user whether the resolution needs review and do not review it in-session. Record the pre-merge `spec-<n>` tip, then run `opus-review.sh --kind code --input <pre-merge spec-<n> tip> --out <run dir>/opus-conflict-review.md --cwd <integration worktree>`. Follow its findings: clean → continue; findings → one fix role, tests, and another code review of the conflict resolution. Open and close the merger's and the fix role's progress tabs as Progress tabs says.
 - **Two consecutive failures**: count failures per role and ticket across both backends. On the second consecutive failure, before re-briefing again or asking the user, write a failure record outside the repo containing the role, ticket, both result/status paths, the relevant error tails, and what the verification gate observed; then run `opus-review.sh --kind diagnose --input <failure-record> --out <run dir>/opus-diagnosis.md`. Continue, change the Brief, or stop exactly as the findings direct.
 - **Stopping**: the flash session decides nothing itself; it must not invent its own trade-off or parking decision, and must not settle an item by its own reading, not even one that looks answered by the Spec (on 2026-11-21 a flash session "ruled by the Spec" on two of five such items, one of which asked a human to check the Spec text Opus could not read). It acts only on Opus's own marks under `## 需要人取舍`: with `--auto-land`, an item with `可自动采纳：是` is applied as recommended and recorded under `### 自动拍板（可推翻）` (see Unattended landing); an item with `可自动采纳：否`, `推荐：无`, or no `可自动采纳` line parks the Run, and its parking report's `### 需要你决定` copies those items as written. Without `--auto-land`, relay every item to the user as written. This does not limit error stops below.
-- **Opus review errors**: 退出码为 3（额度或 429）时按 quota 停车，其余非 0 退出码仍按原规则停车并说明（退出码含义见 scripts/opus-review.sh 头注释）。Do not retry automatically, downgrade to GLM, or review in-session; the judgment model switch below is applied by `opus-review.sh` on every call, never by you. A quota park carries 停车类别 `quota` and the reset time as 可恢复时间, so keeper resumes it automatically.
-- **Judgment model switch**: `scripts/judgment-model.sh`, which only the user runs (as `/judgment-model`), holds the global switch (GLOSSARY.md) with two roles, `grill` for Design sessions and `review` for every Opus review, each on `opus` (the default) or `glm-5.4`. `opus-review.sh` reads the `review` role on every call, so a Run that is already executing changes model at its next review. When its stderr says the switch is glm-5.4, the findings file starts with a `判断模型：glm-5.4…` line: act on the findings exactly as on any other, and say in the landing report and the final report that the reviews ran on glm-5.4 in place of Opus. Never change the switch yourself.
+- **Opus review errors**: 退出码为 3（额度或 429）时按 quota 停车，其余非 0 退出码仍按原规则停车并说明（退出码含义见 scripts/opus-review.sh 头注释）。Do not retry automatically, downgrade to GLM, or review in-session; the Stage route below is applied by `opus-review.sh` on every call, never by you. A quota park carries 停车类别 `quota` and the reset time as 可恢复时间, so keeper resumes it automatically.
+- **Stage route**: `scripts/stage-route.sh`, which only the user runs (as `/grill-router`), holds the global Stage route table (GLOSSARY.md, ADR 0004): which Launcher profile, model and reasoning effort each stage runs on. `opus-review.sh` reads the `review` route on every `--kind code` / `draft` call and the `diagnosis` route on every `--kind diagnose` call, so a Run that is already executing changes model at its next review; the launcher, `--model` and `--effort` all come from the route. Every findings file starts with a `路由：审查（review）claude-glm / glm-5.4 / medium · <time>` line naming the route that produced it, and when the profile is not `claude` the wrapper's stderr says official Opus was not called. Act on the findings exactly as on any other, whatever the route: never change the route table yourself, and never reject findings because you take the switch for a downgrade — the route is the user's decision.
 - **Reports**: in both the final report and an Unattended-landing report, give every conclusion the path of the findings or role result that supports it (for example `<run dir>/opus-code-review.md`, `<run dir>/opus-diagnosis.md`, or a role's `result.md`). Require in-session roles to write their final reports to durable result files. Omit a conclusion for which no such path exists.
 
 ## External workers (backends `codex` and `pi`)
@@ -356,5 +359,6 @@ The reader is the user, who did not watch the Run and reads Chinese. Write the r
 
 `## 细节`:
 - Which backend and model ran each role (implement / merge / fix / review), and any role that ran on a different backend than configured, and why.
+- **Route**, two lines written every time, on a default route as on a switched one. The 实现路由 line is the set of distinct routes this Run's workers actually ran on, read from each worker's `status.json` (`profile`, `model` and `thinking`, the effort; `scripts/codex-worker.sh` records what it used) — not the table's current value, since a route changed mid-Run makes them differ — or `不适用` for a Run on the `agent` backend or one that dispatched no worker. The 审查路由 line is the set of distinct routes the reviews and diagnoses actually ran on, read from the `路由：` first line of their findings files, or `不适用` for a Run that ran no review. The same two lines go into the `## 落地报告` and into the `### 现状` of a `## 停车报告` of an unattended Run.
 - For External workers: one line per run with ticket, status, segments (`status.json`; more than 1 means it was Resumed), duration and run directory; whether the run overlapped GLM peak hours.
 - The review findings per axis, and how they were resolved.

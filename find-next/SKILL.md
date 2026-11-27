@@ -373,7 +373,7 @@ flash 模式下，Opus review 与 Design session 的失败处理见「flash 模�
 - **worker 后端**：没给 `--worker` 时按 `--worker agent` 处理（flash 环境里 `sonnet`/`opus` 都映射到 glm-5.4，子代理本身就是 GLM，与 implement-spec-split、launch-wave 的 flash 默认一致）。`codex-worker.sh` / `pi-worker.sh` 在 `FLASH_ORCHESTRATOR=1` 时拒跑；只有用户显式给了 `--worker codex|pi`，才在每条 wrapper 命令前加 `WORKER_ALLOW_FLASH=1`，其他情况不许设置，也不许绕开本技能自己起 worker。
 - **第 1 波启动**：仍按第 10 步的原有命令试运行并 `--apply`；flash 环境下 `launch-wave.sh` 自己选择 OpenClaude 规格会话，并在未显式指定实现后端时默认 agent 后端，技能层不重复实现该规则。
 - **Opus review 不可用**：退出码为 3（额度或 429）时按 quota 停车，其余非 0 退出码仍按原规则停车并说明（退出码含义见 scripts/opus-review.sh 头注释）；不自动重试、不降级到 GLM、不改由 flash 自己审读。Design session 脚本失败同样停下并转述错误。
-- **判断模型开关**：`/judgment-model`（只由用户敲，背后是 `~/.claude/skills/implement-spec-split/scripts/judgment-model.sh`）是用户设置的全局开关（GLOSSARY.md），分两个角色：`review` 决定 Opus review 用 `opus`（默认）还是 `glm-5.4`，`grill` 决定 Design session 讨论；一条命令可以同时设两样。`opus-review.sh` 和 `design-session.sh` 每次被调用时自己读它，正在推进的运行不用重开，下一次审查就是新模型。`opus-review.sh` 的 stderr 说明本次用了 glm-5.4 时，findings 首行会有 `判断模型：glm-5.4…`：照常按 findings 执行，汇报结论时注明「本次审读由 glm-5.4 代替 Opus」。不要自己改开关，也不要把切换当成降级而拒收 findings。
+- **阶段路由**：`/grill-router`（只由用户敲，背后是 `~/.claude/skills/implement-spec-split/scripts/stage-route.sh`）是用户设置的全局路由表（GLOSSARY.md 的 Stage route）：编排、讨论、调研起草、实现、审查、诊断六个阶段各用哪个启动器档案、模型和思考强度，可带到期。`opus-review.sh` 每次被调用时自己读「审查」（`--kind code`、`draft`）或「诊断」（`--kind diagnose`）的路由，`design-session.sh` 读「讨论」，正在推进的运行不用重开，下一次审查就是新路由。findings 文件首行每次都是 `路由：审查（review）claude-glm / glm-5.4 / medium · <时间>`；档案不是 `claude` 时 `opus-review.sh` 的 stderr 会说明本次没调官方 Opus。照常按 findings 执行，汇报结论时带上这一行。不要自己改路由表，也不要把切换当成降级而拒收 findings。
 
 ## 建议模式输出（适合手机阅读）
 

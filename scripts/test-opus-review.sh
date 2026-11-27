@@ -130,8 +130,13 @@ export FAKE_CLAUDE_LOG="$FAKE_GLM_LOG" FAKE_CLAUDE_CWD="$FAKE_GLM_CWD"
 exec "$FAKE_BIN_DIR/claude" "$@"
 FAKE
 chmod +x "$BIN/claude-glm"
-SWITCH=$HERE/judgment-model.sh
+ROUTE=$HERE/stage-route.sh
 
+# A jump makes `date +%s` alternate between a base time and base + jump, so
+# the two reads of opus-review.sh's timeout loop (start, now) differ by the
+# jump. opus-review.sh reads the route table before the loop, and every
+# stage-route.sh run reads the clock once; the number of those reads must stay
+# even for the loop's own reads to land on the base and the jump.
 cat > "$BIN/date" <<'FAKE'
 #!/usr/bin/env bash
 if [ "${FAKE_DATE_JUMP_SECONDS:-0}" -eq 0 ]; then
@@ -158,6 +163,7 @@ reset_fake_date() {
   export FAKE_DATE_JUMP_SECONDS
 }
 
+ORIG_PATH=$PATH
 export PATH="$BIN:$PATH"
 export ANTHROPIC_BASE_URL="https://glm-proxy.invalid/v1"
 export ANTHROPIC_AUTH_TOKEN="fake-glm-token"
@@ -179,8 +185,10 @@ export FAKE_CLAUDE_CALLS="$WORK/claude-calls"
 export FAKE_GLM_LOG="$WORK/glm-env-args.log"
 export FAKE_GLM_CWD="$WORK/glm-cwd.log"
 export FAKE_BIN_DIR="$BIN"
-# The judgment model switch of the user running the tests must not leak in.
-export ISS_JUDGMENT_MODEL_FILE="$WORK/judgment-model"
+# The Stage route table of the user running the tests must not leak in: the
+# routes a test sets go to a table of its own, next to which the first run of
+# stage-route.sh finds no old switch file to migrate either.
+export ISS_STAGE_ROUTE_FILE="$WORK/stage-route"
 
 reset_calls() { : > "$FAKE_CLAUDE_CALLS"; }
 call_count() { cat "$FAKE_CLAUDE_CALLS" 2>/dev/null || echo 0; }
@@ -226,6 +234,16 @@ WebSearch'
 run_review --kind code --input main --out "$WORK/code-findings.md" --cwd "$REPO" --timeout 5
 expect_rc "code review succeeds" 0 "$RUN_RC"
 check "code findings contain claude final output" grep -Fqx 'fake Opus findings' "$WORK/code-findings.md"
+check "the default route runs the review on official claude" test -e "$FAKE_CLAUDE_LOG"
+check "the default review route is not the GLM launcher" test ! -e "$FAKE_GLM_LOG"
+check "findings start with the default review route" \
+  bash -c "head -n 1 '$WORK/code-findings.md' | grep -Eq '^路由：审查（review）claude / opus / high · [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} [+-][0-9]{4}\$'"
+check "the route line is followed by a blank line" \
+  bash -c "test \"\$(sed -n 2p '$WORK/code-findings.md')\" = ''"
+check "the model output follows the route line" \
+  bash -c "test \"\$(sed -n 3p '$WORK/code-findings.md')\" = 'fake Opus findings'"
+check "the default route reports nothing about official Opus on stderr" \
+  bash -c "! grep -Fq 'official Opus is not called' '$WORK/run.err'"
 
 for variable in ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_MODEL CLAUDE_CODE_SUBAGENT_MODEL CLAUDE_CODE_SUBAGENT_MODEL_FORCE FLASH_ORCHESTRATOR; do
   check "$variable is unset for claude" bash -c "! grep -Eq '^$variable=' '$FAKE_CLAUDE_LOG'"
@@ -239,6 +257,10 @@ check "claude runs headless" awk '
 check "claude model is opus" awk '
   /^ARG\t/ { arg = substr($0, 5); args[++count] = arg }
   END { for (i = 1; i < count; i++) if (args[i] == "--model" && args[i + 1] == "opus") exit 0; exit 1 }
+' "$FAKE_CLAUDE_LOG"
+check "claude effort is the route's high" awk '
+  /^ARG\t/ { arg = substr($0, 5); args[++count] = arg }
+  END { for (i = 1; i < count; i++) if (args[i] == "--effort" && args[i + 1] == "high") exit 0; exit 1 }
 ' "$FAKE_CLAUDE_LOG"
 check "claude cwd is the reviewed repository" test "$(cat "$FAKE_CLAUDE_CWD")" = "$REPO"
 check "headless call omits permission mode" awk '
@@ -259,7 +281,7 @@ else fail "editing and network tools are disallowed"; fi
 
 check "code prompt names the full code-review skill" grep -Fq 'mattpocock-skills:code-review' "$FAKE_CLAUDE_LOG"
 check "code prompt gives the fixed point" grep -Fq 'fixed point: main' "$FAKE_CLAUDE_LOG"
-check "code prompt pins both review axes to opus" bash -c "grep -Fq 'Standards' '$FAKE_CLAUDE_LOG' && grep -Fq 'Spec' '$FAKE_CLAUDE_LOG' && grep -Fq 'opus' '$FAKE_CLAUDE_LOG'"
+check "code prompt pins both review axes to the route's model" bash -c "grep -Fq 'Standards' '$FAKE_CLAUDE_LOG' && grep -Fq 'Spec' '$FAKE_CLAUDE_LOG' && grep -Fq 'subagent model to \`opus\`' '$FAKE_CLAUDE_LOG'"
 check "code prompt requires human-tradeoff findings" grep -Fq '需要人取舍' "$FAKE_CLAUDE_LOG"
 check "code prompt requires a recommendation per tradeoff" grep -Fq '推荐：<option>' "$FAKE_CLAUDE_LOG"
 check "code prompt asks whether the recommendation can be auto-applied" grep -Fq '可自动采纳：否' "$FAKE_CLAUDE_LOG"
@@ -367,7 +389,7 @@ export FAKE_CLAUDE_LOG="$WORK/marks-ok.log" FAKE_CLAUDE_SCENARIO=fullmarks FAKE_
 run_review --kind draft --input "$WORK/draft.md" --out "$WORK/marks-ok.md" --cwd "$REPO" --timeout 5
 expect_rc "complete 需要人取舍 marks succeed" 0 "$RUN_RC"
 check "complete marks need no repair retry" test "$(call_count)" = 1
-check "complete marks are kept verbatim" cmp -s "$WORK/marks-ok.md" "$WORK/expected-fullmarks.md"
+check "complete marks are kept verbatim after the route line" cmp -s <(tail -n +3 "$WORK/marks-ok.md") "$WORK/expected-fullmarks.md"
 
 reset_calls
 export FAKE_CLAUDE_LOG="$WORK/marks-repair.log" FAKE_CLAUDE_SCENARIO=missingmarks FAKE_CLAUDE_SCENARIO_2=fullmarks
@@ -400,7 +422,7 @@ export FAKE_CLAUDE_LOG="$WORK/marks-none.log" FAKE_CLAUDE_SCENARIO=nonemarks FAK
 run_review --kind draft --input "$WORK/draft.md" --out "$WORK/marks-none.md" --cwd "$REPO" --timeout 5
 expect_rc "a 无 section needs no marks" 0 "$RUN_RC"
 check "a 无 section needs no retry" test "$(call_count)" = 1
-check "a 无 section is written verbatim" cmp -s "$WORK/marks-none.md" "$WORK/marks-none-expected.md"
+check "a 无 section is written verbatim after the route line" cmp -s <(tail -n +3 "$WORK/marks-none.md") "$WORK/marks-none-expected.md"
 
 reset_calls
 export FAKE_CLAUDE_LOG="$WORK/marks-preamble.log" FAKE_CLAUDE_SCENARIO=preamblemarks FAKE_CLAUDE_SCENARIO_2=
@@ -415,42 +437,39 @@ expect_rc "a findings file without the section passes" 0 "$RUN_RC"
 check "a missing section needs no retry" test "$(call_count)" = 1
 check "the exit-code table documents code 7" grep -Eq '^# +7 ' "$HERE/opus-review.sh"
 
-# --- judgment model switch --------------------------------------------------
-# Without a setting nothing changes: official claude is called, the GLM
-# launcher never is, and the findings carry no extra line.
-rm -f "$ISS_JUDGMENT_MODEL_FILE"
-export FAKE_GLM_LOG="$WORK/switch-off-glm.log" FAKE_CLAUDE_LOG="$WORK/switch-off-claude.log"
-export FAKE_CLAUDE_SCENARIO=ok
-run_review --kind code --input main --out "$WORK/switch-off-findings.md" --cwd "$REPO" --timeout 5
-expect_rc "without the switch the review still runs on claude" 0 "$RUN_RC"
-check "without the switch the GLM launcher is not called" test ! -e "$FAKE_GLM_LOG"
-check "opus findings carry no provenance line" \
-  bash -c "head -n 1 '$WORK/switch-off-findings.md' | grep -Fqx 'fake Opus findings'"
-check "without the switch nothing is reported about the switch" \
-  bash -c "! grep -Fq 'judgment model switch' '$WORK/run.err'"
-
-"$SWITCH" use glm-5.4 >/dev/null 2>&1
+# --- Stage route ------------------------------------------------------------
+# The table is set through its own command. The review stage switched to
+# claude-glm / glm-5.4 / medium: the review runs through that launcher with the
+# route's model and effort, official Opus is not called, and the findings say
+# so on their first line.
+"$ROUTE" use review=claude-glm/glm-5.4/medium >/dev/null 2>&1
 export FAKE_GLM_LOG="$WORK/switch-on-glm.log" FAKE_CLAUDE_LOG="$WORK/switch-on-claude.log"
 export FAKE_CLAUDE_SCENARIO=ok
 run_review --kind code --input main --out "$WORK/switch-on-findings.md" --cwd "$REPO" --timeout 5
 expect_rc "a switched code review succeeds" 0 "$RUN_RC"
 check "a switched review does not call claude" test ! -e "$FAKE_CLAUDE_LOG"
 check "a switched review calls the GLM launcher" test -e "$FAKE_GLM_LOG"
-check "switched findings start with the provenance line" \
-  bash -c "head -n 1 '$WORK/switch-on-findings.md' | grep -Fq '判断模型：glm-5.4'"
-check "the provenance line is followed by a blank line" \
+check "switched findings start with the route line" \
+  bash -c "head -n 1 '$WORK/switch-on-findings.md' | grep -Eq '^路由：审查（review）claude-glm / glm-5.4 / medium · [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} [+-][0-9]{4}\$'"
+check "the route line is followed by a blank line" \
   bash -c "test \"\$(sed -n 2p '$WORK/switch-on-findings.md')\" = ''"
 check "switched findings keep the model output" grep -Fqx 'fake Opus findings' "$WORK/switch-on-findings.md"
-check "the switch is reported on stderr" grep -Fq 'the judgment model switch for review is glm-5.4' "$WORK/run.err"
+check "the route is reported on stderr" grep -Fq 'the review route is claude-glm / glm-5.4 / medium' "$WORK/run.err"
+check "the report names the command that sets the route" grep -Fq '/grill-router' "$WORK/run.err"
 check "the report says official Opus is not called" grep -Fq 'official Opus is not called' "$WORK/run.err"
 check "GLM launcher runs headless" awk '
   /^ARG\t/ { arg = substr($0, 5); if (arg == "-p" || arg == "--print") found = 1 }
   END { exit !found }
 ' "$FAKE_GLM_LOG"
-check "GLM launcher is asked for opus, which the launcher maps to glm-5.4" awk '
+check "GLM launcher is asked for the route's model in its own form" awk '
   /^ARG\t/ { arg = substr($0, 5); args[++count] = arg }
-  END { for (i = 1; i < count; i++) if (args[i] == "--model" && args[i + 1] == "opus") exit 0; exit 1 }
+  END { for (i = 1; i < count; i++) if (args[i] == "--model" && args[i + 1] == "glm-5.4[1m]") exit 0; exit 1 }
 ' "$FAKE_GLM_LOG"
+check "GLM launcher is asked for the route's effort" awk '
+  /^ARG\t/ { arg = substr($0, 5); args[++count] = arg }
+  END { for (i = 1; i < count; i++) if (args[i] == "--effort" && args[i + 1] == "medium") exit 0; exit 1 }
+' "$FAKE_GLM_LOG"
+check "GLM launcher cwd is the reviewed repository" test "$(cat "$FAKE_GLM_CWD")" = "$REPO"
 check "GLM launcher cwd is the reviewed repository" test "$(cat "$FAKE_GLM_CWD")" = "$REPO"
 for variable in ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_MODEL CLAUDE_CODE_SUBAGENT_MODEL CLAUDE_CODE_SUBAGENT_MODEL_FORCE FLASH_ORCHESTRATOR; do
   check "$variable is unset for the GLM launcher" bash -c "! grep -Eq '^$variable=' '$FAKE_GLM_LOG'"
@@ -468,21 +487,47 @@ check "the switched review still denies unprompted permissions" awk '
   END { for (i = 1; i < count; i++) if (args[i] == "--permission-prompts" && args[i + 1] == "none") exit 0; exit 1 }
 ' "$FAKE_GLM_LOG"
 check "the switched prompt names the executing model" grep -Fq 'executed by glm-5.4' "$FAKE_GLM_LOG"
+check "the switched prompt pins both review axes to the route's model" \
+  grep -Fq 'subagent model to `glm-5.4`' "$FAKE_GLM_LOG"
+check "the switched prompt does not pin the review axes to opus" \
+  bash -c "! grep -Fq 'subagent model to \`opus\`' '$FAKE_GLM_LOG'"
 check "the switched prompt still names the full code-review skill" \
   grep -Fq 'mattpocock-skills:code-review' "$FAKE_GLM_LOG"
 
+# draft reads the review stage too.
 export FAKE_GLM_LOG="$WORK/switch-draft-glm.log" FAKE_CLAUDE_LOG="$WORK/switch-draft-claude.log"
 run_review --kind draft --input "$WORK/draft.md" --out "$WORK/switch-draft-findings.md" --cwd "$REPO" --timeout 5
 expect_rc "a switched draft review succeeds" 0 "$RUN_RC"
 check "a switched draft review does not call claude" test ! -e "$FAKE_CLAUDE_LOG"
-check "switched draft findings carry the provenance line" \
-  bash -c "head -n 1 '$WORK/switch-draft-findings.md' | grep -Fq '判断模型：glm-5.4'"
+check "switched draft findings start with the review route line" \
+  bash -c "head -n 1 '$WORK/switch-draft-findings.md' | grep -Fq '路由：审查（review）claude-glm / glm-5.4 / medium · '"
+
+# diagnose reads the diagnosis stage, which is still on its default.
 export FAKE_GLM_LOG="$WORK/switch-diagnose-glm.log" FAKE_CLAUDE_LOG="$WORK/switch-diagnose-claude.log"
 run_review --kind diagnose --input "$WORK/failure.md" --out "$WORK/switch-diagnose-findings.md" --cwd "$REPO" --timeout 5
+expect_rc "a diagnose under a switched review stage succeeds" 0 "$RUN_RC"
+check "diagnose reads the diagnosis stage, so claude is called" test -e "$FAKE_CLAUDE_LOG"
+check "diagnose does not follow a switched review stage" test ! -e "$FAKE_GLM_LOG"
+check "diagnose findings start with the default diagnosis route line" \
+  bash -c "head -n 1 '$WORK/switch-diagnose-findings.md' | grep -Fq '路由：诊断（diagnosis）claude / opus / high · '"
+check "the default diagnosis route is not reported as a switch" \
+  bash -c "! grep -Fq 'official Opus is not called' '$WORK/run.err'"
+
+"$ROUTE" use diagnosis=claude-glm/glm-5.4/low >/dev/null 2>&1
+export FAKE_GLM_LOG="$WORK/switch-diagnose2-glm.log" FAKE_CLAUDE_LOG="$WORK/switch-diagnose2-claude.log"
+run_review --kind diagnose --input "$WORK/failure.md" --out "$WORK/switch-diagnose2-findings.md" --cwd "$REPO" --timeout 5
 expect_rc "a switched diagnose review succeeds" 0 "$RUN_RC"
 check "a switched diagnose review does not call claude" test ! -e "$FAKE_CLAUDE_LOG"
-check "switched diagnose findings carry the provenance line" \
-  bash -c "head -n 1 '$WORK/switch-diagnose-findings.md' | grep -Fq '判断模型：glm-5.4'"
+check "a switched diagnose review calls the GLM launcher" test -e "$FAKE_GLM_LOG"
+check "switched diagnose findings start with the diagnosis route line" \
+  bash -c "head -n 1 '$WORK/switch-diagnose2-findings.md' | grep -Fq '路由：诊断（diagnosis）claude-glm / glm-5.4 / low · '"
+check "the switched diagnosis route is reported on stderr" \
+  grep -Fq 'the diagnosis route is claude-glm / glm-5.4 / low' "$WORK/run.err"
+check "GLM launcher is asked for the diagnosis route's effort" awk '
+  /^ARG\t/ { arg = substr($0, 5); args[++count] = arg }
+  END { for (i = 1; i < count; i++) if (args[i] == "--effort" && args[i + 1] == "low") exit 0; exit 1 }
+' "$FAKE_GLM_LOG"
+"$ROUTE" use diagnosis=claude/opus/high >/dev/null 2>&1
 
 reset_calls
 export FAKE_GLM_LOG="$WORK/switch-repair-glm.log" FAKE_CLAUDE_LOG="$WORK/switch-repair-claude.log"
@@ -492,8 +537,15 @@ expect_rc "a switched review repairs missing marks" 0 "$RUN_RC"
 REPAIR_CALLS=$(call_count)
 check "both passes of a switched repair go through the GLM launcher" \
   bash -c "test '$REPAIR_CALLS' = 2 && test ! -e '$FAKE_CLAUDE_LOG'"
-check "repaired switched findings keep the provenance line first" \
-  bash -c "head -n 1 '$WORK/switch-repaired.md' | grep -Fq '判断模型：glm-5.4'"
+# The fake overwrites its log on each call, so this is the repair pass alone.
+check "the repair retry asks for the same model and effort" awk '
+  /^ARG\t/ { arg = substr($0, 5); args[++count] = arg }
+  END { for (i = 1; i < count; i++) if (args[i] == "--model" && args[i + 1] == "glm-5.4[1m]") model = 1
+        for (i = 1; i < count; i++) if (args[i] == "--effort" && args[i + 1] == "medium") effort = 1
+        exit !(model && effort) }
+' "$FAKE_GLM_LOG"
+check "repaired switched findings keep the route line first" \
+  bash -c "head -n 1 '$WORK/switch-repaired.md' | grep -Fq '路由：审查（review）claude-glm / glm-5.4 / medium · '"
 check "repaired switched findings have the marks" grep -Fq '可自动采纳：是' "$WORK/switch-repaired.md"
 export FAKE_CLAUDE_SCENARIO=ok FAKE_CLAUDE_SCENARIO_2=
 
@@ -505,32 +557,90 @@ check "a quota failure under the switch does not fall back to claude" test ! -e 
 check "a quota failure under the switch writes no findings" test ! -e "$WORK/switch-quota-findings.md"
 export FAKE_CLAUDE_SCENARIO=ok
 
-printf 'review=glm-5.4\nreview.until=1000000000\n' > "$ISS_JUDGMENT_MODEL_FILE"
+# An expired line is the table's own format (`@<epoch seconds>`): the stage is
+# back on its default, and the findings name the default.
+printf 'review=claude-glm/glm-5.4/medium@1000000000\n' > "$ISS_STAGE_ROUTE_FILE"
 export FAKE_GLM_LOG="$WORK/switch-expired-glm.log" FAKE_CLAUDE_LOG="$WORK/switch-expired-claude.log"
 run_review --kind draft --input "$WORK/draft.md" --out "$WORK/switch-expired-findings.md" --cwd "$REPO" --timeout 5
-expect_rc "an expired switch runs the review on claude" 0 "$RUN_RC"
-check "an expired switch calls claude" test -e "$FAKE_CLAUDE_LOG"
-check "an expired switch does not call the GLM launcher" test ! -e "$FAKE_GLM_LOG"
-check "an expired switch adds no provenance line" \
-  bash -c "head -n 1 '$WORK/switch-expired-findings.md' | grep -Fqx 'fake Opus findings'"
+expect_rc "an expired route runs the review on claude" 0 "$RUN_RC"
+check "an expired route calls claude" test -e "$FAKE_CLAUDE_LOG"
+check "an expired route does not call the GLM launcher" test ! -e "$FAKE_GLM_LOG"
+check "an expired route's findings name the default route" \
+  bash -c "head -n 1 '$WORK/switch-expired-findings.md' | grep -Fq '路由：审查（review）claude / opus / high · '"
 
-# Only the review role is consulted: switching grill alone changes nothing here.
-printf 'grill=glm-5.4\ngrill.until=\n' > "$ISS_JUDGMENT_MODEL_FILE"
-export FAKE_GLM_LOG="$WORK/switch-grill-only-glm.log" FAKE_CLAUDE_LOG="$WORK/switch-grill-only-claude.log"
-run_review --kind draft --input "$WORK/draft.md" --out "$WORK/switch-grill-only-findings.md" --cwd "$REPO" --timeout 5
-expect_rc "a switched grill role alone keeps the review on claude" 0 "$RUN_RC"
-check "a switched grill role alone calls claude" test -e "$FAKE_CLAUDE_LOG"
-check "a switched grill role alone does not call the GLM launcher" test ! -e "$FAKE_GLM_LOG"
+# Only its own stage is consulted: switching another stage alone changes nothing.
+printf 'design=claude-glm/glm-5.4/high\n' > "$ISS_STAGE_ROUTE_FILE"
+export FAKE_GLM_LOG="$WORK/switch-design-only-glm.log" FAKE_CLAUDE_LOG="$WORK/switch-design-only-claude.log"
+run_review --kind code --input main --out "$WORK/switch-design-only-findings.md" --cwd "$REPO" --timeout 5
+expect_rc "a switched design stage alone keeps the review on claude" 0 "$RUN_RC"
+check "a switched design stage alone calls claude" test -e "$FAKE_CLAUDE_LOG"
+check "a switched design stage alone does not call the GLM launcher" test ! -e "$FAKE_GLM_LOG"
 
-"$SWITCH" use glm-5.4 >/dev/null 2>&1
-export ISS_GLM_LAUNCHER=iss-missing-glm-launcher
+# A route whose launcher is not installed never reaches a model. The PATH of
+# these two calls is closed: it holds the fake claude alone, so neither the
+# fake nor the real claude-glm can be found.
+"$ROUTE" use review=claude-glm/glm-5.4/medium >/dev/null 2>&1
+mkdir -p "$BIN/only-claude"
+ln -sf "$BIN/claude" "$BIN/only-claude/claude"
+ln -sf "$BIN/date" "$BIN/only-claude/date"
 export FAKE_GLM_LOG="$WORK/switch-no-launcher-glm.log" FAKE_CLAUDE_LOG="$WORK/switch-no-launcher-claude.log"
-run_review --kind draft --input "$WORK/draft.md" --out "$WORK/switch-no-launcher.md" --cwd "$REPO" --timeout 5
-expect_rc "a switched review without its launcher exits 6" 6 "$RUN_RC"
-check "the missing launcher is named" grep -Fq 'iss-missing-glm-launcher' "$WORK/run.err"
+(
+  export PATH="$BIN/only-claude:/usr/bin:/bin"
+  "$REVIEW" --kind draft --input "$WORK/draft.md" --out "$WORK/switch-no-launcher.md" --cwd "$REPO" --timeout 5 \
+    >"$WORK/run.out" 2>"$WORK/run.err"
+)
+RUN_RC=$?
+expect_rc "a route without its launcher exits 6" 6 "$RUN_RC"
+check "the missing launcher is named" grep -Fq "'claude-glm'" "$WORK/run.err"
+check "the missing launcher's route is named" grep -Fq 'claude-glm / glm-5.4 / medium' "$WORK/run.err"
 check "a missing launcher calls neither model" bash -c "test ! -e '$FAKE_CLAUDE_LOG' && test ! -e '$FAKE_GLM_LOG'"
-unset ISS_GLM_LAUNCHER
-"$SWITCH" use opus >/dev/null 2>&1
+check "a missing launcher writes no findings" test ! -e "$WORK/switch-no-launcher.md"
+
+"$ROUTE" use review=claude/opus/high >/dev/null 2>&1
+export FAKE_GLM_LOG="$WORK/no-claude-glm.log" FAKE_CLAUDE_LOG="$WORK/no-claude-claude.log"
+(
+  export PATH="/usr/bin:/bin"
+  "$REVIEW" --kind draft --input "$WORK/draft.md" --out "$WORK/no-claude.md" --cwd "$REPO" --timeout 5 \
+    >"$WORK/run.out" 2>"$WORK/run.err"
+)
+RUN_RC=$?
+expect_rc "the default route without claude exits 6" 6 "$RUN_RC"
+check "the missing claude is named" grep -Fq "'claude' was not found in PATH" "$WORK/run.err"
+check "the missing claude's route is named" grep -Fq 'claude / opus / high' "$WORK/run.err"
+check "a missing claude calls neither model" bash -c "test ! -e '$FAKE_CLAUDE_LOG' && test ! -e '$FAKE_GLM_LOG'"
+
+# A route that cannot be read is a usage error: nothing starts with an empty
+# model. opus-review.sh finds stage-route.sh next to itself, so a copy of it
+# is run next to a fake one.
+NO_ROUTE="$WORK/no-route"
+mkdir -p "$NO_ROUTE"
+cp "$REVIEW" "$NO_ROUTE/opus-review.sh"
+export FAKE_GLM_LOG="$WORK/no-route-glm.log" FAKE_CLAUDE_LOG="$WORK/no-route-claude.log"
+cat > "$NO_ROUTE/stage-route.sh" <<'FAKE'
+#!/usr/bin/env bash
+echo "stage-route: broken for the test" >&2
+exit 64
+FAKE
+chmod +x "$NO_ROUTE/stage-route.sh"
+run_review_copy() {
+  "$NO_ROUTE/opus-review.sh" "$@" >"$WORK/run.out" 2>"$WORK/run.err"
+  RUN_RC=$?
+}
+run_review_copy --kind draft --input "$WORK/draft.md" --out "$WORK/no-route.md" --cwd "$REPO" --timeout 5
+expect_rc "a route table that cannot be read is a usage error" 64 "$RUN_RC"
+check "the failed route read is reported" grep -Fq 'Stage route table' "$WORK/run.err"
+check "the failed route read names the stage" grep -Fq 'review route' "$WORK/run.err"
+check "an unreadable route calls neither model" bash -c "test ! -e '$FAKE_CLAUDE_LOG' && test ! -e '$FAKE_GLM_LOG'"
+check "an unreadable route writes no findings" test ! -e "$WORK/no-route.md"
+
+cat > "$NO_ROUTE/stage-route.sh" <<'FAKE'
+#!/usr/bin/env bash
+exit 0
+FAKE
+run_review_copy --kind code --input main --out "$WORK/no-route.md" --cwd "$REPO" --timeout 5
+expect_rc "a route that prints nothing is a usage error" 64 "$RUN_RC"
+check "the empty route read is reported" grep -Fq 'printed nothing' "$WORK/run.err"
+check "an empty route calls neither model" bash -c "test ! -e '$FAKE_CLAUDE_LOG' && test ! -e '$FAKE_GLM_LOG'"
 
 EXIT_CODE_SENTENCE='退出码为 3（额度或 429）时按 quota 停车，其余非 0 退出码仍按原规则停车并说明（退出码含义见 scripts/opus-review.sh 头注释）'
 check "SKILL delegates exit codes to the wrapper header" \
@@ -541,12 +651,24 @@ check "SKILL does not duplicate the exit-code table" \
   bash -c "! grep -Fq 'authentication failed' '$HERE/../SKILL.md'"
 check "find-next does not duplicate the exit-code table" \
   bash -c "! grep -Fq '认证失败（2）' '$HERE/../find-next/SKILL.md'"
-check "the wrapper header documents the judgment model switch" \
-  grep -Fq 'judgment-model.sh' "$HERE/opus-review.sh"
-check "SKILL documents the judgment model switch" \
-  grep -Fq 'judgment-model.sh' "$HERE/../SKILL.md"
-check "find-next documents the judgment model switch" \
-  grep -Fq 'judgment-model.sh' "$HERE/../find-next/SKILL.md"
+check "the wrapper header documents the Stage route" \
+  grep -Fq 'stage-route.sh' "$HERE/opus-review.sh"
+check "the wrapper header no longer reads the old switch" \
+  bash -c "! grep -Fq 'judgment-model' '$HERE/opus-review.sh'"
+check "SKILL documents the Stage route" \
+  bash -c "grep -Fq '/grill-router' '$HERE/../SKILL.md' && grep -Fq 'stage-route.sh' '$HERE/../SKILL.md'"
+check "find-next documents the Stage route" \
+  bash -c "grep -Fq '/grill-router' '$HERE/../find-next/SKILL.md' && grep -Fq 'stage-route.sh' '$HERE/../find-next/SKILL.md'"
+check "SKILL tells the route lines of the reports" \
+  bash -c "grep -Fq 'two route lines' '$HERE/../SKILL.md' && grep -Fq '不适用' '$HERE/../SKILL.md'"
+for doc in SKILL.md find-next/SKILL.md; do
+  check "$doc no longer names the /judgment-model command" \
+    bash -c "! grep -Fq '/judgment-model' '$HERE/../$doc'"
+  check "$doc no longer names judgment-model.sh" \
+    bash -c "! grep -Fq 'judgment-model.sh' '$HERE/../$doc'"
+  check "$doc no longer names the 判断模型： first line" \
+    bash -c "! grep -Fq '判断模型：' '$HERE/../$doc'"
+done
 
 if [ "$FAIL" -gt 0 ]; then
   echo "Artifacts: $WORK"
