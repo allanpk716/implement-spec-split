@@ -259,10 +259,10 @@ launchd runs `scripts/keeper.sh` every 10 minutes (service in `~/ops/services/sp
 
 - a parking report with `停车类别：quota|transient` whose `可恢复时间` has passed → `launch-wave --only <n> --apply`;
 - a claim that turned `interrupted` with no newer report → resumed the same way;
-- a claim still `active` with no write to the session transcript (subagents included), the Run directory or the worker run directories for 45 minutes → it types one line into the session terminal: 「继续。你是无人值守 Run：检查后台任务和 worker 状态，按 SKILL.md 推进；不要等人。」; after another 45 minutes with no write it closes the terminal, force-releases the claim and resumes;
+- a claim still `active` with no write to the session transcript (subagents included), the Run directory or the worker run directories for 45 minutes → it asks Orca for the worker in the Spec worktree (`worker-list`, then `worker-show`): `live` → left alone, however old the files are (no 「继续」, nothing closed, nothing relaunched); `exited` → a confirmed failure, it closes the terminal Orca has not released, force-releases the claim and resumes; `unverifiable`, or no worker listed for the worktree, or an Orca that cannot answer → notified once per Spec and evidence, never resumed on a guess (Orca forbids a stop, a retry or a release on anything but an exited worker);
 - `decision` / `error` / `other` parks are only notified, once per report.
 
-At most 3 automatic resumes per Spec per 24 hours, then it only notifies. **When that 「继续」 line arrives, treat it as a wake-up, not as a user decision**: check background tasks and workers as in Recovery and carry on. So write the two machine-readable lines of every Parking report correctly: they decide whether the Run comes back by itself.
+At most 3 automatic resumes per Spec per 24 hours, then it only notifies. Write the two machine-readable lines of every Parking report correctly: they decide whether the Run comes back by itself.
 
 ## Flash mode (`FLASH_ORCHESTRATOR=1`)
 

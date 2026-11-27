@@ -17,7 +17,8 @@
 #                  orca_terminal_close, orca_terminal_send
 #   orchestration  orca_orchestration_run_create, orca_orchestration_send,
 #                  orca_orchestration_check, orca_orchestration_worker_start,
-#                  orca_orchestration_worker_show, orca_orchestration_worker_release
+#                  orca_orchestration_worker_show, orca_orchestration_worker_release,
+#                  orca_orchestration_worker_list
 # plus the two top-level Orca commands that belong to no group, orca_status and
 # orca_agent_launch.
 #
@@ -366,4 +367,33 @@ orca_orchestration_worker_show() { # dispatch_id: prints `worker-show --json` (s
 orca_orchestration_worker_release() { # dispatch_id: prints the JSON receipt
   orca_require_value "${1:-}" 'a dispatch id' worker_release
   orca_run orchestration worker-release --dispatch "$1" --json
+}
+
+# The list keeper.sh searches for the worker of a Spec worktree. No Run is
+# named: the keeper has no Run of its own and must see every worker, so --run
+# is not offered (without it Orca lists all workers, or those of the Run the
+# calling terminal is bound to). One page per call: --cursor asks for the page
+# after the one whose nextCursor it carries. The caller walks the pages; the
+# library does not loop.
+orca_orchestration_worker_list() { # [--cursor <cursor>]: prints one page of `worker-list --json`
+  local cursor=
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --cursor)
+        if [ $# -lt 2 ] || [ -z "$2" ] || [[ "$2" == -* ]]; then
+          printf 'lib-orca: worker_list: --cursor needs a cursor, got [%s]\n' "${2:-}" >&2
+          exit 64
+        fi
+        cursor=$2
+        shift 2
+        ;;
+      *)
+        printf 'lib-orca: worker_list: unknown argument [%s] (the one option is --cursor)\n' "$1" >&2
+        exit 64
+        ;;
+    esac
+  done
+  local args=(orchestration worker-list --json)
+  [ -z "$cursor" ] || args+=(--cursor "$cursor")
+  orca_run "${args[@]}"
 }
