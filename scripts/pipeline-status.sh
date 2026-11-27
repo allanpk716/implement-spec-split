@@ -1550,10 +1550,11 @@ if (mode === 'order') {
     if (wave.length >= capacity) break;
     const record = records.get(number);
     if (record.complete) continue;
-    const conflicts = inFlightApartFrom(number).length > 0 || apartPairs.some(([left, right]) => (
-      (left === number && waveSet.has(right)) ||
-      (right === number && waveSet.has(left))
-    ));
+    const conflicts = inFlightApartFrom(number).length > 0 ||
+      apartPairs.some(([left, right]) => (
+        (left === number && waveSet.has(right)) ||
+        (right === number && waveSet.has(left))
+      ));
     if (conflicts) continue;
     wave.push(number);
     waveSet.add(number);
