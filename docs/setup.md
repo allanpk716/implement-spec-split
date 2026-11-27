@@ -440,7 +440,7 @@ $S opus                                             # 两个都切回
 ```
 
 - 开关是 `~/.claude/state/judgment-model`，对本机所有仓库、所有会话生效；两个角色各记各的模型和到期时间（[ADR 0002](adr/0002-judgment-model-hot-switch.md)）。
-- `opus-review.sh` 读 `review`，`design-session.sh` 读 `grill`，都是每次被调用时读，所以**已经在跑的 flash 规格会话和 find-next 会话不用重开**：`review` 切过去后，正在进行的这一次审查还是 Opus，下一次就是 glm-5.4。
+- `opus-review.sh` 读 `review`，`design-session.sh` 读 `grill`，都是每次被调用时读，所以**已经在跑的 flash 规格会话和 find-next 会话不用重开**：`review` 切过去后，正在进行的这一次审查还是 Opus，下一次就是 glm-5.4。审查仍出会话走 `opus-review.sh`，只是该脚本改经 `claude-glm` 执行；不会变成会话内子代理。
 - 切换后审查经 `claude-glm` 执行（`--model opus` 在 claude-glm 里映射到 glm-5.4），stderr 会说明，findings 文件首行是 `判断模型：glm-5.4…`。glm-5.4 审 glm-5.4 写的代码不如 Opus，看落地报告时留意这一行。
 - Design session 只在**新开**时读开关（看的是 `grill`）：切过去后 `/grill-feature`、`/grill-map` 开出的是 glm-5.4 会话（Orca 终端里跑 `claude-glm`，界面 mock 由它自己做，不派 worker），交接和等待流程不变。
 - 已经开着的 Opus Design session 换不了模型。要在原对话上接着谈：在那个仓库的终端里运行 `claude-glm --resume`，从列表里选它；交接约定还在原对话里，运行目录和等待也不变。等待超时了，用 stderr 里打印的 `design-session.sh --attach <运行目录>` 续等。

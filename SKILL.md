@@ -32,7 +32,7 @@ Terms (Orchestrator, In-session subagent, External worker, Implement backend, Br
 - `GLM_TIME_LIMIT_IMPL` = `3600` — Time limit (seconds, GLOSSARY.md) for implementer and fix External workers.
 - `GLM_TIME_LIMIT_SHORT` = `1200` — Time limit (seconds) for merger and exploration External workers.
 - `GLM_IDLE_TIMEOUT` = `600` — Idle timeout (seconds, GLOSSARY.md) for every External worker: no progress events from the worker for this long means it is stuck and is killed as `stalled`.
-- `REVIEW_MODEL` = `opus` — every code-review subagent (use `fable` for the strongest option). Review always runs In-session, whatever the backend.
+- `REVIEW_MODEL` = `opus` — every code-review subagent (use `fable` for the strongest option). Review always runs In-session, whatever the backend (non-flash sessions only; in Flash mode every review runs out-of-session via `opus-review.sh`).
 
 With the `agent` backend (including the `sonnet` alias), pass the `model` parameter explicitly on every Agent call, using the agent model (`--agent-model`, default `IMPLEMENT_MODEL`). Never rely on inheritance: the session itself may be on any model.
 

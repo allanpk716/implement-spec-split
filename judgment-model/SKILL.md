@@ -29,6 +29,6 @@ disable-model-invocation: true
    一次设两样就是 `use grill=opus review=glm-5.4`。只查看时运行同一条命令但不带 `use …`。退出码 64 是写法不对，把 stderr 原样告诉用户。其他非 0 退出码同样原样转述；不要因此自己去改开关文件。
 3. 回复直接以脚本打印的两行状态开头，原样照抄：前面不加标题或说明，外面不加代码围栏。空一行，再用一两句说明这次改动意味着什么：
    - `grill` 是 `glm-5.4`：之后新开的 Design session 由 glm-5.4 执行；已经开着的要重开，或者在那个仓库的终端里用 `claude-glm --resume` 续接原对话。
-   - `review` 是 `glm-5.4`：正在跑的会话从下一次 Opus review 起由 glm-5.4 审查，正在进行的那一次不变。
+   - `review` 是 `glm-5.4`：正在跑的会话从下一次 Opus review 起由 glm-5.4 审查，正在进行的那一次不变。审查仍出会话走 `opus-review.sh`，只是该脚本改经 `claude-glm` 执行；不会变成会话内子代理。
    - 某一行写着「不会自动切回」：提醒一句，切回用 `/judgment-model <角色>=opus`。
    - 角色回到 `opus`：从下一次审查、或下一次新开的 Design session 起恢复 Opus。

@@ -36,7 +36,7 @@ _Avoid_: implement model (ambiguous with CODEX_MODEL/GLM_MODEL)
 The exploration, implementer, merger and fix roles; everything except review.
 
 **Review roles**:
-The Standards and Spec reviewers of `mattpocock-skills:code-review`; always In-session subagents on a strong model.
+The Standards and Spec reviewers of `mattpocock-skills:code-review`; always In-session subagents on a strong model (non-flash sessions only; in Flash mode every review runs out-of-session via `opus-review.sh`).
 
 **Design session**:
 A separate Claude Code session on the official subscription (Opus) that the Orchestrator opens through Orca for a design discussion (grill-with-docs, a wayfinder grilling ticket); the user talks to it directly, and it carries the discussion through to-spec before handing control back. When the Judgment model is switched to a substitute, it is an Orca terminal running that model's launcher instead, with the same handoff.
