@@ -137,6 +137,8 @@ flash 模式下，本节所有原本由主会话审读或复核的结论都按�
 
 `--worker agent` 时的同构做法（适用于本节所有原本派 codex-worker.sh 的步骤）：照旧建运行目录和子目录、照旧写 `brief.md`，然后开一个 Agent 子代理，`model` 显式传 `--agent-model` 的值，prompt 固定为：「读 <该子目录>/brief.md 并照做，把最终报告写到 <该子目录>/result.md，同时作为你的最终回复」。Brief 里「wrapper 会把最终回复存成 result.md，不要自己写」这类话是对 codex worker 说的，agent 模式下以 prompt 为准：子代理自己写 `result.md`。没有 `status.json`，主会话以子代理的返回和 `result.md` 为准；失败时把原因补进 Brief、换新运行目录重派一次，再失败就停下报告，不自动改用 codex 或 self。
 
+**Brief 卫生**：往 Brief 里引用仓库外的文件（调研文档、别处的笔记、`~/ops` 下的脚本这类）前，先用系统索引（macOS 的 `mdfind`）或 `ls` 定位到确切路径并确认存在再写；定位不到就在 Brief 里明写「未定位到，不作为依据」，不给模糊路径让 worker 自行全盘搜索。各 Brief 模板的「环境约束（找文件与子进程）」一节是 worker 侧的对应约束。
+
 推进模式只支持 GitHub 跟踪器。先读 `docs/agents/issue-tracker.md`；发现本地 markdown 跟踪器时，说明推进模式不支持，改按 `--suggest` 或 `--list` 执行。**同一仓库同一时间只在一个会话里运行推进模式**，由第 1 步的 `find-next-advance` 锁保证。
 
 下文 `run-state.sh` 指 `<本技能目录>/scripts/run-state.sh`。进入第 2、3、4、5、6、9、10 步时各运行一次 `run-state.sh step <运行目录> <步骤号>`，会话被意外关闭后下次能看出停在哪一步。

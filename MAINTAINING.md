@@ -257,6 +257,10 @@
     - 没有「实现票：」行时再解析正文的「地图：#N」/「来源地图：#N」行（正则与 `pipeline-status.sh` 的 `bodyMapReferences` 一致），解析到就把那张地图当本组的地图（取标题、走既有地图校验，Brief 保留 `地图 #N「标题」` 和 `gh issue view N` 指引）；两行都没有才是手写规格：不取地图，并在 stderr 提示一行，不硬停（第 29 条：停车只留给真要人决定的事）。子票数不为 0 的仍拒绝。
     - Brief 里随规格形态变化的三句（身份句、实现票行、地图行）由脚本整句注入（`@@SPEC_ORIGIN@@`、`@@TICKETS_LINE@@`、`@@MAP_LINE@@`），不让模板用空变量拼句：第一版让模板同时兼顾两种形态，手写规格渲染出「它覆盖的地图实现票 已在…列出」这种假句，审查打回。
 21. **2026-11-27：起草模板里的「本票由 Opus 执行」只留给真的不能交给实现者的票。** 起因：flash 轮次审查发现三张真机票靠审查 M1 才在发布前拦下——模板只说「用到 ssh-manager 的写『本票由 Opus 执行』」，没说标签，发布后就是 `ready-for-agent` 的人工票（#27 评论 B-1）。第一版修法让这类票标 `ready-for-human`，但触发条件仍是「用到 ssh-manager MCP、真机或远程服务器」，与第 36 条运维票规则相反（那类票本该派给实现者）。决定：三份批量模板的触发条件收窄为「真的不能交给实现者的（需要用户本人的身份、凭据或物理动作）」才写「本票由 Opus 执行」，并在 manifest 该票写 `"labels": ["ready-for-human"]`；能由实现者经 ssh-manager 做的写成运维票（正文写明经 ssh-manager 执行 + `## 护栏`，模板给了最小护栏样例），保持 `ready-for-agent`。
+22. **2026-11-27：Brief 卫生与环境约束。** 起因：#53——推进器 Brief 里写了「`research_things/` 下文件名含 `20261127_1354` 的调研文档」这个模糊路径，子代理找不到就对 `$HOME` 全盘 `find`，走进 SynologyDrive 挂载卡死 2h42m（命令里的 `-not -path` 只过滤输出、不剪枝），worker 交完结果后进程残留为孤儿。决定：
+    - 主会话写 Brief 前先用系统索引（macOS 的 `mdfind`）或 `ls` 把仓库外文件核实到确切路径再写；定位不到就明写「未定位到，不作为依据」，不给模糊路径让 worker 全盘找（find-next/SKILL.md 推进模式导言）。
+    - 10 份 Brief 模板各带同一节「环境约束（找文件与子进程）」：仓库外文件都是确切路径、不对 `$HOME` 或仓库之外做无边界 `find`（要搜用系统索引；非用 `find` 不可时对挂载点本身 `-prune`，`-not -path` 不剪枝）、结束前收割自己起的仍在跑的长子进程。文案不含作者机器的事实（`mdfind` 标了平台、云盘路径只是举例），`test-make-batch-briefs.sh` 断言 10 份逐字相同，防改一处漏九处。
+    - 进程收尾只能落到模板层：`codex-worker.sh` 没有进程组管理，`kill_tree` 按 ppid 走树且只在 watchdog 路径调用，codex 正常退出不收割；agent 后端不经过它。根治要在 harness 层，不在本仓库。
 
 ## 评估过、没有采纳的方案
 
@@ -290,7 +294,7 @@
 ## 自测
 
 - **批量发布**：`bash find-next/scripts/test-publish-batch.sh`。用假 `gh` 测校验、试运行、发布顺序、占位符回填、未决、交接留言、只拆票的已有规格组、发布后调用开发顺序脚本、发布后核对、`--only` 与中途失败后重跑，不访问网络。
-- **批量 Brief 生成**：`bash find-next/scripts/test-make-batch-briefs.sh`。用假 `gh` 测变量替换、上游技能版本选择与参数校验，只拆票的已有规格三种形态（有「实现票：」行、只有「地图：」行、两行都没有的手写规格，含 stderr 提示与子票不为 0 仍拒绝）。
+- **批量 Brief 生成**：`bash find-next/scripts/test-make-batch-briefs.sh`。用假 `gh` 测变量替换、上游技能版本选择与参数校验，只拆票的已有规格三种形态（有「实现票：」行、只有「地图：」行、两行都没有的手写规格，含 stderr 提示与子票不为 0 仍拒绝），以及 10 份 Brief 模板「环境约束」节逐字相同。
 - **流水线状态**：`bash scripts/test-pipeline-status.sh`。它用假 `gh` 和临时 git 仓库测独立规格、单票规格、原版父规格、旧父 issue 形状、缺规格分组、探索中的地图、分支接手、已合入的遗留分支、外部阻塞、`--order` 开发顺序（状态、排序、波次、`--apart`、循环依赖）、`ready-for-human` 执行票（`(人工)` 后缀、只剩人工票的规格不进「可以实现」/`--order`/波次、`--all` 提示「人工票待做」、`--graph` 的 `human`/`human_only`/`status: human`）和 gh 失败，不访问网络。
 - **前沿计算**：`bash scripts/test-frontier.sh`。用假 `gh` 和临时夹具跑真实 `pipeline-status.sh --graph`，测未阻塞票、只有已关闭阻塞的票、被挡票及其阻塞票、`ready-for-human` 票、搁置票的分节输出，前沿行在前且升序，未知规格、pipeline-status 失败、`blocked_by` 查询失败都 fail closed（stdout 为空），以及参数错误，不访问网络。
 - **unattended-stop-guard**：`node hooks/test-unattended-stop-guard.js`。临时 transcript + 临时 `ISS_STATE_DIR`/`TMPDIR`：非无人值守放行、done/waiting/parked 未自关 block、已自关放行、问句 block、非问句放行、找不到 `run.json` 只跑规则 B、`stop_hook_active` 循环上限、逃生口、坏 transcript fail open、6MB transcript 2 秒内判定，不访问网络。

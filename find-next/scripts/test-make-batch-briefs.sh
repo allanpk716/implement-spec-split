@@ -403,6 +403,30 @@ else
 fi
 expect_no_directory "$EXISTING/S2" 'existing-brief failure writes no later group'
 
+# The environment-constraints section is pasted verbatim into every Brief template;
+# fail as soon as one copy drifts or goes missing.
+env_first=
+env_identical=1
+for template in "$ROOT"/find-next/templates/*.md; do
+  section_file=$WORK/env-section-$(basename "$template")
+  awk '/^## 环境约束（找文件与子进程）$/ { section = 1; next }
+       section && /^## / { section = 0 }
+       section' "$template" > "$section_file"
+  [ -s "$section_file" ] || env_identical=0
+  if [ -z "$env_first" ]; then
+    env_first=$section_file
+  elif ! cmp -s "$env_first" "$section_file"; then
+    env_identical=0
+  fi
+done
+[ -n "$env_first" ] || env_identical=0
+if [ "$env_identical" -eq 1 ]; then
+  record PASS 'environment-constraints section is identical in every Brief template'
+else
+  record FAIL 'environment-constraints section is identical in every Brief template' \
+    'a template lacks the section or differs from the others'
+fi
+
 printf '\n%d passed, %d failed\n' "$PASSED" "$FAILED"
 if [ "$FAILED" -ne 0 ]; then
   exit 1
