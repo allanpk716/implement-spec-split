@@ -756,7 +756,8 @@ EOF
   node -e 'const p=process.argv[1],f=require("fs");const s=JSON.parse(f.readFileSync(p+"/resume.json"));delete s.profile;s.thinking="";f.writeFileSync(p+"/resume.json",JSON.stringify(s,null,2))' "$ROUTE_DIR/default"
   env ISS_STAGE_ROUTE_FILE="$ROUTE_FILE" FAKE_CODEX_SCENARIO=ok "$WORKER" --resume --run-dir "$ROUTE_DIR/default" --retries 0 --time-limit 30 --idle-timeout 20 >/dev/null 2>"$ROUTE_DIR/legacy-resume.err"
   LR=$?
-  check "legacy resume state without a profile resumes without reading the table (got $LR)" bash -c "test $LR -eq 0 && test \"\$(json '$ROUTE_DIR/default/status.json' profile)\" = \"\" && test \"\$(json '$ROUTE_DIR/default/status.json' model)\" = glm-5.4 && test \"\$(json '$ROUTE_DIR/default/status.json' thinking)\" = \"\" && test \"\$(grep -c 'codex-worker: 阶段路由' '$ROUTE_DIR/legacy-resume.err')\" -eq 0"
+  LR_LINES=$(grep -c 'codex-worker: 阶段路由' "$ROUTE_DIR/legacy-resume.err")
+  check "legacy resume state without a profile resumes without reading the table (got $LR)" test "$LR" -eq 0 -a "$(json "$ROUTE_DIR/default/status.json" profile)" = "" -a "$(json "$ROUTE_DIR/default/status.json" model)" = glm-5.4 -a "$(json "$ROUTE_DIR/default/status.json" thinking)" = "" -a "$LR_LINES" -eq 0
 
   # Rule 3: every other V1 case ran codex on $MODEL, whatever the machine's table says.
   check "every existing V1 case ran codex on \$MODEL ($MODEL)" node -e '
