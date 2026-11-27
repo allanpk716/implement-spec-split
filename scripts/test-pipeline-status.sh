@@ -1016,6 +1016,10 @@ run_status "$REPO" "$WORK/help.out" --help
 expect_has '--graph' 'help documents --graph' "$WORK/help.out"
 expect_has 'PIPELINE_STATUS_ORCA_TERMINALS_JSON' 'help documents the terminal-list fixture file' "$WORK/help.out"
 expect_without 'PIPELINE_STATUS_ORCA may' 'help no longer documents a per-script Orca executable' "$WORK/help.out"
+expect_has 'keep the idle' 'help documents that --apart keeps two Specs out of one wave' \
+  "$WORK/help.out"
+expect_has 'side out of the new wave while the other is in flight' \
+  'help documents that --apart also avoids Specs in flight' "$WORK/help.out"
 run_status "$REPO" "$WORK/graph-order.out" --order --parallel 20 --cmd-suffix ''
 expect_exit 0 "order text output still works with graph fixtures"
 
@@ -1158,6 +1162,22 @@ EOF
 run_order "$WORK/order-apart-inflight-5.out" --parallel 5 --apart 370:390 --cmd-suffix ''
 expect_equal "$WORK/order-apart-inflight-5.out" "$WORK/order-apart-inflight-5.expected" \
   'apart pair with a running spec changes only the held spec note'
+
+run_order "$WORK/order-apart-inflight.json" --parallel 8 --apart 370:390 --json
+expect_exit 0 "order JSON with an in-flight apart pair succeeds"
+node - "$WORK/order-apart-inflight.json" > "$WORK/order-apart-inflight-check.txt" 2>&1 <<'NODE'
+const fs = require('fs');
+const assert = require('assert');
+const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+assert.deepStrictEqual(plan.wave1.map((item) => item.spec), [300, 420, 330]);
+const held = plan.later.find((item) => item.spec === 390);
+assert.ok(held, 'spec held by a running apart side is in later');
+assert.strictEqual(held.note, '避开 #370');
+assert.deepStrictEqual(plan.active.map((item) => item.spec), [370]);
+assert.deepStrictEqual(plan.resume.map((item) => item.spec), [380]);
+NODE
+RUN_EXIT=$?
+expect_exit 0 "order JSON puts a spec held by a running apart side in later with its note"
 
 run_workers_order "$WORK/order-workers-4.out" --parallel 2 --workers 4
 expect_exit 0 "worker-aware order succeeds"

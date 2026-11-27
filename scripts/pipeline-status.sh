@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 # List unfinished work in the wayfinder -> to-spec -> to-tickets -> implement pipeline.
+#
+# --order plans the next wave. --apart A:B keeps two Specs out of the same wave,
+# and keeps the idle side out of the new wave while the other is in flight
+# (running, or interrupted and resumed first): a Spec resumed first runs beside
+# the new wave, so "not in the same wave" alone would not keep the pair apart.
+# --next-wave reuses the pairs recorded in the launch state through this order.
 
 set -u
 
@@ -22,7 +28,9 @@ tracker documentation instead.
   --order                Print a deterministic development order for implementable Specs.
   --parallel K           With --order, plan for K concurrent Specs (default: 2).
   --workers N            With --order, split N total workers across K concurrent Specs.
-  --apart A:B            With --order, keep A and B out of the same wave. Repeatable.
+  --apart A:B            With --order, keep A and B out of the same wave, and keep the idle
+                         side out of the new wave while the other is in flight (running, or
+                         interrupted and resumed first). Repeatable.
   --cmd-suffix STR       With --order, append STR to each command (default: --impl codex).
   --json                 With --order, print the same plan as JSON instead of a text table.
   --graph                Print the full relation graph as JSON for the Progress board (closed
