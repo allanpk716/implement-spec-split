@@ -396,8 +396,8 @@ Everyday scheduling spends no subscription quota: the main session (Orchestrator
 
 **The two design entry points (Design session)**
 
-- `/grill-feature <idea>`: small features. The flash main session calls `scripts/design-session.sh` to open an official-Opus Design session, then blocks and burns no tokens; Orca switches to that session automatically and you discuss with Opus directly. When the discussion ends it does to-spec, to-tickets, commit and push on the spot, writes a handoff summary and notifies flash to continue, switching back to the main session automatically; flash reads only the summary.
-- `/grill-map <map or idea>`: large modules (wayfinder maps). Same flow; saying "先到这" ends it early and research tickets go back to flash for subagents to investigate.
+- `/grill-feature <idea>`: small features. The flash main session calls `scripts/design-session.sh` to open an official-Opus Design session, then blocks and burns no tokens; Orca switches to that session automatically and you discuss with Opus directly. When the discussion ends it does to-spec, to-tickets, commit and push on the spot, writes a handoff summary and notifies flash to continue, switching back to the main session automatically; flash reads the summary and goes on to run `/find-next` 推进模式 in the main session (drafting, publishing, the first wave and 总控 all happen there).
+- `/grill-map <map or idea>`: large modules (wayfinder maps). Same flow; once connected, find-next stops at its synthesized question round for you. Saying "先到这" ends it early: find-next is not connected then, and flash only relays the map state and next step from the handoff summary.
 - A Design session's run directory is `~/.cache/implement-spec-split/design/<repo>-<time>-<kind>/`; the handoff summary is its `handoff.md`.
 
 **Spec sessions and Opus review**
