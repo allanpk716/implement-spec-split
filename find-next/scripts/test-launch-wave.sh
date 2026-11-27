@@ -6,6 +6,12 @@
 
 set -u
 
+# A flash orchestrator session exports FLASH_ORCHESTRATOR=1, which switches
+# launch-wave.sh into flash mode (agent backend by default, OpenClaude
+# sessions). Only the flash block below sets the variable; every other case
+# runs as an ordinary session, whatever session started this test.
+unset FLASH_ORCHESTRATOR
+
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 SCRIPT=$ROOT/find-next/scripts/launch-wave.sh
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/launch-wave-test.XXXXXX")

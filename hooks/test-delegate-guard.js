@@ -1,5 +1,11 @@
 'use strict';
 
+// A flash orchestrator session exports FLASH_ORCHESTRATOR=1, which switches
+// delegate-guard.js into flash mode. Only the flash mode cases below set the
+// variable; every other case runs as an ordinary session, whatever session
+// started this test.
+delete process.env.FLASH_ORCHESTRATOR;
+
 const assert = require('assert');
 const childProcess = require('child_process');
 const fs = require('fs');
