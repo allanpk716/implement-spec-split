@@ -235,6 +235,7 @@ GROUP_ISSUES=()
 GROUP_MAPS=()
 GROUP_MAP_JSON=()
 GROUP_SPEC_JSON=()
+GROUP_NUMBERS=()
 MAP_CACHE_KEYS=()
 MAP_CACHE_JSON=()
 
@@ -287,6 +288,25 @@ existing_spec_implementation_numbers() {
   '
 }
 
+existing_spec_map_numbers() {
+  printf '%s' "$1" | node -e '
+    let value;
+    try {
+      value = JSON.parse(require("fs").readFileSync(0, "utf8"));
+    } catch (_) {
+      process.exit(1);
+    }
+    const numbers = new Set();
+    const body = String(value && value.body || "");
+    const linePattern = /^[ \t]*(?:[-*][ \t]+)?(?:\*\*[ \t]*)?(?:(?:来源)?地图|Map)[ \t]*(?:\*\*)?[ \t]*[：:][ \t]*(?:\*\*)?[ \t]*#([1-9][0-9]*)(?![0-9])/im;
+    for (const line of body.split(/\r?\n/)) {
+      const match = linePattern.exec(line);
+      if (match) numbers.add(Number(match[1]));
+    }
+    for (const number of [...numbers].sort((a, b) => a - b)) console.log(number);
+  '
+}
+
 map_facts() {
   printf '%s' "$1" | node -e '
     let value;
@@ -310,6 +330,7 @@ while [ "$index" -lt "${#GROUP_KEYS[@]}" ]; do
   group_map=
   group_issues=
   group_spec_json=
+  group_numbers=
 
   if [ "${GROUP_MODES[$index]}" = "existing-spec" ]; then
     spec_number=${ticket_argument#spec:}
@@ -332,18 +353,27 @@ while [ "$index" -lt "${#GROUP_KEYS[@]}" ]; do
 
     implementation_numbers=$(existing_spec_implementation_numbers "$group_spec_json") ||
       die "could not parse the implementation ticket links of existing spec #$spec_number"
-    [ -n "$implementation_numbers" ] ||
-      die "existing spec #$spec_number has no 实现票： line"
     impl_numbers=${implementation_numbers//$'\n'/,}
     IFS=, read -r -a tickets <<< "$impl_numbers"
+    group_numbers=$impl_numbers
+    if [ "${#tickets[@]}" -eq 0 ]; then
+      map_numbers=$(existing_spec_map_numbers "$group_spec_json") ||
+        die "could not parse the map links of existing spec #$spec_number"
+      if [ -n "$map_numbers" ]; then
+        group_map=${map_numbers%%$'\n'*}
+      else
+        printf 'make-batch-briefs: existing spec #%s has neither a 实现票： line nor a 地图：/来源地图： line; drafting it as a hand-written spec without a map\n' "$spec_number" >&2
+      fi
+    fi
   elif [ "${GROUP_MODES[$index]}" = "map" ]; then
     group_map=${ticket_argument#map:}
     tickets=()
   else
     IFS=, read -r -a tickets <<< "$ticket_argument"
+    group_numbers=$ticket_argument
   fi
 
-  if [ "${GROUP_MODES[$index]}" != "map" ]; then
+  if [ "${GROUP_MODES[$index]}" != "map" ] && [ "${#tickets[@]}" -gt 0 ]; then
     for ticket in "${tickets[@]}"; do
       if [ "${GROUP_MODES[$index]}" = "existing-spec" ]; then
         seen_index=0
@@ -378,7 +408,7 @@ while [ "$index" -lt "${#GROUP_KEYS[@]}" ]; do
     fi
     cache_index=$((cache_index + 1))
   done
-  if [ -z "$map_json" ]; then
+  if [ -z "$map_json" ] && [ -n "$group_map" ]; then
     map_json=$(gh_issue_view "$group_map" number,title,state) ||
       die "could not read map #$group_map with gh issue view"
     MAP_CACHE_KEYS+=("$group_map")
@@ -395,6 +425,7 @@ while [ "$index" -lt "${#GROUP_KEYS[@]}" ]; do
   GROUP_MAPS+=("$group_map")
   GROUP_MAP_JSON+=("$map_json")
   GROUP_SPEC_JSON+=("$group_spec_json")
+  GROUP_NUMBERS+=("$group_numbers")
   index=$((index + 1))
 done
 
@@ -415,21 +446,14 @@ MAP_TEMPLATE=$SCRIPT_DIR/../templates/brief-map-spec-batch.md
 SKILLS_ROOT=${FIND_NEXT_SKILLS_ROOT:-$HOME/.claude/plugins/cache/mattpocock/mattpocock-skills}
 [ -d "$SKILLS_ROOT" ] || die "skills root was not found: $SKILLS_ROOT"
 
-index=0
-while [ "$index" -lt "${#GROUP_KEYS[@]}" ]; do
-  key=${GROUP_KEYS[$index]}
-  brief=$RUN_DIR/$key/brief.md
-  if [ -e "$brief" ] && [ "$FORCE" -ne 1 ]; then
-    die "brief already exists (use --force to replace it): $brief"
-  fi
-  index=$((index + 1))
-done
-
 set -- "$TEMPLATE" "$TICKETS_TEMPLATE" "$MAP_TEMPLATE" "$REPO_PATH" "$REPO" "$EXAMPLE" \
   "$RUN_DIR" "$SKILLS_ROOT"
+if [ "$FORCE" -eq 1 ]; then
+  set -- "$@" --force
+fi
 index=0
 while [ "$index" -lt "${#GROUP_KEYS[@]}" ]; do
-  set -- "$@" --group "${GROUP_KEYS[$index]}" "${GROUP_TICKETS[$index]}" \
+  set -- "$@" --group "${GROUP_KEYS[$index]}" "${GROUP_NUMBERS[$index]}" \
     "${GROUP_MODES[$index]}" "${GROUP_ISSUES[$index]}" "${GROUP_MAPS[$index]}" \
     "${GROUP_MAP_JSON[$index]}" "${GROUP_SPEC_JSON[$index]}"
   index=$((index + 1))
@@ -449,6 +473,7 @@ const [
   templatePath, ticketsTemplatePath, mapTemplatePath, repoPath, repo, example, runDir,
   skillsRoot,
 ] = argv;
+const force = argv.includes('--force');
 const groups = [];
 const notes = new Map();
 for (let index = 0; index < argv.length; index++) {
@@ -456,7 +481,8 @@ for (let index = 0; index < argv.length; index++) {
   if (argv[index] === '--group') {
     groups.push({
       key: argv[++index],
-      ticketArgument: argv[++index],
+      // Comma-joined ticket numbers the shell looked up; empty when the group has none.
+      numbersArgument: argv[++index],
       mode: argv[++index],
       issuesArgument: argv[++index],
       mapArgument: argv[++index],
@@ -519,13 +545,16 @@ const parsedGroups = [];
 for (const group of groups) {
   const existingSpecMode = group.mode === 'existing-spec';
   const mapMode = group.mode === 'map';
+  // An existing Spec hangs under a map through its 实现票 line or its 地图： line;
+  // a hand-written Spec has neither, and the shell passes an empty mapArgument for it.
+  const hasMap = group.mapArgument !== '';
   if (!existingSpecMode && !mapMode && group.mode !== 'tickets') {
     fail(`internal error: unknown group mode ${group.mode}`);
   }
-  const ticketNumbers = existingSpecMode
+  const ticketNumbers = group.numbersArgument === ''
     ? []
-    : group.ticketArgument.split(',');
-  const expectedIssues = existingSpecMode ? 1 : (mapMode ? 0 : ticketNumbers.length);
+    : group.numbersArgument.split(',');
+  const expectedIssues = ticketNumbers.length;
   const issueRecords = group.issuesArgument
     .split('\u001f')
     .filter(value => value !== '')
@@ -540,20 +569,20 @@ for (const group of groups) {
     fail(`gh returned ${issueRecords.length} issues for ${expectedIssues} tickets`);
   }
 
-  let mapTitle;
-  try {
-    mapTitle = JSON.parse(group.mapJsonArgument).title;
-  } catch (error) {
-    mapTitle = undefined;
-  }
-  if (typeof mapTitle !== 'string' || mapTitle === '') {
-    fail(`map #${group.mapArgument} has no title`);
+  let mapTitle = null;
+  if (hasMap) {
+    try {
+      mapTitle = JSON.parse(group.mapJsonArgument).title;
+    } catch (error) {
+      mapTitle = undefined;
+    }
+    if (typeof mapTitle !== 'string' || mapTitle === '') {
+      fail(`map #${group.mapArgument} has no title`);
+    }
   }
 
   const tickets = issueRecords.map((issue, index) => {
-    const expected = existingSpecMode
-      ? issue.number
-      : Number(ticketNumbers[index]);
+    const expected = Number(ticketNumbers[index]);
     if (!Number.isInteger(issue.number) || issue.number !== expected) {
       fail(`gh returned issue #${issue.number} where #${expected} was expected`);
     }
@@ -587,9 +616,6 @@ for (const group of groups) {
     if (existingSpecTitle === '') {
       fail(`existing spec #${existingSpec} has no title`);
     }
-    if (tickets.length === 0) {
-      fail(`existing spec #${existingSpec} has no implementation ticket links`);
-    }
   }
 
   let noteContent = '';
@@ -602,7 +628,7 @@ for (const group of groups) {
   }
   parsedGroups.push({
     key: group.key,
-    map: Number(group.mapArgument),
+    map: hasMap ? Number(group.mapArgument) : null,
     mapTitle,
     mode: group.mode,
     tickets,
@@ -628,6 +654,39 @@ function ticketNumbers(tickets) {
 
 function ticketList(tickets) {
   return tickets.map(ticket => `#${ticket.number}「${ticket.title}」`).join('、');
+}
+
+function mapReference(group) {
+  return `地图 #${group.map}「${group.mapTitle}」`;
+}
+
+function mapGuidanceLine(group) {
+  return `- 必要时读${mapReference(group)}（\`gh issue view ${group.map} --comments\`）和相关代码，只为了确认拆分边界、测试切入点、已有可复用模块和命名习惯。`;
+}
+
+// The three form-specific sentences of the existing-spec Brief (Spec linked through an
+// 实现票 line, Spec linked through a 地图： line, hand-written Spec with neither). Every
+// form gets a true sentence, so no variable renders empty.
+function existingSpecLines(group) {
+  if (group.tickets.length > 0) {
+    return {
+      origin: `它覆盖${mapReference(group)}下的实现票 ${ticketList(group.tickets)}。`,
+      ticketsLine: `- 实现票本身：\`gh issue view <n> --comments\`（逐张读 ${ticketNumbers(group.tickets)}），确认规格没有漏掉它们正文里的验收要求。实现票指向的已关闭决策票，若规格没有吸收结论，按未决处理，不要自行补规格。`,
+      mapLine: mapGuidanceLine(group),
+    };
+  }
+  if (group.map !== null) {
+    return {
+      origin: `它不挂在任何地图实现票下，正文用「地图：」/「来源地图：」行指回${mapReference(group)}。`,
+      ticketsLine: '- 这份规格没有「实现票：」行，没有地图实现票可读；拆票只以规格正文和下面的地图为依据，不要去找实现票。',
+      mapLine: mapGuidanceLine(group),
+    };
+  }
+  return {
+    origin: '它没有地图实现票（没挂地图的手写规格），只读规格正文与相关代码。',
+    ticketsLine: '- 这份规格没有「实现票：」行，也没有「地图：」/「来源地图：」行，没有地图实现票可读；拆票只以规格正文为依据，不要去找实现票。',
+    mapLine: '- 没有地图可读；相关代码按需读，只为了确认拆分边界、测试切入点、已有可复用模块和命名习惯。',
+  };
 }
 
 const groupLines = parsedGroups.map(group => {
@@ -689,6 +748,10 @@ for (const group of parsedGroups) {
   if (group.existingSpec !== null) {
     values.set('SPEC_NUM', group.existingSpec);
     values.set('SPEC_TITLE', group.existingSpecTitle);
+    const lines = existingSpecLines(group);
+    values.set('SPEC_ORIGIN', lines.origin);
+    values.set('TICKETS_LINE', lines.ticketsLine);
+    values.set('MAP_LINE', lines.mapLine);
   }
   for (const [name, value] of values) {
     output = replaceAll(output, name, value);
@@ -704,7 +767,7 @@ for (const group of parsedGroups) {
 
 for (const {group} of renderedGroups) {
   const briefPath = path.join(group.dir, 'brief.md');
-  if (fs.existsSync(briefPath)) {
+  if (!force && fs.existsSync(briefPath)) {
     fail(`brief already exists (use --force to replace it): ${briefPath}`);
   }
 }

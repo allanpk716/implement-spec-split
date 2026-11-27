@@ -149,6 +149,24 @@ const issues = new Map([
     state: 'open',
     body: '实现票：#65\n地图：#22\n',
   }],
+  [228, {
+    number: 228,
+    title: 'Hand-written spec',
+    state: 'open',
+    body: '## Problem Statement\n\nNo map, no implementation ticket.\n',
+  }],
+  [229, {
+    number: 229,
+    title: 'Hand-written spec with children',
+    state: 'open',
+    body: '## Problem Statement\n\nNo map, but already has children.\n',
+  }],
+  [230, {
+    number: 230,
+    title: 'Map-linked spec',
+    state: 'open',
+    body: '## Problem Statement\n\n地图：#22\n',
+  }],
 ]);
 fs.appendFileSync(logFile, `${JSON.stringify({args})}\n`);
 if (args[0] === 'repo' && args[1] === 'view') {
@@ -156,7 +174,7 @@ if (args[0] === 'repo' && args[1] === 'view') {
   process.exit(0);
 }
 if (args[0] === 'api' && args[1].endsWith('/sub_issues')) {
-  process.stdout.write(args[1].startsWith('repos/test/repo/issues/225/') ? '1\n' : '0\n');
+  process.stdout.write(/^repos\/test\/repo\/issues\/(225|229)\//.test(args[1]) ? '1\n' : '0\n');
   process.exit(0);
 }
 if (args[0] !== 'issue' || args[1] !== 'view') {
@@ -240,6 +258,10 @@ expect_has '规格 #224「Existing spec twenty-four」已经写好' \
   'existing spec identity is substituted' "$EXISTING_SPEC/S2/brief.md"
 expect_has '#65「Existing spec implementation」' \
   'existing spec implementation tickets are substituted' "$EXISTING_SPEC/S2/brief.md"
+expect_has '它覆盖地图 #22「Map twenty-two」下的实现票 #65「Existing spec implementation」。' \
+  'existing spec origin names its map and implementation ticket' "$EXISTING_SPEC/S2/brief.md"
+expect_has '必要时读地图 #22「Map twenty-two」（`gh issue view 22 --comments`）' \
+  'existing spec map guidance is kept' "$EXISTING_SPEC/S2/brief.md"
 expect_has '"existing_spec": 224' \
   'existing-spec manifest format is documented' "$EXISTING_SPEC/S2/brief.md"
 expect_has '- S2：已有规格 #224 Existing spec twenty-four（只拆票）' \
@@ -299,6 +321,53 @@ expect_has 'existing spec #227 has no ## Problem Statement section' \
   'missing-heading error is explained' "$WORK/no-spec-heading.out.err"
 expect_no_directory "$NO_HEADING" 'missing-heading failure writes no files'
 
+HAND_WRITTEN=$WORK/hand-written-spec
+run_brief "$WORK/hand-written-spec.out" --example 205 "$HAND_WRITTEN" \
+  S1=62,63 S2=spec:228
+expect_exit 0 'existing spec without 实现票 line generates'
+expect_first_line '# 任务：为已有规格 #228 起草执行票（只写草稿，不发布）' \
+  'hand-written spec uses the existing-spec template' "$HAND_WRITTEN/S2/brief.md"
+expect_has '规格 #228「Hand-written spec」' \
+  'hand-written spec identity is substituted' "$HAND_WRITTEN/S2/brief.md"
+expect_has '它没有地图实现票（没挂地图的手写规格），只读规格正文与相关代码。' \
+  'hand-written spec origin is stated' "$HAND_WRITTEN/S2/brief.md"
+expect_has '这份规格没有「实现票：」行，也没有「地图：」/「来源地图：」行，没有地图实现票可读；拆票只以规格正文为依据，不要去找实现票。' \
+  'hand-written spec has no implementation ticket to read' "$HAND_WRITTEN/S2/brief.md"
+expect_has '没有地图可读；相关代码按需读，只为了确认拆分边界、测试切入点、已有可复用模块和命名习惯。' \
+  'hand-written spec has no map to read' "$HAND_WRITTEN/S2/brief.md"
+expect_has 'hand-written spec without a map' \
+  'hand-written spec notice is printed to stderr' "$WORK/hand-written-spec.out.err"
+expect_without 'undefined' 'hand-written spec brief has no undefined map title' \
+  "$HAND_WRITTEN/S2/brief.md"
+expect_without '「Map twenty-two」' 'hand-written spec brief names no map' \
+  "$HAND_WRITTEN/S2/brief.md"
+expect_pattern_without '@@[A-Z_]+@@' 'hand-written spec brief has no variable left' \
+  "$HAND_WRITTEN/S2/brief.md"
+expect_has '- S2：已有规格 #228 Hand-written spec（只拆票）' \
+  'hand-written spec appears in every groups list' "$HAND_WRITTEN/S1/brief.md"
+
+HAND_WRITTEN_CHILDREN=$WORK/hand-written-spec-children
+run_brief "$WORK/hand-written-spec-children.out" --example 205 "$HAND_WRITTEN_CHILDREN" \
+  S1=spec:229
+expect_exit 1 'hand-written spec with children is rejected'
+expect_has 'existing spec #229 already has sub-issues' \
+  'hand-written children error is explained' "$WORK/hand-written-spec-children.out.err"
+expect_no_directory "$HAND_WRITTEN_CHILDREN" 'hand-written children failure writes no files'
+
+MAP_LINKED=$WORK/map-linked-spec
+run_brief "$WORK/map-linked-spec.out" --example 205 "$MAP_LINKED" S1=spec:230
+expect_exit 0 'existing spec with only a 地图： line generates'
+expect_has '它不挂在任何地图实现票下，正文用「地图：」/「来源地图：」行指回地图 #22「Map twenty-two」。' \
+  'map-linked spec origin names its map' "$MAP_LINKED/S1/brief.md"
+expect_has '这份规格没有「实现票：」行，没有地图实现票可读；拆票只以规格正文和下面的地图为依据，不要去找实现票。' \
+  'map-linked spec has no implementation ticket to read' "$MAP_LINKED/S1/brief.md"
+expect_has '必要时读地图 #22「Map twenty-two」（`gh issue view 22 --comments`）' \
+  'map-linked spec keeps the map guidance' "$MAP_LINKED/S1/brief.md"
+expect_without 'hand-written spec without a map' \
+  'map-linked spec is not reported as hand-written' "$WORK/map-linked-spec.out.err"
+expect_pattern_without '@@[A-Z_]+@@' 'map-linked spec brief has no variable left' \
+  "$MAP_LINKED/S1/brief.md"
+
 MISMATCH=$WORK/mismatch
 run_brief "$WORK/mismatch.out" --example 205 "$MISMATCH" S1=62,64
 expect_exit 1 'mixed parents are rejected'
@@ -333,6 +402,53 @@ else
   record FAIL 'existing brief was replaced'
 fi
 expect_no_directory "$EXISTING/S2" 'existing-brief failure writes no later group'
+
+run_brief "$WORK/existing-force.out" --example 205 --force "$EXISTING" S1=62 S2=74
+expect_exit 0 'an existing brief is replaced with --force'
+expect_first_line '# 任务：为地图实现票 #62 起草一份规格和它的执行票（只写草稿，不发布）' \
+  'the placeholder brief is overwritten with --force' "$EXISTING/S1/brief.md"
+expect_has "$EXISTING/S2/brief.md" 'the later group is written too with --force' \
+  "$WORK/existing-force.out"
+
+FORCE_RERUN=$WORK/force-rerun
+run_brief "$WORK/force-first.out" --example 205 "$FORCE_RERUN" S1=62
+expect_exit 0 'brief generates before a --force rerun'
+run_brief "$WORK/force-rerun.out" --example 205 --force "$FORCE_RERUN" S1=63
+expect_exit 0 '--force rerun over a generated brief succeeds'
+expect_has '#63「Ticket beta」' '--force rerun rewrites the brief from the new group' \
+  "$FORCE_RERUN/S1/brief.md"
+expect_without '#62「Ticket alpha」' '--force rerun leaves nothing of the old group' \
+  "$FORCE_RERUN/S1/brief.md"
+
+FORCE_FRESH=$WORK/force-fresh
+run_brief "$WORK/force-fresh.out" --example 205 --force "$FORCE_FRESH" S1=62
+expect_exit 0 '--force without an existing brief generates normally'
+expect_first_line '# 任务：为地图实现票 #62 起草一份规格和它的执行票（只写草稿，不发布）' \
+  '--force fresh run writes the brief' "$FORCE_FRESH/S1/brief.md"
+
+# The environment-constraints section is pasted verbatim into every Brief template;
+# fail as soon as one copy drifts or goes missing.
+env_first=
+env_identical=1
+for template in "$ROOT"/find-next/templates/*.md; do
+  section_file=$WORK/env-section-$(basename "$template")
+  awk '/^## 环境约束（找文件与子进程）$/ { section = 1; next }
+       section && /^## / { section = 0 }
+       section' "$template" > "$section_file"
+  [ -s "$section_file" ] || env_identical=0
+  if [ -z "$env_first" ]; then
+    env_first=$section_file
+  elif ! cmp -s "$env_first" "$section_file"; then
+    env_identical=0
+  fi
+done
+[ -n "$env_first" ] || env_identical=0
+if [ "$env_identical" -eq 1 ]; then
+  record PASS 'environment-constraints section is identical in every Brief template'
+else
+  record FAIL 'environment-constraints section is identical in every Brief template' \
+    'a template lacks the section or differs from the others'
+fi
 
 printf '\n%d passed, %d failed\n' "$PASSED" "$FAILED"
 if [ "$FAILED" -ne 0 ]; then

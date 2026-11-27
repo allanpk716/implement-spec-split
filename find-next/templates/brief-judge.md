@@ -38,6 +38,12 @@ find-next 判断 Brief 模板。复制到 <运行目录>/brief.md，填好 <...>
 
 `digest.md`（只在结论是 to-spec 或 to-tickets 时写，≤150 行）：该地图或 spec 的 Destination；每张已关闭票的 Resolution 要点，每条一到三行，附 `文件:行号`；对应 SPEC.md 章节的位置；还没决定的事项。只写摘要和指针，不要大段照抄原文。
 
+## 环境约束（找文件与子进程）
+
+- Brief 里引用的仓库外文件都是确切路径（写 Brief 前已用系统索引或 `ls` 核实存在）。某个路径定位不到时，在输出里明写「未定位到，不作为依据」，不要按模糊路径自行全盘搜索。
+- 不对 `$HOME` 或仓库目录之外做无边界 `find`：云盘同步目录（如 macOS 的 `~/Library/CloudStorage`）会被它触发按需拉取，看起来就像卡死。要搜系统用系统索引（macOS 用 `mdfind`；其他平台用系统索引工具或对已知子目录定点查找）；非用 `find` 不可时，剪枝挂载点本身，如 `find "$HOME" -path "$HOME/Library/CloudStorage" -prune -o …`。注意 `-not -path` 只过滤输出、不剪枝，照样会走进挂载。
+- 结束前收割自己起的、仍在跑的长子进程（起时记下 pid，结束时 kill），不要留下卡死的孤儿进程。
+
 ## 不要做
 
 - 这是只读调查：除 `<运行目录>/digest.md` 外，不要改动任何文件，不要 commit

@@ -30,7 +30,7 @@ _Avoid_: implement model (GLM is not a model the session can select)
 
 **Agent model**:
 The model the `agent` backend passes explicitly on every Agent call, selected per run with `--agent-model <sonnet|opus|haiku|fable>`; defaults to `IMPLEMENT_MODEL` (sonnet). In a GLM proxy environment an explicit `opus` may actually run GLM-5.4.
-_Avoid_: implement model (ambiguous with CODEX_MODEL/GLM_MODEL)
+_Avoid_: implement model (ambiguous with harness-specific settings such as `GLM_MODEL`)
 
 **Implementing roles**:
 The exploration, implementer, merger and fix roles; everything except review.
@@ -65,7 +65,7 @@ _Avoid_: harness (when meaning the route entry), agent slot
 ## Work
 
 **Spec**:
-The issue describing the whole feature; implemented in one run. On GitHub this is an open issue using the to-spec template heading `## Problem Statement`; a legacy open parent issue with unfinished children is also treated as a Spec. On a local-markdown tracker it is a ticket whose body uses `## Problem Statement`, or a closed Closing ticket. The Spec number is the number of that issue, and the integration branch is `spec-<Spec number>`.
+The issue describing the whole feature; implemented in one run. On GitHub this is an open issue using the to-spec template heading `## Problem Statement`; a legacy open parent issue with unfinished children is also treated as a Spec. On a local-markdown tracker it is a ticket whose body uses `## Problem Statement`, or a closed Closing ticket. The Spec number is the number of that issue, and the integration branch is `spec-<Spec number>`. A Hand-written Spec (手写规格) is an existing Spec whose body has neither a `实现票：#N` line nor a `地图：#N` / `来源地图：#N` line, so it hangs under no map; find-next still drafts its Tickets (`S<k>=spec:<n>`) with a Brief that points to neither a map nor an implementation ticket.
 _Avoid_: PRD, epic
 
 **Ticket**:
