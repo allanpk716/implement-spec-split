@@ -401,14 +401,34 @@ testCase('flash mode Bash redirect source write denies', home => {
   assert.match(reason, /flash 会话不写源码/);
 });
 
-testCase('flash mode subagent Write source allows', home => {
+// 规格 #26：实现不再由 flash 的会话内子代理完成（子代理拦截 hook 另行拦住派发），
+// 子代理与主线程一样不写源码；非源码文件照旧放行。
+testCase('flash mode subagent Write source denies', home => {
+  assert.match(
+    parseDeny(
+      runHook(
+        hookPayload(
+          'Write',
+          {
+            file_path: 'C:/WorkSpace/x/src/a.ts',
+            content: lines(50),
+          },
+          process.cwd(),
+          { agent_id: 'test-agent', agent_type: 'general-purpose' }
+        ),
+        home,
+        { FLASH_ORCHESTRATOR: '1' }
+      )
+    ),
+    /flash 会话不写源码/
+  );
   assertAllow(
     runHook(
       hookPayload(
         'Write',
         {
-          file_path: 'C:/WorkSpace/x/src/a.ts',
-          content: lines(50),
+          file_path: 'C:/WorkSpace/x/docs/a.md',
+          content: lines(500),
         },
         process.cwd(),
         { agent_id: 'test-agent', agent_type: 'general-purpose' }
@@ -419,18 +439,21 @@ testCase('flash mode subagent Write source allows', home => {
   );
 });
 
-testCase('flash mode subagent Bash source redirect allows', home => {
-  assertAllow(
-    runHook(
-      hookPayload(
-        'Bash',
-        { command: 'printf line > src/a.ts' },
-        process.cwd(),
-        { agent_id: 'test-agent', agent_type: 'general-purpose' }
-      ),
-      home,
-      { FLASH_ORCHESTRATOR: '1' }
-    )
+testCase('flash mode subagent Bash source redirect denies', home => {
+  assert.match(
+    parseDeny(
+      runHook(
+        hookPayload(
+          'Bash',
+          { command: 'printf line > src/a.ts' },
+          process.cwd(),
+          { agent_id: 'test-agent', agent_type: 'general-purpose' }
+        ),
+        home,
+        { FLASH_ORCHESTRATOR: '1' }
+      )
+    ),
+    /flash 会话不写源码/
   );
 });
 
