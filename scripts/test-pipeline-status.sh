@@ -1016,7 +1016,7 @@ run_status "$REPO" "$WORK/help.out" --help
 expect_has '--graph' 'help documents --graph' "$WORK/help.out"
 expect_has 'PIPELINE_STATUS_ORCA_TERMINALS_JSON' 'help documents the terminal-list fixture file' "$WORK/help.out"
 expect_without 'PIPELINE_STATUS_ORCA may' 'help no longer documents a per-script Orca executable' "$WORK/help.out"
-expect_has 'keep the idle' 'help documents that --apart keeps two Specs out of one wave' \
+expect_has 'keep the idle' 'help documents that --apart keeps the idle side out of the new wave' \
   "$WORK/help.out"
 expect_has 'side out of the new wave while the other is in flight' \
   'help documents that --apart also avoids Specs in flight' "$WORK/help.out"

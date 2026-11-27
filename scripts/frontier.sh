@@ -163,7 +163,7 @@ const shelved = [];
 // The one `shared-counter` ticket released this run (the lowest-numbered among
 // those that pass the other frontier conditions; `open` is ascending, so the
 // first one met is it). The rest wait for it in `# blocked`, naming it.
-let releasedCounter = null;
+let releasedCounterTicket = null;
 for (const ticket of open) {
   const number = Number(ticket.number);
   const openBlockers = blockers.get(number) || [];
@@ -176,11 +176,11 @@ for (const ticket of open) {
   if (openBlockers.length === 0 && ticket.shelved !== true && ticket.human !== true) {
     if (ticket.shared_counter !== true) {
       frontier.push(`#${number}`);
-    } else if (releasedCounter === null) {
-      releasedCounter = number;
+    } else if (releasedCounterTicket === null) {
+      releasedCounterTicket = number;
       frontier.push(`#${number}`);
     } else {
-      blocked.push(`${line}（等共享计数器：#${releasedCounter}）`);
+      blocked.push(`${line}（等共享计数器：#${releasedCounterTicket}）`);
     }
   }
 }
