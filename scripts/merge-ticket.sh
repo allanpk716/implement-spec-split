@@ -46,7 +46,6 @@
 set -u
 
 SCRIPT_NAME=${0##*/}
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || exit 1
 
 usage() {
   cat <<EOF

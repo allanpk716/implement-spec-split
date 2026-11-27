@@ -419,6 +419,45 @@ expect_exit 64 'a dispatch without --run-dir exits 64'
 expect_file_without 'worktree' 'none of the missing arguments calls Orca' "$ORCA_LOG"
 expect_file_without 'fake launcher' 'a usage error starts no launcher' "$LAUNCHER_LOG"
 
+# --- the run directory must be outside the Spec worktree --------------------------
+# Everything a dispatch writes goes to the run directory so that it outlives the
+# worktree, which release removes (User Story 22): a run directory inside the
+# Spec worktree is a usage error, judged on physical paths, so a directory not
+# created yet and a relative path are caught too. A sibling whose name merely
+# starts the same is fine, and a headless stage, which removes no worktree, is
+# not checked.
+
+fresh_case
+: > "$ORCA_LOG"
+run_module dispatch --stage implementation --brief "$WORK/brief-41.md" \
+  --run run_spec26 --run-dir "$SPEC_WT" --parent-worktree "$SPEC_WT" --base-branch spec-26 --ticket 41
+expect_exit 64 'a run directory that is the Spec worktree itself exits 64'
+expect_file_has 'outside the Spec worktree' 'the refusal says where the run directory has to be' "$RUN_STDERR"
+run_module dispatch --stage implementation --brief "$WORK/brief-41.md" \
+  --run run_spec26 --run-dir "$SPEC_WT/runs/not-yet" --parent-worktree "$SPEC_WT" --base-branch spec-26 --ticket 42
+expect_exit 64 'a run directory under the Spec worktree that does not exist yet exits 64'
+if [ -e "$SPEC_WT/runs" ]; then
+  record FAIL 'a refused run directory is not created' "$SPEC_WT/runs"
+else
+  record PASS 'a refused run directory is not created'
+fi
+(cd "$SPEC_WT" || exit 99
+  run_module dispatch --stage implementation --brief "$WORK/brief-41.md" \
+    --run run_spec26 --run-dir runs/relative --parent-worktree . --base-branch spec-26 --ticket 43
+  exit "$RUN_EXIT")
+RUN_EXIT=$?
+expect_exit 64 'a relative run directory inside the Spec worktree exits 64'
+expect_file_has 'inside'" $SPEC_WT" 'the refusal names the worktree the run directory is inside' "$RUN_STDERR"
+expect_file_without 'worktree' 'a refused run directory calls no Orca' "$ORCA_LOG"
+SIBLING=$WORK/wt/spec-26-sibling
+mkdir -p "$SIBLING/runs"
+run_module dispatch --stage implementation --brief "$WORK/brief-41.md" \
+  --run run_spec26 --run-dir "$SIBLING/runs" --parent-worktree "$SPEC_WT" --base-branch spec-26 --ticket 44
+expect_exit 0 'a run directory in a sibling whose name merely starts the same is accepted'
+expect_stdout "$SIBLING/runs/dispatch-implement-44.json" 'that dispatch completes as usual'
+run_module dispatch --stage research --brief "$WORK/brief-41.md" --run-dir "$SPEC_WT/research-run" --ticket 45 --cwd "$SPEC_WT"
+expect_exit 0 'a headless dispatch, which removes no worktree, may keep its run directory anywhere'
+
 # --- the route cannot be read, or its launcher is missing -------------------------
 
 fresh_case

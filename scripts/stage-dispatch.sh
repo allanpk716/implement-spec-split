@@ -27,11 +27,12 @@
 # never inherited from the terminal. --run-dir is the Spec's run directory
 # (~/.cache/implement-spec-split/runs/<repo>-<n>-<...>); everything a dispatch
 # writes goes there, outside any worktree, so deleting the worktree loses none
-# of it. A dispatch's files live in <run dir>/<name>/ and its sidecar in
-# <run dir>/dispatch-<name>.json, where <name> is the role and, when there is
-# one, the ticket: implement-41, fix, merge-41, research-41, review-41,
-# diagnosis; --attempt 2 and up append -2, -3... (a re-brief gets a fresh name
-# and never overwrites an earlier sidecar).
+# of it -- a run directory inside the Spec worktree is refused (exit 64), since
+# release removes that worktree. A dispatch's files live in <run dir>/<name>/
+# and its sidecar in <run dir>/dispatch-<name>.json, where <name> is the role
+# and, when there is one, the ticket: implement-41, fix, merge-41, research-41,
+# review-41, diagnosis; --attempt 2 and up append -2, -3... (a re-brief gets a
+# fresh name and never overwrites an earlier sidecar).
 #
 # Interactive stages (implementation: implement, fix and merge roles). The
 # route's Launcher profile names the launcher and the form of --model and
@@ -58,16 +59,20 @@
 # and ISS_DISPATCH_LEAN_RULES, since the executor runs in --cwd and the
 # terminal in the worktree.
 #
-# Lean start (ADR 0004 Consequences: --bare takes a trivial task from 18.6K to
-# 1.2K input tokens). ISS_DISPATCH_BARE=1 adds, on the implementation stage
-# only, `--bare --append-system-prompt-file <rules> [--mcp-config <file>]`:
-# --bare loads no CLAUDE.md, skills, plugins or hooks, so the rules file
-# carries them as a prompt and --mcp-config adds the MCP servers the ticket
-# needs (ops tickets: ssh-manager). ISS_DISPATCH_LEAN_RULES names the rules
-# file (default templates/lean-rules.md, which #39 settles). The switch is off
-# by default until #39's verification (the TUI + adoption form under --bare,
-# and whether a second --append-system-prompt-file stacks); off, or on without
-# a rules file, the start is a normal one and the sidecar's bare_note says so.
+# Lean start (精简启动; ADR 0004 Consequences: --bare takes a trivial task from
+# 18.6K to 1.2K input tokens). One name for it everywhere: the switch is the
+# environment variable ISS_DISPATCH_BARE, the flag it passes the launcher is
+# --bare (hence the sidecar's bare and bare_note fields), and the rules file
+# variable is named after the lean rules it points at. ISS_DISPATCH_BARE=1
+# adds, on the implementation stage only, `--bare --append-system-prompt-file
+# <rules> [--mcp-config <file>]`: --bare loads no CLAUDE.md, skills, plugins
+# or hooks, so the rules file carries them as a prompt and --mcp-config adds
+# the MCP servers the ticket needs (ops tickets: ssh-manager).
+# ISS_DISPATCH_LEAN_RULES names the rules file (default
+# templates/lean-rules.md, which #39 settles). The switch is off by default
+# until #39's verification (the TUI + adoption form under --bare, and whether
+# a second --append-system-prompt-file stacks); off, or on without a rules
+# file, the start is a normal one and the sidecar's bare_note says so.
 # --mcp-config is passed on a normal start too.
 #
 # Headless stages are handed to the executor that already reads the table:
@@ -101,7 +106,8 @@
 #
 # Sidecar fields: version, stage, role, ticket, attempt, run_id, run_dir,
 # route {profile, model, effort}, form (interactive|headless), dispatch_dir,
-# started_at; interactive: launcher, bare, bare_note, brief, repo,
+# started_at; interactive: launcher, bare, bare_note (the lean start: whether
+# the start was one, and why not when it was not), brief, repo,
 # parent_worktree, base_branch, branch, worktree, worktree_created, spec_file,
 # report_path (where the worker was told to write), launch_command, terminal,
 # dispatch_id, task_id; headless: script, brief|input, kind (review), cwd,
@@ -123,7 +129,8 @@
 #      executor script is missing, or the sidecar could not be written
 #   7  the wait returned on another dispatch's worker_done; this worker's is
 #      still to come: wait again
-#   64 bad usage, among it a route that cannot be read: nothing starts
+#   64 bad usage, among it a route that cannot be read and a --run-dir inside
+#      the Spec worktree: nothing starts
 #   A headless dispatch exits with the executor's own exit code (codex-worker.sh
 #   and opus-review.sh document theirs).
 #
@@ -265,6 +272,21 @@ absolute_path() { # path
     [[ "$path" = /* ]] || path=$PWD/$path
     printf '%s' "$path"
   fi
+}
+
+# A path as it will be once it exists: absolute, and physical as far as it
+# already exists (the part that does not is appended unchanged). This is what
+# tells a directory that does not exist yet from one inside another.
+resolved_path() { # path
+  local path=$1 rest=
+  path=$(absolute_path "$path")
+  path=${path%/}
+  while [ ! -e "$path" ]; do
+    rest=/${path##*/}$rest
+    path=${path%/*}
+    [ -n "$path" ] || path=/
+  done
+  printf '%s%s' "$(cd -P "$path" 2>/dev/null && pwd || printf '%s' "$path")" "$rest"
 }
 
 # --- the route -------------------------------------------------------------------
@@ -426,6 +448,15 @@ cmd_dispatch() {
       [ "$on_branch" = "$base_branch" ] ||
         usage_error "a $role dispatch works in the Spec worktree on the Integration branch, but $parent_worktree is on '${on_branch:-no branch}', not $base_branch"
     fi
+    # Everything a dispatch writes must outlive the worktree, which release
+    # removes: a run directory inside the Spec worktree is a usage error
+    # (spec #26, User Story 22). Compared on physical paths as far as they
+    # exist, so a relative path or a directory not created yet is judged too.
+    case "$(resolved_path "$run_dir")/" in
+      "$parent_worktree"/*)
+        usage_error "--run-dir must be outside the Spec worktree, but $run_dir is inside $parent_worktree: release removes the worktree, and with it every sidecar and report written under it"
+        ;;
+    esac
   fi
 
   mkdir -p "$run_dir" || usage_error "could not create the run directory: $run_dir"
@@ -456,7 +487,8 @@ cmd_dispatch() {
     die 6 "could not write the sidecar $sidecar"
 
   if [ "$form" = headless ]; then
-    run_headless "$stage" "$sidecar" "$dispatch_dir" "$brief" "$input" "$kind" "$out" "$cwd" "$timeout"
+    run_headless "$stage" "$sidecar" "$dispatch_dir" "$brief" "$input" "$kind" "$out" "$cwd" "$timeout" \
+      ${mcp_args[@]+"${mcp_args[@]}"}
     return $?
   fi
   run_interactive "$sidecar" "$dispatch_dir" "$brief" "$run_id" "$parent_worktree" "$repo" \
@@ -484,17 +516,18 @@ run_interactive() { # sidecar dispatch_dir brief run_id parent_worktree repo bas
   command -v "$launcher" >/dev/null 2>&1 ||
     die 6 "the implementation route is $ROUTE_PROFILE / $ROUTE_MODEL / $ROUTE_EFFORT, but its launcher '$launcher' was not found in PATH"
 
-  # The lean switch: on, with a rules file, the implementation stage starts bare.
+  # The lean start (精简启动): the switch on, with a rules file, the
+  # implementation stage starts bare.
   if [ "${ISS_DISPATCH_BARE:-}" = 1 ]; then
     if [ -f "$LEAN_RULES" ]; then
       bare=1
-      bare_note="ISS_DISPATCH_BARE=1: --bare with the rules in $LEAN_RULES"
+      bare_note="ISS_DISPATCH_BARE=1: lean start, --bare with the rules in $LEAN_RULES"
       lean_args=(--bare --append-system-prompt-file "$LEAN_RULES")
     else
-      bare_note="ISS_DISPATCH_BARE=1, but the lean rules file was not found ($LEAN_RULES): normal start"
+      bare_note="ISS_DISPATCH_BARE=1, but the lean rules file was not found ($LEAN_RULES): no lean start, a normal one"
     fi
   else
-    bare_note="ISS_DISPATCH_BARE is off: normal start"
+    bare_note="ISS_DISPATCH_BARE is off: no lean start, a normal one"
   fi
   [ -z "$mcp_config" ] || lean_args+=(--mcp-config "$mcp_config")
   json_set "$sidecar" "launcher=$launcher" "bare=@json:$(true_false "$bare")" "bare_note=$bare_note" \
@@ -578,35 +611,29 @@ run_interactive() { # sidecar dispatch_dir brief run_id parent_worktree repo bas
 
 # --- headless: the executors that read the table themselves -------------------------
 
-run_headless() { # stage sidecar dispatch_dir brief input kind out cwd timeout
+run_headless() { # stage sidecar dispatch_dir brief input kind out cwd timeout [--mcp <names|all>]...
+  # Everything the executor needs comes in as an argument, the MCP selection
+  # of a research dispatch included; nothing is read from the caller's scope.
   local stage=$1 sidecar=$2 dispatch_dir=$3 brief=$4 input=$5 kind=$6 out=$7 cwd=$8 timeout=$9
-  local script= report= exit_code= timeout_args=()
+  local script= report= exit_code= timeout_args=() mcp_args=("${@:10}")
   [ -z "$timeout" ] || timeout_args=(--timeout "$timeout")
   case "$stage" in
     research)
       script=${STAGE_DISPATCH_CODEX_WORKER:-$HERE/codex-worker.sh}
-      [ -x "$script" ] || die 6 "the research executor was not found: $script"
+      [ -x "$script" ] || die 6 "the $stage executor was not found: $script"
       json_set "$sidecar" "script=$script" "brief=$brief" "cwd=$cwd" ||
         die 6 "could not write the sidecar $sidecar"
       ( cd "$cwd" && exec "$script" --cwd "$cwd" --brief "$brief" --run-dir "$dispatch_dir" --read-only ${mcp_args[@]+"${mcp_args[@]}"} )
       exit_code=$?
       ;;
-    review)
+    review|diagnosis)
       script=${STAGE_DISPATCH_OPUS_REVIEW:-$HERE/opus-review.sh}
-      [ -x "$script" ] || die 6 "the review executor was not found: $script"
+      [ -x "$script" ] || die 6 "the $stage executor was not found: $script"
+      [ "$stage" = review ] || kind=diagnose
       [ -n "$out" ] || out=$dispatch_dir/findings.md
       json_set "$sidecar" "script=$script" "input=$input" "kind=$kind" "cwd=$cwd" "report_path=$out" ||
         die 6 "could not write the sidecar $sidecar"
       ( cd "$cwd" && exec "$script" --kind "$kind" --input "$input" --out "$out" --cwd "$cwd" ${timeout_args[@]+"${timeout_args[@]}"} )
-      exit_code=$?
-      ;;
-    diagnosis)
-      script=${STAGE_DISPATCH_OPUS_REVIEW:-$HERE/opus-review.sh}
-      [ -x "$script" ] || die 6 "the diagnosis executor was not found: $script"
-      [ -n "$out" ] || out=$dispatch_dir/findings.md
-      json_set "$sidecar" "script=$script" "input=$input" "kind=diagnose" "cwd=$cwd" "report_path=$out" ||
-        die 6 "could not write the sidecar $sidecar"
-      ( cd "$cwd" && exec "$script" --kind diagnose --input "$input" --out "$out" --cwd "$cwd" ${timeout_args[@]+"${timeout_args[@]}"} )
       exit_code=$?
       ;;
   esac
@@ -713,7 +740,7 @@ record_worker_done() { # wait_json run_dir
       try {
         const value = JSON.parse(fs.readFileSync(file, "utf8"));
         if (value.dispatch_id) sidecars.push({file, value});
-      } catch { /* a sidecar still being written */ }
+      } catch { /* not JSON: no sidecar of this module; every write here is atomic */ }
     }
     let others = 0;
     const received = new Date().toISOString();
@@ -741,7 +768,10 @@ record_worker_done() { # wait_json run_dir
         message_id: String(message.id ?? message.messageId ?? ""),
         received_at: received,
       };
-      fs.writeFileSync(match.file, JSON.stringify(match.value, null, 2) + "\n");
+      // The same atomic write as json_set: a reader never sees half a sidecar.
+      const tmp = match.file + ".tmp." + process.pid;
+      fs.writeFileSync(tmp, JSON.stringify(match.value, null, 2) + "\n");
+      fs.renameSync(tmp, match.file);
       process.stdout.write(`recorded ${dispatchId} ${match.file}\n`);
     }
     if (others > 0) process.stdout.write(`others ${others}\n`);

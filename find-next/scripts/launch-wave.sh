@@ -35,11 +35,11 @@
 #        worktree (the placement is not inherited);
 #   working (assistant output on screen) -> the wait is extended, never past
 #        the reservation's own lifetime (claim.sh reserve --ttl); at that cap
-#        the Spec is reported, not redispatched;
+#        the Spec is reported, not redispatched, a retry included;
 #   cannot tell -> parked: nothing is stopped or redispatched, one line
 #        `#<n> 停车：<reason>` carries what the terminal showed, the Run and
 #        the dispatch, and the command to restart the Spec with;
-#   the retry did not claim either -> parked the same way.
+#   the retry did not start either -> parked the same way.
 # A parked Spec whose process is known to have exited gets its reservation
 # released, as a failed launch does; otherwise the reservation is left to
 # expire, so that a session that is merely slow is not started twice.
@@ -112,7 +112,8 @@ default 900) bounds Orca's wait for the session to take its spec. Waiting for
 one Spec never delays the dispatch of another. When the wait runs out the
 terminal is read first: a session that never started is stopped and retried
 once (--retry-of); one that is working gets the wait extended, no later than
-its reservation expires; anything else, and a retry that fails too, parks the
+its reservation expires, and is then reported rather than failed, a retry
+included; anything else, and a retry that does not start either, parks the
 Spec with `#<n> 停车：…` and the command to restart it.
 Spec sessions launched here are unattended by default: every generated command
 ends with --auto-land, and --apply records auto_land: true. --no-auto-land opts
@@ -419,13 +420,14 @@ write_launch_state() {
   STATE_DIR_ACT="$LAUNCH_STATE_DIR" STATE_FILE_ACT="$LAUNCH_STATE_FILE" \
   STATE_WORKERS="$WORKERS" STATE_SPECS="$SPECS" STATE_APART="$state_apart_value" \
   STATE_AUTO_LAND="$AUTO_LAND" \
-  STATE_FLASH="$FLASH" STATE_RUN="${RUN_ID:-}" \
+  STATE_FLASH="$FLASH" STATE_AGENT="$AGENT" STATE_RUN="${RUN_ID:-}" \
   STATE_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ) node -e '
     const fs = require("fs"), path = require("path");
     const apart = process.env.STATE_APART.split(/\r?\n/).filter(Boolean);
     const authorization = {auto_land: process.env.STATE_AUTO_LAND === "1"};
+    // The slot the 编排 route named for this wave, the same one the dispatches carry.
     const session = process.env.STATE_FLASH === "1"
-      ? {flash: true, launch_agent: "openclaude"}
+      ? {flash: true, launch_agent: process.env.STATE_AGENT}
       : {};
     const wave = process.env.STATE_RUN === "" ? {} : {run: process.env.STATE_RUN};
     const value = JSON.stringify({
@@ -1049,7 +1051,10 @@ if (text.trim() === "") {
   const preview = String(show.preview || "");
   if (preview.trim() !== "") { text = preview; source = "preview"; }
 }
-const working = /⏺|⎿|✳|esc to interrupt|Thinking/.test(text);
+// The idle TUI's welcome box carries a ✳ too, so the spinner alone is no
+// sign of work: only the assistant's own output, or the states that say it
+// is producing some, count.
+const working = /⏺|⎿|esc to interrupt|Thinking/.test(text);
 let verdict;
 if (status === "exited") verdict = "exited";
 else if (working) verdict = "moving";
@@ -1095,7 +1100,12 @@ handle_timeout() { # spec dispatch task terminal path attempts kind command now
   verdict=$VERDICT
   note=$TERMINAL_NOTE
 
-  if [ "$attempts" -ge 2 ]; then
+  # A retry that did not start either (it exited again, or sits idle again)
+  # is the end of the road. A retry whose terminal is working gets the same
+  # extended wait as the first dispatch did, and the same report at the cap:
+  # "still failing after the retry" means it still did not claim, not that
+  # its terminal is busy.
+  if [ "$verdict" != moving ] && [ "$attempts" -ge 2 ]; then
     park_spec "$spec" "重派后仍未认领（终端 ${note}）" "$dispatch" "$path" "$command" \
       "$([ "$verdict" = exited ] && printf 1 || printf 0)"
     return

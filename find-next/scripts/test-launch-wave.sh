@@ -58,9 +58,11 @@ FAKE_STAGE_ROUTE=$WORK/fake-stage-route.sh
 CLAIM_MARK_DIR=$WORK/claim-marks
 SPEC_COPY_DIR=$WORK/spec-copies
 SCREEN_WORKING=$WORK/screen-working.json
+SCREEN_SPINNER_ONLY=$WORK/screen-spinner-only.json
 SCREEN_EXITED=$WORK/screen-exited.json
 SHOW_EXITED=$WORK/show-exited.json
 SCREEN_IDLE=$WORK/screen-idle.json
+SCREEN_IDLE_SPARK=$WORK/screen-idle-spark.json
 SCREEN_SUBMITTED=$WORK/screen-submitted.json
 PASSED=0
 FAILED=0
@@ -353,14 +355,19 @@ NODE
 # assistant's bullets; one that exited leaves the read empty and only the
 # preview of terminal show; a TUI that never got the spec typed shows its empty
 # input box; a submitted prompt without any answer yet shows the spec and
-# nothing else.
+# nothing else. The idle TUI's welcome box may carry a ✳ (the spinner glyph)
+# without the session doing anything: that alone is not work.
 printf '%s\n' '{"result":{"terminal":{"status":"running","source":"screen","tail":["❯ /implement-spec-split 237 --auto-land --parallel 2","⏺ Skill(implement-spec-split)","  ⎿  Successfully loaded skill","✳ Reading SKILL.md…"]}}}' \
   > "$SCREEN_WORKING"
+printf '%s\n' '{"result":{"terminal":{"status":"running","source":"screen","tail":["❯ /implement-spec-split 237 --auto-land --parallel 2","✳ Loading…"]}}}' \
+  > "$SCREEN_SPINNER_ONLY"
 printf '%s\n' '{"result":{"terminal":{"status":"exited","source":"screen","tail":[]}}}' > "$SCREEN_EXITED"
 printf '%s\n' '{"result":{"terminal":{"status":"exited","preview":"Claude Code v2.1.309\nInvalid API key · please run /login\nallan716@mini6 spec-237 %"}}}' \
   > "$SHOW_EXITED"
 printf '%s\n' '{"result":{"terminal":{"status":"running","source":"screen","tail":["▐▛████▛█   Claude Code v2.1.309","▝▜██████─  glm-5.3-flash[1m] · API Usage Billing","╭──────────────────────────────╮","│ >                            │","╰──────────────────────────────╯"]}}}' \
   > "$SCREEN_IDLE"
+printf '%s\n' '{"result":{"terminal":{"status":"running","source":"screen","tail":["▐▛████▛█   Claude Code v2.1.309","╭──────────────────────────────╮","▝▜██████─  glm-5.3-flash[1m] · API Usage Billing","✳ Welcome back","│ >                            │","╰──────────────────────────────╯"]}}}' \
+  > "$SCREEN_IDLE_SPARK"
 printf '%s\n' '{"result":{"terminal":{"status":"running","source":"screen","tail":["▐▛████▛█   Claude Code v2.1.309","> === TASK ===","> /implement-spec-split 237 --auto-land --parallel 2","╭──────────────────────────────╮","│ >                            │","╰──────────────────────────────╯"]}}}' \
   > "$SCREEN_SUBMITTED"
 
@@ -629,7 +636,12 @@ case "$1" in
           spec=${4#term_}; spec=${spec%_r}
           : > "$LAUNCH_CLAIM_MARK_DIR/spec-$spec"
         fi
-        if [ -n "${LAUNCH_ORCA_SCREEN_FILE:-}" ]; then cat "$LAUNCH_ORCA_SCREEN_FILE"; else
+        # A retry's terminal (term_<n>_r) can be given a screen of its own.
+        screen_file=${LAUNCH_ORCA_SCREEN_FILE:-}
+        case "$4" in
+          *_r) [ -z "${LAUNCH_ORCA_RETRY_SCREEN_FILE:-}" ] || screen_file=$LAUNCH_ORCA_RETRY_SCREEN_FILE ;;
+        esac
+        if [ -n "$screen_file" ]; then cat "$screen_file"; else
           printf '%s\n' '{"result":{"terminal":{"status":"running","source":"screen","tail":[]}}}'
         fi
         ;;
@@ -1125,6 +1137,26 @@ expect_has 'codex-glm' 'a profile without a slot is named' "$WORK/route-no-slot.
 expect_has 'no Orca agent slot' 'a profile without a slot says what is missing' "$WORK/route-no-slot.out.err"
 expect_without 'reserve' 'a profile without a slot claims nothing' "$CLAIM_LOG"
 expect_without 'worker-start' 'a profile without a slot dispatches nothing' "$ORCA_LOG"
+
+# The slot the launch state records is the one the route named, not a constant:
+# with the fake table answering the claude profile, a flash batch continued by
+# --next-wave (the state file still carries flash: true from the flash block
+# above) records launch_agent "claude" and dispatches with --agent claude.
+LAUNCH_FAKE_ROUTE_PROFILE=claude
+export LAUNCH_FAKE_ROUTE_PROFILE
+: > "$ORCA_LOG"
+run_launch "$WORK/route-claude-slot.out" --next-wave --apply --only 237
+expect_exit 0 "a 编排 route on the claude profile dispatches with the claude slot"
+expect_arg_after '--agent' claude 'the dispatch carries the slot the route named' "$ORCA_LOG"
+if node -e '
+  const fs = require("fs");
+  const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  if (value.flash !== true || value.launch_agent !== "claude") process.exit(1);
+' "$LAUNCH_STATE_FILE"; then
+  record PASS 'the launch state records the slot the route named, not a constant'
+else
+  record FAIL 'the launch state records the slot the route named, not a constant' "$(cat "$LAUNCH_STATE_FILE")"
+fi
 
 # With the real table (empty, so every stage on its default) the slot is
 # openclaude: the 编排 route is locked to claude-flash.
@@ -1648,6 +1680,24 @@ expect_has '#237 已启动' 'the retry claims and starts' "$WORK/idle-retry.out"
 expect_sequence ORCA_STOP ORCA_RETRY 'the idle session is stopped before the retry'
 unset LAUNCH_ORCA_SCREEN_FILE LAUNCH_ORCA_READ_MARKS_CLAIM
 
+# The welcome box of an idle TUI carries a ✳ of its own: that is still a TUI
+# without the spec, so "not started" (stop, retry), never "working" (wait).
+LAUNCH_ORCA_SCREEN_FILE=$SCREEN_IDLE_SPARK
+LAUNCH_ORCA_READ_MARKS_CLAIM=1
+export LAUNCH_ORCA_SCREEN_FILE LAUNCH_ORCA_READ_MARKS_CLAIM
+: > "$ORCA_LOG"; : > "$SEQUENCE_LOG"
+run_launch "$WORK/idle-spark-retry.out" --apply --only 237
+expect_exit 0 "an idle TUI whose welcome box shows a ✳ is stopped and retried, not waited for"
+expect_has '#237 没开始（screen/running：' 'the ✳ welcome box is read as not started' "$WORK/idle-spark-retry.out"
+expect_has '✳ Welcome back' 'the retry line names the welcome box that was read' "$WORK/idle-spark-retry.out"
+expect_has "#237 已启动：${CREATED_237}（Run run_wave，dispatch ctx_237_r）" \
+  'the retry of the ✳ welcome box claims and starts' "$WORK/idle-spark-retry.out"
+expect_sequence ORCA_STOP ORCA_RETRY 'the ✳ welcome box session is stopped before the retry'
+expect_count 'ORCA_STOP' 1 'a ✳ alone never extends the wait: one stop, one retry' "$SEQUENCE_LOG"
+expect_has '已启动 1 份，跳过 0 份，失败 0 份。' 'a ✳ welcome box ends as started, not skipped' "$WORK/idle-spark-retry.out"
+expect_without '终端在动' 'a ✳ alone is not reported as work' "$WORK/idle-spark-retry.out"
+unset LAUNCH_ORCA_SCREEN_FILE LAUNCH_ORCA_READ_MARKS_CLAIM
+
 # Stopping is only done when Orca can prove the agent stopped: a stop that
 # cannot (stop_unknown) parks instead of retrying.
 LAUNCH_ORCA_SCREEN_FILE=$SCREEN_IDLE
@@ -1696,6 +1746,33 @@ expect_count 'ORCA_STOP' 1 'only the first dispatch is stopped' "$SEQUENCE_LOG"
 expect_has '已启动 0 份，跳过 0 份，失败 1 份。' 'the parked retry counts as failed' "$WORK/retry-unclaimed.out"
 unset LAUNCH_ORCA_SCREEN_FILE LAUNCH_ORCA_SHOW_FILE
 
+# --- the retry's terminal is working -> the same extended wait, the same report ---
+# "Still not claimed after the retry" parks only a retry that did not start
+# either. A retry whose terminal shows work is waited for like the first
+# dispatch was, and at the reservation's cap it is reported and counted as
+# skipped: never parked, never stopped a second time, its reservation kept.
+LAUNCH_CLAIM_HANDOFF_LEFT=0
+LAUNCH_ORCA_SCREEN_FILE=$SCREEN_EXITED
+LAUNCH_ORCA_SHOW_FILE=$SHOW_EXITED
+LAUNCH_ORCA_RETRY_SCREEN_FILE=$SCREEN_WORKING
+export LAUNCH_CLAIM_HANDOFF_LEFT LAUNCH_ORCA_SCREEN_FILE LAUNCH_ORCA_SHOW_FILE LAUNCH_ORCA_RETRY_SCREEN_FILE
+: > "$CLAIM_LOG"; : > "$ORCA_LOG"; : > "$SEQUENCE_LOG"
+run_launch "$WORK/retry-working.out" --apply --only 237
+expect_exit 0 "a retry whose terminal is working is reported at the cap, not parked"
+expect_has '#237 没开始（preview/exited' 'the first dispatch was read as not started and retried' "$WORK/retry-working.out"
+expect_has '#237 仍未认领（终端在动，已等到预留到期）：screen/running：' \
+  'the retry is reported the way a working first dispatch is' "$WORK/retry-working.out"
+expect_has '；Run run_wave，dispatch ctx_237_r。不重派。' 'the report names the retry dispatch and says 不重派' "$WORK/retry-working.out"
+expect_has '已启动 0 份，跳过 1 份，失败 0 份。' 'a working retry counts as skipped, not failed' "$WORK/retry-working.out"
+expect_without '#237 停车' 'a working retry is not parked' "$WORK/retry-working.out"
+expect_without '重新启动' 'a working retry prints no restart command' "$WORK/retry-working.out"
+expect_count 'ORCA_STOP' 1 'the working retry is not stopped a second time' "$SEQUENCE_LOG"
+expect_count 'ORCA_RETRY' 1 'there is still only one retry' "$SEQUENCE_LOG"
+expect_sequence ORCA_STOP ORCA_RETRY 'the stop came before the retry'
+expect_arg_after '--terminal' term_237_r 'the retry terminal is what was read the second time' "$ORCA_LOG"
+expect_without 'release' 'a working retry keeps the reservation' "$CLAIM_LOG"
+unset LAUNCH_CLAIM_HANDOFF_LEFT LAUNCH_ORCA_SCREEN_FILE LAUNCH_ORCA_SHOW_FILE LAUNCH_ORCA_RETRY_SCREEN_FILE
+
 # --- the wait runs out: working -> extend, never redispatch ---------------------
 # A working terminal whose reservation has already expired is at the cap: the
 # Spec is reported, not redispatched, and the run does not fail on it.
@@ -1723,6 +1800,23 @@ run_launch "$WORK/submitted-parks.out" --apply --only 237
 expect_exit 1 "a submitted prompt without output parks"
 expect_has '#237 停车：判断不了（终端 screen/running' 'the park line says it could not tell' "$WORK/submitted-parks.out"
 expect_without 'worker-stop' 'an unanswered prompt is not stopped' "$ORCA_LOG"
+unset LAUNCH_ORCA_SCREEN_FILE
+
+# A spec that was typed with nothing but a spinner since: the spinner is not
+# work (an idle TUI's welcome box shows one too), and the spec on screen rules
+# out "not started", so this is "cannot tell" and parks, leaving the session
+# alone.
+LAUNCH_ORCA_SCREEN_FILE=$SCREEN_SPINNER_ONLY
+export LAUNCH_ORCA_SCREEN_FILE
+: > "$ORCA_LOG"; : > "$CLAIM_LOG"
+run_launch "$WORK/spinner-only-parks.out" --apply --only 237
+expect_exit 1 "a typed spec with only a spinner parks as cannot tell"
+expect_has '#237 停车：判断不了（终端 screen/running：❯ /implement-spec-split 237 --auto-land --parallel 2 / ✳ Loading…）' \
+  'the park line carries the spinner that was read' "$WORK/spinner-only-parks.out"
+expect_without 'worker-stop' 'a spinner-only session is not stopped' "$ORCA_LOG"
+expect_without '--retry-of' 'a spinner-only session is not redispatched' "$ORCA_LOG"
+expect_without 'release' 'a spinner-only session keeps its reservation' "$CLAIM_LOG"
+expect_without '终端在动' 'a spinner alone is not called work' "$WORK/spinner-only-parks.out"
 unset LAUNCH_ORCA_SCREEN_FILE
 
 # A terminal Orca cannot read is not read as "not started" either.

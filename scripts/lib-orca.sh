@@ -27,10 +27,15 @@
 # Four rules, each kept by a signature or a default rather than by the caller:
 #   1. One replacement variable. ISS_ORCA is read by orca_exe alone; a script
 #      has no Orca variable of its own.
-#   2. Dispatch and lookup name their Run. Every orchestration function takes
-#      the Run id as its first argument and exits 64 without it: a Run
-#      inherited from the terminal environment once delivered mail to the
-#      wrong session.
+#   2. Dispatch and lookup name their Run. Every orchestration function that
+#      acts on a Run takes the Run id as its first argument and exits 64
+#      without it: a Run inherited from the terminal environment once
+#      delivered mail to the wrong session. Two kinds are excepted, each for
+#      the reason given at the function: worker_stop, worker_show and
+#      worker_release address one dispatch by its id (a dispatch belongs to
+#      exactly one Run, and the id is what worker-start returned), and
+#      worker_list names no Run at all (the keeper has none of its own and
+#      must see every worker).
 #   3. No cached terminal handle. The library stores no handle and offers no
 #      lookup over a saved list; orca_terminal_by_pane asks Orca again on every
 #      call, so a handle that drifted is never reused.
@@ -60,6 +65,24 @@ orca_run() { # <orca arguments...>: the only place Orca is started
 orca_require_value() { # value what caller: exits 64 on an empty value
   [ -n "${1:-}" ] || {
     printf 'lib-orca: %s: %s is required\n' "$3" "$2" >&2
+    exit 64
+  }
+}
+
+# The two checks every option's value goes through, so the loop of each
+# function names its options and nothing else.
+
+orca_opt_value() { # value option what caller: exits 64 on a missing or option-like value
+  # The value is missing, or is the next option: either way the option has none.
+  [ -n "${1:-}" ] && [[ "$1" != -* ]] || {
+    printf 'lib-orca: %s: %s needs %s, got [%s]\n' "$4" "$2" "$3" "${1:-}" >&2
+    exit 64
+  }
+}
+
+orca_opt_count() { # value option what caller: exits 64 unless value is a positive integer
+  [[ "${1:-}" =~ ^[1-9][0-9]*$ ]] || {
+    printf 'lib-orca: %s: %s needs a positive integer of %s, got [%s]\n' "$4" "$2" "$3" "${1:-}" >&2
     exit 64
   }
 }
@@ -172,11 +195,7 @@ orca_terminal_wait() { # handle exit|tui-idle timeout_ms: waits once for the con
       exit 64
       ;;
   esac
-  if [ $# -lt 3 ] || ! [[ "$3" =~ ^[1-9][0-9]*$ ]]; then
-    printf 'lib-orca: terminal_wait: --timeout-ms needs a positive integer of milliseconds, got [%s]\n' \
-      "${3:-}" >&2
-    exit 64
-  fi
+  orca_opt_count "${3:-}" --timeout-ms milliseconds terminal_wait
   orca_run terminal wait --terminal "$1" --for "$2" --timeout-ms "$3" --json
 }
 
@@ -230,10 +249,7 @@ orca_terminal_read() { # handle [--screen] [--limit <positive integer>]: prints 
     case "$1" in
       --screen) screen=1; shift ;;
       --limit)
-        if [ $# -lt 2 ] || ! [[ "$2" =~ ^[1-9][0-9]*$ ]]; then
-          printf 'lib-orca: terminal_read: --limit needs a positive integer of lines, got [%s]\n' "${2:-}" >&2
-          exit 64
-        fi
+        orca_opt_count "${2:-}" --limit lines terminal_read
         limit=$2
         shift 2
         ;;
@@ -304,20 +320,12 @@ orca_orchestration_check() { # run_id [--take] [--types <type,...>] [--timeout-m
     case "$1" in
       --take) take=1; shift ;;
       --types)
-        if [ $# -lt 2 ] || [ -z "$2" ] || [[ "$2" == -* ]]; then
-          printf 'lib-orca: orchestration_check: --types needs a comma-separated list of message types, got [%s]\n' \
-            "${2:-}" >&2
-          exit 64
-        fi
+        orca_opt_value "${2:-}" --types 'a comma-separated list of message types' orchestration_check
         types=$2
         shift 2
         ;;
       --timeout-ms)
-        if [ $# -lt 2 ] || ! [[ "$2" =~ ^[1-9][0-9]*$ ]]; then
-          printf 'lib-orca: orchestration_check: --timeout-ms needs a positive integer of milliseconds, got [%s]\n' \
-            "${2:-}" >&2
-          exit 64
-        fi
+        orca_opt_count "${2:-}" --timeout-ms milliseconds orchestration_check
         timeout_ms=$2
         shift 2
         ;;
@@ -351,27 +359,17 @@ orca_orchestration_worker_start() { # run_id --terminal <handle> --spec-file <pa
         exit 64
         ;;
       --terminal)
-        if [ $# -lt 2 ] || [ -z "$2" ] || [[ "$2" == -* ]]; then
-          printf 'lib-orca: worker_start: --terminal needs a terminal handle, got [%s]\n' "${2:-}" >&2
-          exit 64
-        fi
+        orca_opt_value "${2:-}" --terminal 'a terminal handle' worker_start
         handle=$2
         shift 2
         ;;
       --spec-file)
-        if [ $# -lt 2 ] || [ -z "$2" ] || [[ "$2" == -* ]]; then
-          printf 'lib-orca: worker_start: --spec-file needs a file path, got [%s]\n' "${2:-}" >&2
-          exit 64
-        fi
+        orca_opt_value "${2:-}" --spec-file 'a file path' worker_start
         spec=$2
         shift 2
         ;;
       --timeout-ms)
-        if [ $# -lt 2 ] || ! [[ "$2" =~ ^[1-9][0-9]*$ ]]; then
-          printf 'lib-orca: worker_start: --timeout-ms needs a positive integer of milliseconds, got [%s]\n' \
-            "${2:-}" >&2
-          exit 64
-        fi
+        orca_opt_count "${2:-}" --timeout-ms milliseconds worker_start
         timeout_ms=$2
         shift 2
         ;;
@@ -414,51 +412,32 @@ orca_orchestration_worker_dispatch() { # run_id --worktree <path> --agent <slot>
         exit 64
         ;;
       --worktree)
-        if [ $# -lt 2 ] || [ -z "$2" ] || [[ "$2" == -* ]]; then
-          printf 'lib-orca: worker_dispatch: --worktree needs a worktree path, got [%s]\n' "${2:-}" >&2
-          exit 64
-        fi
+        orca_opt_value "${2:-}" --worktree 'a worktree path' worker_dispatch
         worktree=$2
         shift 2
         ;;
       --agent)
-        if [ $# -lt 2 ] || [ -z "$2" ] || [[ "$2" == -* ]]; then
-          printf 'lib-orca: worker_dispatch: --agent needs an agent slot, got [%s]\n' "${2:-}" >&2
-          exit 64
-        fi
+        orca_opt_value "${2:-}" --agent 'an agent slot' worker_dispatch
         agent=$2
         shift 2
         ;;
       --spec-file)
-        if [ $# -lt 2 ] || [ -z "$2" ] || [[ "$2" == -* ]]; then
-          printf 'lib-orca: worker_dispatch: --spec-file needs a file path, got [%s]\n' "${2:-}" >&2
-          exit 64
-        fi
+        orca_opt_value "${2:-}" --spec-file 'a file path' worker_dispatch
         spec=$2
         shift 2
         ;;
       --task)
-        if [ $# -lt 2 ] || [ -z "$2" ] || [[ "$2" == -* ]]; then
-          printf 'lib-orca: worker_dispatch: --task needs a Task id, got [%s]\n' "${2:-}" >&2
-          exit 64
-        fi
+        orca_opt_value "${2:-}" --task 'a Task id' worker_dispatch
         task=$2
         shift 2
         ;;
       --retry-of)
-        if [ $# -lt 2 ] || [ -z "$2" ] || [[ "$2" == -* ]]; then
-          printf 'lib-orca: worker_dispatch: --retry-of needs a dispatch id, got [%s]\n' "${2:-}" >&2
-          exit 64
-        fi
+        orca_opt_value "${2:-}" --retry-of 'a dispatch id' worker_dispatch
         retry_of=$2
         shift 2
         ;;
       --timeout-ms)
-        if [ $# -lt 2 ] || ! [[ "$2" =~ ^[1-9][0-9]*$ ]]; then
-          printf 'lib-orca: worker_dispatch: --timeout-ms needs a positive integer of milliseconds, got [%s]\n' \
-            "${2:-}" >&2
-          exit 64
-        fi
+        orca_opt_count "${2:-}" --timeout-ms milliseconds worker_dispatch
         timeout_ms=$2
         shift 2
         ;;
@@ -537,10 +516,7 @@ orca_orchestration_worker_list() { # [--cursor <cursor>]: prints one page of `wo
   while [ $# -gt 0 ]; do
     case "$1" in
       --cursor)
-        if [ $# -lt 2 ] || [ -z "$2" ] || [[ "$2" == -* ]]; then
-          printf 'lib-orca: worker_list: --cursor needs a cursor, got [%s]\n' "${2:-}" >&2
-          exit 64
-        fi
+        orca_opt_value "${2:-}" --cursor 'a cursor' worker_list
         cursor=$2
         shift 2
         ;;
