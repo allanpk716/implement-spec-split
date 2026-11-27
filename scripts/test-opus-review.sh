@@ -661,8 +661,8 @@ check "SKILL documents the Stage route" \
   bash -c "grep -Fq '/grill-router' '$HERE/../SKILL.md' && grep -Fq 'stage-route.sh' '$HERE/../SKILL.md'"
 check "find-next documents the Stage route" \
   bash -c "grep -Fq '/grill-router' '$HERE/../find-next/SKILL.md' && grep -Fq 'stage-route.sh' '$HERE/../find-next/SKILL.md'"
-check "SKILL tells the route lines of the reports" \
-  bash -c "grep -Fq 'two route lines' '$HERE/../SKILL.md' && grep -Fq '不适用' '$HERE/../SKILL.md'"
+check "SKILL tells the reports to paste verify's route table and check lines (票 #47)" \
+  bash -c "grep -Fq 'stage-dispatch.sh verify --run-dir <Spec Run root>' '$HERE/../SKILL.md' && grep -Fq '不适用' '$HERE/../SKILL.md'"
 for doc in SKILL.md find-next/SKILL.md; do
   check "$doc no longer names the /judgment-model command" \
     bash -c "! grep -Fq '/judgment-model' '$HERE/../$doc'"

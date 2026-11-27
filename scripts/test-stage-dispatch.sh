@@ -203,6 +203,12 @@ case "$command $subcommand" in
     fi
     ;;
   'terminal close') printf '%s\n' '{"ok":true,"result":{"ptyKilled":true}}' ;;
+  'terminal read')
+    # The rendered screen of the worker's TUI; a case sets its own through
+    # ORCA_TEST_READ_JSON, the default is a screen without a status line.
+    if [ -n "${ORCA_TEST_READ_JSON:-}" ]; then cat "$ORCA_TEST_READ_JSON"
+    else printf '%s\n' '{"ok":true,"result":{"terminal":{"handle":"term_impl","status":"running","source":"screen","tail":[]}}}'
+    fi ;;
   'orchestration worker-start')
     previous=
     for argument in "$@"; do
@@ -216,7 +222,15 @@ case "$command $subcommand" in
     fi
     ;;
   'orchestration worker-show')
-    if [ -n "${ORCA_TEST_SHOW_JSON:-}" ]; then cat "$ORCA_TEST_SHOW_JSON"; fi
+    # --full is the whole record (projection.provider is where Orca keeps the
+    # model it read off the worker's TUI); without it, the concise receipt.
+    full=0
+    for argument in "$@"; do [ "$argument" = --full ] && full=1; done
+    if [ "$full" = 1 ]; then
+      if [ -n "${ORCA_TEST_SHOW_FULL_JSON:-}" ]; then cat "$ORCA_TEST_SHOW_FULL_JSON"
+      else printf '%s\n' '{"ok":true,"result":{"worker":{"state":"succeeded","stage":"settled"},"projection":{"provider":null}}}'
+      fi
+    elif [ -n "${ORCA_TEST_SHOW_JSON:-}" ]; then cat "$ORCA_TEST_SHOW_JSON"; fi
     ;;
   'orchestration worker-release')
     printf '%s\n' '{"ok":true,"result":{"state":"released","processAction":"closed_agent_terminal"}}'
@@ -318,6 +332,7 @@ run_module() {
       ORCA_TEST_START_NO_DISPATCH="$ORCA_TEST_START_NO_DISPATCH" \
       ORCA_TEST_DISPATCH_ID="$ORCA_TEST_DISPATCH_ID" \
       ORCA_TEST_SHOW_JSON="$ORCA_TEST_SHOW_JSON" ORCA_TEST_CHECK_JSON="$ORCA_TEST_CHECK_JSON" \
+      ORCA_TEST_READ_JSON="$ORCA_TEST_READ_JSON" ORCA_TEST_SHOW_FULL_JSON="$ORCA_TEST_SHOW_FULL_JSON" \
       FAKE_TEST_EXIT="$FAKE_TEST_EXIT" \
       DISPATCH_TEST_FAKE_ROUTE_EXIT="$DISPATCH_TEST_FAKE_ROUTE_EXIT" \
       DISPATCH_TEST_FAKE_LAUNCHER="$DISPATCH_TEST_FAKE_LAUNCHER" \
@@ -330,11 +345,35 @@ run_module() {
   RUN_EXIT=$?
 }
 
+# write_screen <file> <model as the status line shows it> | '' — the rendered
+# screen `terminal read --screen --json` returns for a worker's TUI, in the
+# shape of a real one (Claude Code's status line `[<model>] │ <dir> git:(…)`
+# above the Context and permission lines, docs/orca-smoke-2026-11-27.md 2.1);
+# with no model the screen has no status line, as one whose TUI already left.
+write_screen() {
+  {
+    printf '%s\n' '{"ok":true,"result":{"terminal":{"handle":"term_impl","status":"running","source":"screen","truncated":false,"tail":['
+    printf '%s\n' '  "  ⏺ Done.",' '  "",'
+    [ -z "$2" ] || printf '%s\n' '  "  ['"$2"'] │ spec-26-t41 git:(spec-26-t41)",'
+    printf '%s\n' '  "  Context ░░░░ 0%",' '  "  ⏵⏵ bypass permissions on (shift+tab to cycle)"' ']}}}'
+  } > "$1"
+}
+
+# write_provider <file> <model> | '' — the full worker-show record with that
+# model in projection.provider (what Orca read off the TUI), or none.
+write_provider() {
+  local provider=null
+  [ -z "$2" ] || provider='{"id":"claude","model":"'"$2"'"}'
+  printf '%s\n' '{"ok":true,"result":{"worker":{"state":"succeeded","stage":"settled"},"projection":{"provider":'"$provider"'}}}' > "$1"
+}
+
 # Starts a case clean: empty logs, a fresh run dir and child worktree path
 # (nothing is deleted; each case gets its own), the default routes and every
 # knob back. The lean start is on by default, so a case that does not care
 # about it names a rules file that does not exist: its start is then a normal
-# one whether or not #39 has landed templates/lean-rules.md.
+# one whether or not #39 has landed templates/lean-rules.md. The worker's
+# screen shows the default route's model in its status line, as a live one
+# does; a case that needs another model, or none, writes its own screen.
 CASE_N=0
 fresh_case() {
   CASE_N=$((CASE_N + 1))
@@ -356,6 +395,9 @@ fresh_case() {
   ORCA_TEST_DISPATCH_ID=ctx_impl
   ORCA_TEST_SHOW_JSON=
   ORCA_TEST_CHECK_JSON=
+  write_screen "$WORK/screen-$CASE_N.json" 'glm-5.4[1m]'
+  ORCA_TEST_READ_JSON=$WORK/screen-$CASE_N.json
+  ORCA_TEST_SHOW_FULL_JSON=
   FAKE_TEST_EXIT=0
   DISPATCH_TEST_FAKE_ROUTE_EXIT=0
   DISPATCH_TEST_FAKE_LAUNCHER=claude
@@ -1247,7 +1289,7 @@ SIDECAR_50=$RUN_DIR/dispatch-implement-50.json
 run_module release --sidecar "$SIDECAR_50"
 expect_exit 0 'release exits 0 once the worker is done'
 SEQUENCE=$(orca_sequence)
-if [ "$SEQUENCE" = 'worker-show worker-release close rm ' ]; then
+if [ "$SEQUENCE" = 'worker-show read worker-release close rm ' ]; then
   record PASS 'Orca is called once each, in order: worker-show, worker-release, terminal close, worktree rm'
 else
   record FAIL 'Orca is called once each, in order: worker-show, worker-release, terminal close, worktree rm' "sequence=[$SEQUENCE]"
@@ -1289,7 +1331,7 @@ expect_json "$TICKET_WT_51/report.md" 'wait recorded the report where the worker
 run_module release --sidecar "$SIDECAR_51"
 expect_exit 0 'release of a report inside the child worktree exits 0'
 SEQUENCE=$(orca_sequence)
-if [ "$SEQUENCE" = 'worker-show worker-release close rm ' ]; then
+if [ "$SEQUENCE" = 'worker-show read worker-release close rm ' ]; then
   record PASS 'the copy is no Orca call: still worker-show, worker-release, terminal close, worktree rm'
 else
   record FAIL 'the copy is no Orca call: still worker-show, worker-release, terminal close, worktree rm' "sequence=[$SEQUENCE]"
@@ -1402,7 +1444,7 @@ run_module release --sidecar "$RUN_DIR/dispatch-implement-45.json"
 expect_exit 6 'a failing worker-release exits 6'
 expect_file_has 'orca orchestration worker-release failed' 'the worker-release failure is surfaced' "$RUN_STDERR"
 SEQUENCE=$(orca_sequence)
-if [ "$SEQUENCE" = 'worker-show worker-release ' ]; then
+if [ "$SEQUENCE" = 'worker-show read worker-release ' ]; then
   record PASS 'a failed release closes no terminal and removes no worktree'
 else
   record FAIL 'a failed release closes no terminal and removes no worktree' "sequence=[$SEQUENCE]"
@@ -1415,7 +1457,7 @@ run_module release --sidecar "$RUN_DIR/dispatch-implement-46.json"
 expect_exit 0 'a failing terminal close is a warning, not a failure'
 expect_file_has 'could not close terminal term_impl' 'the terminal left open is named' "$RUN_STDERR"
 SEQUENCE=$(orca_sequence)
-if [ "$SEQUENCE" = 'worker-show worker-release close rm ' ]; then
+if [ "$SEQUENCE" = 'worker-show read worker-release close rm ' ]; then
   record PASS 'the worktree is still removed after a failed close'
 else
   record FAIL 'the worktree is still removed after a failed close' "sequence=[$SEQUENCE]"
@@ -1440,7 +1482,7 @@ run_module wait --sidecar "$RUN_DIR/dispatch-fix-48.json" --timeout 1
 run_module release --sidecar "$RUN_DIR/dispatch-fix-48.json"
 expect_exit 0 'release of a fix role exits 0'
 SEQUENCE=$(orca_sequence)
-if [ "$SEQUENCE" = 'worker-show worker-release close ' ]; then
+if [ "$SEQUENCE" = 'worker-show read worker-release close ' ]; then
   record PASS 'a fix role is released and closed, and the Spec worktree is left alone'
 else
   record FAIL 'a fix role is released and closed, and the Spec worktree is left alone' "sequence=[$SEQUENCE]"
@@ -1482,6 +1524,280 @@ ORCA_TEST_START_NO_DISPATCH=0
 run_module release --sidecar "$RUN_DIR/dispatch-implement-49.json"
 expect_exit 64 'release of a dispatch that did not complete exits 64'
 expect_file_has 'no dispatch_id' 'the incomplete sidecar is named' "$RUN_STDERR"
+
+# --- verify: the route table, and the model each worker actually ran on ----------
+# (票 #47) Orca records no model for an adopted terminal (launch.effective.model
+# is null), so the module reads the model off the worker's TUI: the status line
+# of `terminal read --screen` first, then projection.provider of `worker-show
+# --full`; the reading is compared with the sidecar's route and recorded in the
+# sidecar as actual_model, which is what the reports read. A mismatch is a
+# warning on the line and on stderr, never a non-zero exit: it does not block
+# the landing. The route table is the real stage-route.sh reading this test's
+# own table, printed by its display command (the six stages).
+
+fresh_case
+set_route review=claude-glm/glm-5.4/medium
+run_module verify
+expect_exit 64 'verify without --run-dir exits 64'
+run_module verify --run-dir "$WORK/no-such-run-dir"
+expect_exit 64 'verify with a run directory that is not there exits 64'
+run_module verify --run-dir "$RUN_DIR" --sidecar "$WORK/not-json.json"
+expect_exit 64 'verify with an unknown argument exits 64'
+expect_file_without 'read' 'a usage error reads no screen' "$ORCA_LOG"
+
+# A worker still holding its terminal, its status line naming the route's
+# model (the [1m] form the GLM launchers pass): read once, recorded, 一致.
+ORCA_TEST_DISPATCH_ID=ctx_41
+dispatch_ticket 41
+: > "$ORCA_LOG"
+run_module verify --run-dir "$RUN_DIR"
+expect_exit 0 'verify exits 0 on a match'
+for text in '路由表（当前值）：' \
+  '编排（orchestration）：claude-flash / glm-5.3-flash / 启动器默认（锁定，不可改）' \
+  '讨论（design）：claude / opus / high（默认）' \
+  '调研起草（research）：codex-glm / glm-5.4 / high（默认）' \
+  '实现（implementation）：claude-glm / glm-5.4 / high（默认）' \
+  '审查（review）：claude-glm / glm-5.4 / medium，不会自动切回；切回用 /grill-router use review=claude/opus/high' \
+  '诊断（diagnosis）：claude / opus / high（默认）' \
+  '核对（派发 → 路由模型 / 实际模型 / 结论）：' \
+  '实现 #41 → glm-5.4 / glm-5.4[1m] / 一致'; do
+  expect_file_has "$text" "verify prints [$text]" "$RUN_STDOUT"
+done
+SEQUENCE=$(orca_sequence)
+if [ "$SEQUENCE" = 'read ' ]; then
+  record PASS 'a status line on the screen is enough: one Orca call, the screen read'
+else
+  record FAIL 'a status line on the screen is enough: one Orca call, the screen read' "sequence=[$SEQUENCE]"
+fi
+expect_file_has 'ARG --screen' 'the screen, not the accumulated stream, is what is read' "$ORCA_LOG"
+expect_file_has 'ARG term_impl' "the screen read is the sidecar's terminal" "$ORCA_LOG"
+expect_json 'glm-5.4[1m]' 'the reading is recorded in the sidecar as the model the status line showed' \
+  "$RUN_DIR/dispatch-implement-41.json" actual_model.model
+expect_json status-line 'the sidecar names where the reading came from' "$RUN_DIR/dispatch-implement-41.json" actual_model.source
+if [ -n "$(json_field "$RUN_DIR/dispatch-implement-41.json" actual_model.checked_at)" ]; then
+  record PASS 'the sidecar records when the reading was taken'
+else
+  record FAIL 'the sidecar records when the reading was taken'
+fi
+expect_file_without '不符' 'a match warns of nothing' "$RUN_STDERR"
+
+# A worker whose TUI runs another model than its route: 警告 on the line and on
+# stderr, the reading recorded all the same, and exit 0: it never blocks.
+ORCA_TEST_DISPATCH_ID=ctx_42
+dispatch_ticket 42
+write_screen "$WORK/screen-opus.json" 'opus'
+ORCA_TEST_READ_JSON=$WORK/screen-opus.json
+: > "$ORCA_LOG"
+run_module verify --run-dir "$RUN_DIR"
+expect_exit 0 'verify exits 0 on a mismatch'
+expect_file_has '实现 #42 → glm-5.4 / opus / 警告：实际模型 opus 与路由 glm-5.4 不符' \
+  'a mismatch is a warning naming both models' "$RUN_STDOUT"
+expect_file_has '实现 #41 → glm-5.4 / glm-5.4[1m] / 一致' 'the earlier dispatch keeps its recorded reading' "$RUN_STDOUT"
+expect_file_has '实际模型 opus 与路由 glm-5.4 不符' 'the mismatch is warned on stderr too' "$RUN_STDERR"
+expect_file_has '不拦落地' 'the stderr warning says it blocks nothing' "$RUN_STDERR"
+expect_json opus 'the mismatching model is recorded as read' "$RUN_DIR/dispatch-implement-42.json" actual_model.model
+READ_CALLS=$(grep -c '^read$' "$ORCA_LOG")
+if [ "$READ_CALLS" = 1 ]; then
+  record PASS 'the first dispatch is not read again: its record stands'
+else
+  record FAIL 'the first dispatch is not read again: its record stands' "reads=$READ_CALLS"
+fi
+
+# No status line on the screen (the TUI already left, say) and Orca's full
+# record names the provider: that is the reading, and the verdict is 一致.
+ORCA_TEST_DISPATCH_ID=ctx_43
+dispatch_ticket 43
+write_screen "$WORK/screen-none.json" ''
+ORCA_TEST_READ_JSON=$WORK/screen-none.json
+write_provider "$WORK/provider-glm.json" 'glm-5.4'
+ORCA_TEST_SHOW_FULL_JSON=$WORK/provider-glm.json
+: > "$ORCA_LOG"
+run_module verify --run-dir "$RUN_DIR"
+expect_exit 0 'verify exits 0 when the reading comes from the provider'
+expect_file_has '实现 #43 → glm-5.4 / glm-5.4 / 一致' 'a provider naming the route model reads as 一致' "$RUN_STDOUT"
+SEQUENCE=$(orca_sequence)
+if [ "$SEQUENCE" = 'read worker-show ' ]; then
+  record PASS 'the screen is read first, the full record second'
+else
+  record FAIL 'the screen is read first, the full record second' "sequence=[$SEQUENCE]"
+fi
+expect_file_has 'ARG --full' 'the second look is the full worker-show record' "$ORCA_LOG"
+expect_json glm-5.4 'the provider model is recorded' "$RUN_DIR/dispatch-implement-43.json" actual_model.model
+expect_json provider 'the sidecar says the reading came from the provider' "$RUN_DIR/dispatch-implement-43.json" actual_model.source
+
+# Neither names a model: 无法核对 with the reason, exit 0, the note recorded.
+ORCA_TEST_DISPATCH_ID=ctx_44
+dispatch_ticket 44
+ORCA_TEST_SHOW_FULL_JSON=
+: > "$ORCA_LOG"
+run_module verify --run-dir "$RUN_DIR"
+expect_exit 0 'verify exits 0 when no model can be read'
+expect_file_has '实现 #44 → glm-5.4 / ? / 无法核对：没读到终端状态行，worker-show --full 也没有 provider' \
+  'a worker whose model cannot be read is 无法核对, with the reason' "$RUN_STDOUT"
+expect_file_without '实现 #44 → glm-5.4 / ? / 无法核对：派发没完成' 'a dispatch that completed is not called incomplete' "$RUN_STDOUT"
+if json_field "$RUN_DIR/dispatch-implement-44.json" actual_model.model >/dev/null; then
+  record FAIL 'no model is recorded for a worker whose model could not be read'
+else
+  record PASS 'no model is recorded for a worker whose model could not be read'
+fi
+expect_file_has '没读到终端状态行' 'the sidecar keeps the reason' "$RUN_DIR/dispatch-implement-44.json"
+
+# An Orca that cannot read the screen at all is the same verdict, not a failure.
+ORCA_TEST_DISPATCH_ID=ctx_45
+dispatch_ticket 45
+ORCA_TEST_FAIL='terminal read'
+: > "$ORCA_LOG"
+run_module verify --run-dir "$RUN_DIR"
+expect_exit 0 'verify exits 0 when the screen read fails'
+expect_file_has '实现 #45 → glm-5.4 / ? / 无法核对' 'a failed screen read is 无法核对' "$RUN_STDOUT"
+expect_file_has 'could not read the screen of terminal term_impl: fake orca: terminal read failed' \
+  "Orca's own error is passed through on stderr" "$RUN_STDERR"
+ORCA_TEST_FAIL=
+
+# --- release takes the reading before the terminal goes ------------------------------
+# The evidence lives only while the terminal does, so release reads the model
+# before worker-release and the terminal close, records it, and goes on
+# whatever it read. A later verify then reads the record and asks Orca nothing.
+# A run directory of its own, so that what verify asks Orca is about these
+# dispatches alone.
+RUN_DIR=$WORK/runs/release-$CASE_N
+mkdir -p "$RUN_DIR"
+
+write_show "$WORK/show-settled.json" succeeded settled
+ORCA_TEST_SHOW_JSON=$WORK/show-settled.json
+ORCA_TEST_READ_JSON=$WORK/screen-$CASE_N.json
+ORCA_TEST_SHOW_FULL_JSON=
+ORCA_TEST_DISPATCH_ID=ctx_50
+finished_ticket 50
+SIDECAR_50=$RUN_DIR/dispatch-implement-50.json
+: > "$ORCA_LOG"
+run_module release --sidecar "$SIDECAR_50"
+expect_exit 0 'release of a worker whose TUI named the route model exits 0'
+SEQUENCE=$(orca_sequence)
+if [ "$SEQUENCE" = 'worker-show read worker-release close rm ' ]; then
+  record PASS 'the reading is taken after the settled check and before anything is released'
+else
+  record FAIL 'the reading is taken after the settled check and before anything is released' "sequence=[$SEQUENCE]"
+fi
+expect_json 'glm-5.4[1m]' 'release records the model the status line showed' "$SIDECAR_50" actual_model.model
+expect_json status-line 'release records where the reading came from' "$SIDECAR_50" actual_model.source
+: > "$ORCA_LOG"
+run_module verify --run-dir "$RUN_DIR"
+expect_exit 0 'verify after the release exits 0'
+expect_file_has '实现 #50 → glm-5.4 / glm-5.4[1m] / 一致' 'a released dispatch reads as its record says' "$RUN_STDOUT"
+READ_CALLS=$(grep -c '^read$' "$ORCA_LOG")
+SHOW_FULL_CALLS=$(grep -c '^ARG --full$' "$ORCA_LOG")
+if [ "$READ_CALLS" -eq 0 ] && [ "$SHOW_FULL_CALLS" -eq 0 ]; then
+  record PASS 'a released dispatch is not read again: verify asks Orca nothing for it'
+else
+  record FAIL 'a released dispatch is not read again: verify asks Orca nothing for it' "reads=$READ_CALLS full=$SHOW_FULL_CALLS"
+fi
+
+# The TUI already left and the screen has no status line: the full record's
+# provider is the reading, and release still goes on to the end.
+ORCA_TEST_DISPATCH_ID=ctx_51
+finished_ticket 51
+SIDECAR_51=$RUN_DIR/dispatch-implement-51.json
+ORCA_TEST_READ_JSON=$WORK/screen-none.json
+write_provider "$WORK/provider-glm-51.json" 'glm-5.4'
+ORCA_TEST_SHOW_FULL_JSON=$WORK/provider-glm-51.json
+: > "$ORCA_LOG"
+run_module release --sidecar "$SIDECAR_51"
+expect_exit 0 'release of a worker read through the provider exits 0'
+SEQUENCE=$(orca_sequence)
+if [ "$SEQUENCE" = 'worker-show read worker-show worker-release close rm ' ]; then
+  record PASS 'a screen without a status line is followed by the full record, before the release'
+else
+  record FAIL 'a screen without a status line is followed by the full record, before the release' "sequence=[$SEQUENCE]"
+fi
+expect_json glm-5.4 'release records the provider model' "$SIDECAR_51" actual_model.model
+expect_json provider 'release records that it came from the provider' "$SIDECAR_51" actual_model.source
+expect_stdout "released ctx_51 ($WORK/wt/case-$CASE_N/spec-26-t51 removed)" 'the release itself is unchanged'
+
+# Neither names a model: release records why and releases all the same.
+ORCA_TEST_DISPATCH_ID=ctx_52
+finished_ticket 52
+SIDECAR_52=$RUN_DIR/dispatch-implement-52.json
+ORCA_TEST_SHOW_FULL_JSON=
+: > "$ORCA_LOG"
+run_module release --sidecar "$SIDECAR_52"
+expect_exit 0 'release of a worker whose model cannot be read exits 0'
+expect_stdout "released ctx_52 ($WORK/wt/case-$CASE_N/spec-26-t52 removed)" 'a worker nobody could read the model of is released all the same'
+expect_file_has '没读到终端状态行' 'the sidecar keeps the reason no model was read' "$SIDECAR_52"
+: > "$ORCA_LOG"
+run_module verify --run-dir "$RUN_DIR"
+expect_exit 0 'verify exits 0 for a released dispatch without a reading'
+expect_file_has '实现 #52 → glm-5.4 / ? / 无法核对：没读到终端状态行，worker-show --full 也没有 provider' \
+  'a released dispatch without a reading is 无法核对, with the recorded reason' "$RUN_STDOUT"
+if [ -s "$ORCA_LOG" ]; then
+  record FAIL 'a released dispatch without a reading is not read from a terminal that is gone' "log=$(cat "$ORCA_LOG")"
+else
+  record PASS 'a released dispatch without a reading is not read from a terminal that is gone'
+fi
+
+# A worker that ran the wrong model is released too: the mismatch is a
+# warning the report carries, never a refusal.
+ORCA_TEST_DISPATCH_ID=ctx_53
+finished_ticket 53
+SIDECAR_53=$RUN_DIR/dispatch-implement-53.json
+ORCA_TEST_READ_JSON=$WORK/screen-opus.json
+: > "$ORCA_LOG"
+run_module release --sidecar "$SIDECAR_53"
+expect_exit 0 'release of a worker that ran the wrong model exits 0'
+expect_stdout "released ctx_53 ($WORK/wt/case-$CASE_N/spec-26-t53 removed)" 'the mismatching worker is released'
+expect_json opus 'the mismatching model is recorded at release' "$SIDECAR_53" actual_model.model
+run_module verify --run-dir "$RUN_DIR"
+expect_exit 0 'verify exits 0 with a released mismatch in the Run'
+expect_file_has '实现 #53 → glm-5.4 / opus / 警告：实际模型 opus 与路由 glm-5.4 不符' 'the released mismatch is a warning' "$RUN_STDOUT"
+expect_file_without '实现 #53 → glm-5.4 / ? / 无法核对' 'a mismatch is not 无法核对' "$RUN_STDOUT"
+ORCA_TEST_READ_JSON=$WORK/screen-$CASE_N.json
+
+# A dispatch that did not complete has no worker to read.
+ORCA_TEST_START_NO_DISPATCH=1
+dispatch_ticket 54
+ORCA_TEST_START_NO_DISPATCH=0
+: > "$ORCA_LOG"
+run_module verify --run-dir "$RUN_DIR"
+expect_exit 0 'verify exits 0 with an incomplete dispatch in the Run'
+expect_file_has '实现 #54 → glm-5.4 / ? / 无法核对：派发没完成' 'an incomplete dispatch is 无法核对, and says so' "$RUN_STDOUT"
+if grep -q '^read$' "$ORCA_LOG"; then
+  record FAIL 'an incomplete dispatch reads no screen'
+else
+  record PASS 'an incomplete dispatch reads no screen'
+fi
+
+# A second attempt is told apart on its line; a headless dispatch has no line.
+ORCA_TEST_DISPATCH_ID=ctx_41b
+dispatch_ticket 41 --attempt 2
+: > "$ORCA_LOG"
+run_module verify --run-dir "$RUN_DIR"
+expect_exit 0 'verify exits 0 with a second attempt in the Run'
+expect_file_has '实现 #41（第 2 次） → glm-5.4 / glm-5.4[1m] / 一致' 'a second attempt names its attempt' "$RUN_STDOUT"
+run_module dispatch --stage research --brief "$WORK/brief-41.md" --run-dir "$RUN_DIR" --ticket 55 --cwd "$SPEC_WT"
+expect_exit 0 'a headless dispatch into the same run dir exits 0'
+run_module verify --run-dir "$RUN_DIR"
+expect_exit 0 'verify exits 0 with a headless dispatch in the Run'
+expect_file_without '调研起草 #55' 'a headless dispatch gets no check line: its route is on its own result' "$RUN_STDOUT"
+expect_file_without 'dispatch-research' 'no sidecar name leaks into the check lines' "$RUN_STDOUT"
+
+# A route table that cannot be read is one line, not the end of the check.
+STAGE_DISPATCH_STAGE_ROUTE=$WORK/fake-stage-route.sh
+DISPATCH_TEST_FAKE_ROUTE_EXIT=66
+run_module verify --run-dir "$RUN_DIR"
+expect_exit 0 'verify exits 0 when the route table cannot be read'
+expect_file_has '路由表（当前值）：' 'the route table section is there all the same' "$RUN_STDOUT"
+expect_file_has '（读取失败：fake stage-route: cannot read the route）' 'the unreadable table is one line with its error' "$RUN_STDOUT"
+expect_file_has '实现 #50 → glm-5.4 / glm-5.4[1m] / 一致' 'the check lines follow an unreadable table' "$RUN_STDOUT"
+DISPATCH_TEST_FAKE_ROUTE_EXIT=0
+STAGE_DISPATCH_STAGE_ROUTE=$ROOT/scripts/stage-route.sh
+
+# A run directory with no dispatch at all still prints both sections.
+EMPTY_RUN=$WORK/runs/empty-$CASE_N
+mkdir -p "$EMPTY_RUN"
+run_module verify --run-dir "$EMPTY_RUN"
+expect_exit 0 'verify exits 0 on an empty run directory'
+expect_file_has '（本次 Run 没有派发 Orca worker）' 'an empty run directory says so under the check heading' "$RUN_STDOUT"
+expect_file_has '实现（implementation）：claude-glm / glm-5.4 / high（默认）' 'an empty run directory still prints the table' "$RUN_STDOUT"
 
 # --- headless stages: handed to the executors that read the table -------------------
 
@@ -1655,12 +1971,15 @@ HEADER=$WORK/header.txt
 sed -n '1,/^set -u$/p' "$SCRIPT" > "$HEADER"
 for text in 'Usage:' 'stage-dispatch.sh dispatch --stage implementation' \
   'stage-dispatch.sh wait --sidecar <file>' 'stage-dispatch.sh release --sidecar <file>' \
+  'stage-dispatch.sh verify --run-dir <dir>' \
   'Exit codes:' '2  release refused' '5  the wait timed out' '6  a prerequisite is missing' \
   '7  the wait returned on another dispatch' '8  the wait took mail' '64 bad usage' \
-  'Sidecar fields:' 'dispatch_id' 'terminal' 'worktree' 'route' 'bare_note' \
+  'Sidecar fields:' 'dispatch_id' 'terminal' 'worktree' 'route' 'bare_note' 'actual_model' \
   'ISS_DISPATCH_BARE is the' '--append-system-prompt-file' '--mcp-config' \
   'merge role never starts lean' 'exits 8 before reporting anything else' \
-  'report-from-worktree.md' 'worker_done' '--delete-branch' 'Test hooks:'; do
+  'report-from-worktree.md' 'worker_done' '--delete-branch' 'Test hooks:' \
+  'verify, for the reports' 'terminal read --screen' 'projection.provider' \
+  'release takes the reading before' 'verify exits 0 whatever' 'The effort is not verified'; do
   expect_file_has "$text" "header documents [$text]" "$HEADER"
 done
 run_module --help
