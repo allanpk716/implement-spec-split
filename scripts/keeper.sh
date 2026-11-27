@@ -573,9 +573,10 @@ report_info() { # spec number -> kind<US>id<US>url<US>category<US>recover_at<US>
 # the liveness Orca reports for the worker in the Spec worktree.
 
 # The workers Orca lists in one worktree, out of one page of worker-list read
-# from stdin: a line `dispatch<TAB>liveness<TAB>terminal<TAB>terminalState` per
-# worker, then `cursor<TAB><nextCursor>` (empty on the last page). The worktree
-# is compared by real path: Orca writes the canonical one, git may not.
+# from stdin: the dispatch id of each, one per line, then `cursor<TAB><nextCursor>`
+# (empty on the last page). Only the ids: the liveness of each is taken from
+# worker-show, never from the list. The worktree is compared by real path: Orca
+# writes the canonical one, git may not.
 workers_in_page() { # worktree
   WORKTREE_WANT=$1 node -e '
     const fs = require("fs");
@@ -591,16 +592,17 @@ workers_in_page() { # worktree
       const workspace = String(worker.workspace || "");
       const cut = workspace.indexOf("::");
       if (real(cut >= 0 ? workspace.slice(cut + 2) : workspace) !== wanted) continue;
-      rows.push([String(worker.dispatchId), String(worker.liveness || ""), String(worker.terminal || ""),
-        String(worker.terminalState || "")].join("\t"));
+      rows.push(String(worker.dispatchId));
     }
     rows.push("cursor\t" + (result.nextCursor == null ? "" : String(result.nextCursor)));
     process.stdout.write(rows.join("\n") + "\n");
   '
 }
 
-# The three fields of a worker-show receipt keeper acts on.
-worker_show_fields() { # stdin: worker-show --json -> liveness<TAB>terminal<TAB>terminalState
+# The three fields of a worker-show receipt keeper acts on, joined with the
+# unit separator: a tab would not do, since read folds runs of it and the
+# terminal is empty for a terminal Orca has already released.
+worker_show_fields() { # stdin: worker-show --json -> liveness<US>terminal<US>terminalState
   node -e '
     const fs = require("fs");
     let value;
@@ -608,7 +610,7 @@ worker_show_fields() { # stdin: worker-show --json -> liveness<TAB>terminal<TAB>
     const result = value && value.result && typeof value.result === "object" ? value.result : null;
     if (!result) process.exit(2);
     process.stdout.write([String(result.liveness || ""), String(result.terminal || ""),
-      String(result.terminalState || "")].join("\t"));
+      String(result.terminalState || "")].join("\x1f"));
   '
 }
 
@@ -648,7 +650,7 @@ worker_liveness() { # worktree -> verdict<US>key<US>evidence<US>terminals
     while IFS= read -r line; do
       case "$line" in
         cursor$'\t'*) next=${line#cursor$'\t'} ;;
-        *) dispatches+=("${line%%$'\t'*}") ;;
+        *) dispatches+=("$line") ;;
       esac
     done <<<"$rows"
     [ -n "$next" ] || break
@@ -671,7 +673,7 @@ worker_liveness() { # worktree -> verdict<US>key<US>evidence<US>terminals
       evidence="${evidence}liveness=unknown dispatch=${dispatch}（worker-show 失败：$(head -n 1 "$WORK/worker-show.err" 2>/dev/null)）; "
       continue
     fi
-    IFS=$'\t' read -r liveness terminal state <<<"$fields"
+    IFS=$'\x1f' read -r liveness terminal state <<<"$fields"
     evidence="${evidence}liveness=${liveness:-unknown} dispatch=$dispatch; "
     case "$liveness" in
       live)

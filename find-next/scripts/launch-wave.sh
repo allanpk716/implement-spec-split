@@ -39,10 +39,13 @@
 #   cannot tell -> parked: nothing is stopped or redispatched, one line
 #        `#<n> 停车：<reason>` carries what the terminal showed, the Run and
 #        the dispatch, and the command to restart the Spec with;
-#   the retry did not start either -> parked the same way.
-# A parked Spec whose process is known to have exited gets its reservation
-# released, as a failed launch does; otherwise the reservation is left to
-# expire, so that a session that is merely slow is not started twice.
+#   the retry did not start either -> parked the same way: a retry that exited
+#        parks at once; a retry that sits idle is stopped first (the evidence
+#        is the first dispatch's), and parks once Orca confirms the stop.
+# A parked Spec whose process is known to have exited, or whose idle session
+# Orca confirmed stopped, gets its reservation released, as a failed launch
+# does; otherwise the reservation is left to expire, so that a session that is
+# merely slow is not started twice.
 #
 # Each --apply that dispatches anything creates one Orca Run for the wave,
 # prints it and records it in the launch state (a run with nothing to launch
@@ -113,8 +116,9 @@ one Spec never delays the dispatch of another. When the wait runs out the
 terminal is read first: a session that never started is stopped and retried
 once (--retry-of); one that is working gets the wait extended, no later than
 its reservation expires, and is then reported rather than failed, a retry
-included; anything else, and a retry that does not start either, parks the
-Spec with `#<n> 停车：…` and the command to restart it.
+included; anything else, and a retry that does not start either (stopped
+first, when it sits idle), parks the Spec with `#<n> 停车：…` and the command
+to restart it.
 Spec sessions launched here are unattended by default: every generated command
 ends with --auto-land, and --apply records auto_land: true. --no-auto-land opts
 this batch out (commands omit --auto-land, the state records auto_land:
@@ -599,6 +603,26 @@ json_field() { # json field
   '
 }
 
+# Reads a worker-start receipt (first dispatch or retry alike): the dispatch,
+# Task and terminal it names go to RECEIPT_DISPATCH, RECEIPT_TASK and
+# RECEIPT_TERMINAL. Returns 1, with RECEIPT_ERROR saying why in one line, when
+# the call exited with the given status or the receipt lacks any of the three;
+# what happens then is the caller's (a failed launch, or a parked retry).
+read_receipt() { # out_file err_file status
+  local out=$1 err_file=$2 status=$3 receipt
+  RECEIPT_DISPATCH= RECEIPT_TASK= RECEIPT_TERMINAL= RECEIPT_ERROR=
+  receipt=$(cat "$out" 2>/dev/null)
+  RECEIPT_DISPATCH=$(json_field "$receipt" dispatchId)
+  RECEIPT_TASK=$(json_field "$receipt" taskId)
+  RECEIPT_TERMINAL=$(json_field "$receipt" terminal)
+  if [ "$status" -eq 0 ] && [ -n "$RECEIPT_DISPATCH" ] && [ -n "$RECEIPT_TASK" ] && [ -n "$RECEIPT_TERMINAL" ]; then
+    return 0
+  fi
+  RECEIPT_ERROR=$(first_error_line "$err_file" "$out")
+  [ -n "$RECEIPT_ERROR" ] || RECEIPT_ERROR="worker-start 没有返回 dispatch（退出码 ${status}）"
+  return 1
+}
+
 run_out=$(mktemp "${TMPDIR:-/tmp}/launch-wave-out.XXXXXX") || die "could not create a temporary output file"
 run_err=$(mktemp "${TMPDIR:-/tmp}/launch-wave-err.XXXXXX") || die "could not create a temporary error file"
 LOCK_HELD=0
@@ -871,7 +895,7 @@ reserve_failed_reason() { # reserve_output err_file status
 dispatch_spec() { # kind spec command worktree
   local kind=$1 spec=$2 command=$3 worktree=$4
   local reserve_output reserve_status reason= resume_worktree created=''
-  local receipt= receipt_status=0 dispatch task terminal path err
+  local receipt_status=0 path err
   local spec_file=$DISPATCH_DIR/spec-$spec.md err_file=$DISPATCH_DIR/spec-$spec.err
   local create_out=$DISPATCH_DIR/spec-$spec.create.out
   local dispatch_out=$DISPATCH_DIR/spec-$spec.dispatch.out
@@ -933,18 +957,12 @@ dispatch_spec() { # kind spec command worktree
   orca_orchestration_worker_dispatch "$RUN_ID" --worktree "$path" --agent "$AGENT" \
     --spec-file "$spec_file" --timeout-ms "$START_TIMEOUT_MS" \
     < /dev/null > "$dispatch_out" 2> "$err_file" || receipt_status=$?
-  receipt=$(cat "$dispatch_out" 2>/dev/null)
-  dispatch=$(json_field "$receipt" dispatchId)
-  task=$(json_field "$receipt" taskId)
-  terminal=$(json_field "$receipt" terminal)
-  if [ "$receipt_status" -ne 0 ] || [ -z "$dispatch" ] || [ -z "$task" ] || [ -z "$terminal" ]; then
-    err=$(first_error_line "$err_file" "$dispatch_out")
-    [ -n "$err" ] || err="worker-start 没有返回 dispatch（退出码 ${receipt_status}）"
+  if ! read_receipt "$dispatch_out" "$err_file" "$receipt_status"; then
     abandon_launch "$spec" "$kind" "$created"
-    write_result "$spec" failed "#$spec 启动失败：$(one_line "$err")"
+    write_result "$spec" failed "#$spec 启动失败：$(one_line "$RECEIPT_ERROR")"
     return
   fi
-  write_result "$spec" pending '' "$dispatch" "$task" "$terminal" "$path" "$kind" "$command"
+  write_result "$spec" pending '' "$RECEIPT_DISPATCH" "$RECEIPT_TASK" "$RECEIPT_TERMINAL" "$path" "$kind" "$command"
 }
 
 # Every Spec is dispatched before any claim is waited for, each in its own
@@ -1070,9 +1088,10 @@ NODE
 }
 
 # A parked Spec: nothing more is started for it here. release=1 only when its
-# process is known to have exited; otherwise the reservation is left to expire
-# so that a session that is merely slow is not started twice. Either way the
-# lines name what was seen, the Run and the dispatch, and how to restart.
+# process is known to have exited, or its idle session was confirmed stopped by
+# Orca; otherwise the reservation is left to expire so that a session that is
+# merely slow is not started twice. Either way the lines name what was seen,
+# the Run and the dispatch, and how to restart.
 park_spec() { # spec reason dispatch path command release
   local spec=$1 reason=$2 dispatch=$3 path=$4 command=$5 restart
   if [ "$6" = 1 ]; then
@@ -1093,21 +1112,33 @@ TIMEOUT_ENTRY=
 handle_timeout() { # spec dispatch task terminal path attempts kind command now
   TIMEOUT_ENTRY=
   local spec=$1 dispatch=$2 task=$3 terminal=$4 path=$5 attempts=$6 kind=$7 command=$8 now=$9
-  local verdict note receipt= receipt_status=0 new_dispatch new_task new_terminal until cap_deadline err
+  local verdict note receipt_status=0 until cap_deadline
   local retry_out=$DISPATCH_DIR/spec-$spec.retry.out retry_err=$DISPATCH_DIR/spec-$spec.retry.err
   local stop_out=$DISPATCH_DIR/spec-$spec.stop.out
   terminal_verdict "$terminal" "$spec"
   verdict=$VERDICT
   note=$TERMINAL_NOTE
 
-  # A retry that did not start either (it exited again, or sits idle again)
-  # is the end of the road. A retry whose terminal is working gets the same
-  # extended wait as the first dispatch did, and the same report at the cap:
-  # "still failing after the retry" means it still did not claim, not that
-  # its terminal is busy.
+  # A retry that did not start either is the end of the road: one that exited
+  # parks at once; one that sits idle is stopped on the same evidence as the
+  # first time (a TUI up without the spec) and parks once Orca confirms the
+  # stop, reservation released, so that --only runs again at once and no idle
+  # TUI is left holding the slot. A retry whose terminal is working gets the
+  # same extended wait as the first dispatch did, and the same report at the
+  # cap: "still failing after the retry" means it still did not claim, not
+  # that its terminal is busy.
   if [ "$verdict" != moving ] && [ "$attempts" -ge 2 ]; then
-    park_spec "$spec" "重派后仍未认领（终端 ${note}）" "$dispatch" "$path" "$command" \
-      "$([ "$verdict" = exited ] && printf 1 || printf 0)"
+    if [ "$verdict" = not_started ]; then
+      if orca_orchestration_worker_stop "$dispatch" > "$stop_out" 2> "$run_err"; then
+        park_spec "$spec" "重派后仍没开始，已停掉（终端 ${note}）" "$dispatch" "$path" "$command" 1
+      else
+        park_spec "$spec" "重派后仍没开始，要停掉但无法确认原会话已停（worker-stop：$(one_line "$(first_error_line "$run_err" "$stop_out")")；终端 ${note}）" \
+          "$dispatch" "$path" "$command" 0
+      fi
+    else
+      park_spec "$spec" "重派后仍未认领（终端 ${note}）" "$dispatch" "$path" "$command" \
+        "$([ "$verdict" = exited ] && printf 1 || printf 0)"
+    fi
     return
   fi
 
@@ -1127,19 +1158,13 @@ handle_timeout() { # spec dispatch task terminal path attempts kind command now
       orca_orchestration_worker_dispatch "$RUN_ID" --worktree "$path" --agent "$AGENT" \
         --task "$task" --retry-of "$dispatch" --timeout-ms "$START_TIMEOUT_MS" \
         < /dev/null > "$retry_out" 2> "$retry_err" || receipt_status=$?
-      receipt=$(cat "$retry_out" 2>/dev/null)
-      new_dispatch=$(json_field "$receipt" dispatchId)
-      new_task=$(json_field "$receipt" taskId)
-      new_terminal=$(json_field "$receipt" terminal)
-      if [ "$receipt_status" -ne 0 ] || [ -z "$new_dispatch" ] || [ -z "$new_task" ] || [ -z "$new_terminal" ]; then
-        err=$(first_error_line "$retry_err" "$retry_out")
-        [ -n "$err" ] || err="worker-start 没有返回 dispatch（退出码 ${receipt_status}）"
-        park_spec "$spec" "确认没开始（终端 ${note}），停掉后重派失败：$(one_line "$err")" \
+      if ! read_receipt "$retry_out" "$retry_err" "$receipt_status"; then
+        park_spec "$spec" "确认没开始（终端 ${note}），停掉后重派失败：$(one_line "$RECEIPT_ERROR")" \
           "$dispatch" "$path" "$command" 1
         return
       fi
-      printf '#%s 没开始（%s），已停掉并重派一次（dispatch %s）。\n' "$spec" "$note" "$new_dispatch"
-      TIMEOUT_ENTRY="$spec$US$new_dispatch$US$new_task$US$new_terminal$US$path${US}2$US$kind$US$command$US$(( $(now_epoch) + CLAIM_WAIT ))"
+      printf '#%s 没开始（%s），已停掉并重派一次（dispatch %s）。\n' "$spec" "$note" "$RECEIPT_DISPATCH"
+      TIMEOUT_ENTRY="$spec$US$RECEIPT_DISPATCH$US$RECEIPT_TASK$US$RECEIPT_TERMINAL$US$path${US}2$US$kind$US$command$US$(( $(now_epoch) + CLAIM_WAIT ))"
       ;;
     moving)
       until=$(claim_record_field "$spec" handoff_until_epoch)

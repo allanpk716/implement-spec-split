@@ -199,3 +199,11 @@ _Avoid_: retry (that is the wrapper re-sending after an API error), re-brief
 **Brief**:
 The self-contained task description handed to an External worker, made of context pointers rather than copied content.
 _Avoid_: prompt
+
+**Lean start (精简启动)**:
+Starting an implementation worker (a Ticket's implementation, fix or merge role, dispatched by `scripts/stage-dispatch.sh` on the implementation Stage route) with the Launcher profile's `--bare`: no CLAUDE.md, skills, plugins or hooks are loaded; the rules it must follow come from a rules file injected as a system prompt (`--append-system-prompt-file`, the file named by `ISS_DISPATCH_LEAN_RULES`, default `templates/lean-rules.md`) and the MCP servers it needs from `--mcp-config`, which takes a trivial task from 18.6K to 1.2K input tokens (ADR 0004). It is the default; without the rules file the start is a normal one, `ISS_DISPATCH_BARE` (0, off, no or false) turns it off, and the dispatch's Sidecar records which it was (`bare`, `bare_note`).
+_Avoid_: 精简开关 as the name of the start (the switch is only the opt-out), bare mode
+
+**Sidecar**:
+The JSON file `<run dir>/dispatch-<name>.json` that `scripts/stage-dispatch.sh` writes for one dispatch and keeps current as the dispatch lives: the Stage route it took, the worktree, terminal and Orca dispatch id it got, whether the start was a Lean start and why not when it was not, the worker_done once `wait` recorded it (with the report path), and the release time. It lives in the Spec's run directory, outside every worktree, so that `release` removing the child worktree loses none of it; a report the worker wrote inside that worktree is copied out next to the sidecar first (`report-from-worktree.md`).
+_Avoid_: dispatch record, dispatch state (that is Orca's), status.json (a headless executor's own file, which the sidecar's report_path may name)

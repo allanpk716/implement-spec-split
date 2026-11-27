@@ -63,17 +63,20 @@
 # 18.6K to 1.2K input tokens). One name for it everywhere: the switch is the
 # environment variable ISS_DISPATCH_BARE, the flag it passes the launcher is
 # --bare (hence the sidecar's bare and bare_note fields), and the rules file
-# variable is named after the lean rules it points at. ISS_DISPATCH_BARE=1
-# adds, on the implementation stage only, `--bare --append-system-prompt-file
-# <rules> [--mcp-config <file>]`: --bare loads no CLAUDE.md, skills, plugins
-# or hooks, so the rules file carries them as a prompt and --mcp-config adds
-# the MCP servers the ticket needs (ops tickets: ssh-manager).
-# ISS_DISPATCH_LEAN_RULES names the rules file (default
-# templates/lean-rules.md, which #39 settles). The switch is off by default
-# until #39's verification (the TUI + adoption form under --bare, and whether
-# a second --append-system-prompt-file stacks); off, or on without a rules
-# file, the start is a normal one and the sidecar's bare_note says so.
-# --mcp-config is passed on a normal start too.
+# variable is named after the lean rules it points at. On, which is the
+# default, the implementation stage starts with `--bare
+# --append-system-prompt-file <rules> [--mcp-config <file>]`: --bare loads no
+# CLAUDE.md, skills, plugins or hooks, so the rules file carries them as a
+# prompt and --mcp-config adds the MCP servers the ticket needs (ops tickets:
+# ssh-manager). ISS_DISPATCH_LEAN_RULES names the rules file (default
+# templates/lean-rules.md, which #39 settles); without the file the start is a
+# normal one and the sidecar's bare_note says so. ISS_DISPATCH_BARE is the
+# opt-out: 0, off, no or false turns the lean start off; unset, or any other
+# value, leaves it on. The default follows the ticket (#41: lean unless #39
+# finds it unusable), so the day #39's verification (the TUI + adoption form
+# under --bare, and whether a second --append-system-prompt-file stacks) says
+# it cannot be used, the default is turned back off here. --mcp-config is
+# passed on a normal start too.
 #
 # Headless stages are handed to the executor that already reads the table:
 # research runs scripts/codex-worker.sh --read-only (the research route),
@@ -99,10 +102,15 @@
 #
 # release, after the Ticket branch is merged: refuses (exit 2) unless the
 # sidecar records a worker_done whose report is on disk and Orca reports the
-# dispatch settled; then `worker-release --dispatch`, then `terminal close` on
-# the terminal this module opened (Orca retains a terminal it did not open,
-# docs/orca-smoke-2026-11-27.md D), then `worktree rm --delete-branch` on the
-# child worktree. A parked Ticket is not released: the caller decides.
+# dispatch settled. A report the worker wrote inside the child worktree (a
+# relative path, resolved against it) would go with the worktree, so it is
+# copied into the dispatch dir as report-from-worktree.md first and the
+# sidecar's worker_done.report_path is pointed at the copy (a copy that fails
+# is exit 6 and nothing is released). Then `worker-release --dispatch`, then
+# `terminal close` on the terminal this module opened (Orca retains a terminal
+# it did not open, docs/orca-smoke-2026-11-27.md D), then `worktree rm
+# --delete-branch` on the child worktree. A parked Ticket is not released: the
+# caller decides.
 #
 # Sidecar fields: version, stage, role, ticket, attempt, run_id, run_dir,
 # route {profile, model, effort}, form (interactive|headless), dispatch_dir,
@@ -113,9 +121,10 @@
 # dispatch_id, task_id; headless: script, brief|input, kind (review), cwd,
 # report_path (the executor's report once it ran), exit_code, finished_at;
 # after a wait: worker_done {outcome, report_path, message_id, received_at};
-# after a release: released_at. A sidecar without dispatch_id is a dispatch
-# that did not complete; it names whatever was created so the caller can
-# clean up.
+# after a release: released_at (and worker_done.report_path naming the copy,
+# when the report had to be taken out of the worktree). A sidecar without
+# dispatch_id is a dispatch that did not complete; it names whatever was
+# created so the caller can clean up.
 #
 # Exit codes:
 #   0  dispatched (stdout: the sidecar path); worker_done received (stdout:
@@ -126,7 +135,9 @@
 #      worker-show, worker-release, worktree rm) or answered with something
 #      unusable (no handle, no dispatch id, a worker_done whose report is not
 #      on disk), or the route's launcher was not found in PATH, or a headless
-#      executor script is missing, or the sidecar could not be written
+#      executor script is missing, or the sidecar could not be written, or a
+#      report inside the child worktree could not be copied out before its
+#      removal
 #   7  the wait returned on another dispatch's worker_done; this worker's is
 #      still to come: wait again
 #   64 bad usage, among it a route that cannot be read and a --run-dir inside
@@ -287,6 +298,16 @@ resolved_path() { # path
     [ -n "$path" ] || path=/
   done
   printf '%s%s' "$(cd -P "$path" 2>/dev/null && pwd || printf '%s' "$path")" "$rest"
+}
+
+# Whether a path lies inside a directory, the directory itself counting as
+# inside, both as they will be once they exist: the comparison is
+# resolved_path's, so a relative path or one not created yet is judged too.
+inside_dir() { # path dir
+  case "$(resolved_path "$1")/" in
+    "$(resolved_path "$2")"/*) return 0 ;;
+  esac
+  return 1
 }
 
 # --- the route -------------------------------------------------------------------
@@ -452,11 +473,9 @@ cmd_dispatch() {
     # removes: a run directory inside the Spec worktree is a usage error
     # (spec #26, User Story 22). Compared on physical paths as far as they
     # exist, so a relative path or a directory not created yet is judged too.
-    case "$(resolved_path "$run_dir")/" in
-      "$parent_worktree"/*)
-        usage_error "--run-dir must be outside the Spec worktree, but $run_dir is inside $parent_worktree: release removes the worktree, and with it every sidecar and report written under it"
-        ;;
-    esac
+    if inside_dir "$run_dir" "$parent_worktree"; then
+      usage_error "--run-dir must be outside the Spec worktree, but $run_dir is inside $parent_worktree: release removes the worktree, and with it every sidecar and report written under it"
+    fi
   fi
 
   mkdir -p "$run_dir" || usage_error "could not create the run directory: $run_dir"
@@ -516,19 +535,23 @@ run_interactive() { # sidecar dispatch_dir brief run_id parent_worktree repo bas
   command -v "$launcher" >/dev/null 2>&1 ||
     die 6 "the implementation route is $ROUTE_PROFILE / $ROUTE_MODEL / $ROUTE_EFFORT, but its launcher '$launcher' was not found in PATH"
 
-  # The lean start (精简启动): the switch on, with a rules file, the
-  # implementation stage starts bare.
-  if [ "${ISS_DISPATCH_BARE:-}" = 1 ]; then
-    if [ -f "$LEAN_RULES" ]; then
-      bare=1
-      bare_note="ISS_DISPATCH_BARE=1: lean start, --bare with the rules in $LEAN_RULES"
-      lean_args=(--bare --append-system-prompt-file "$LEAN_RULES")
-    else
-      bare_note="ISS_DISPATCH_BARE=1, but the lean rules file was not found ($LEAN_RULES): no lean start, a normal one"
-    fi
-  else
-    bare_note="ISS_DISPATCH_BARE is off: no lean start, a normal one"
-  fi
+  # The lean start (精简启动) is the default: with a rules file, the
+  # implementation stage starts bare; without one it is a normal start, and the
+  # sidecar says why. ISS_DISPATCH_BARE is the opt-out (0, off, no, false).
+  case "$(printf '%s' "${ISS_DISPATCH_BARE:-}" | tr '[:upper:]' '[:lower:]')" in
+    0|off|no|false)
+      bare_note="ISS_DISPATCH_BARE=${ISS_DISPATCH_BARE} turns the lean start off: a normal one"
+      ;;
+    *)
+      if [ -f "$LEAN_RULES" ]; then
+        bare=1
+        bare_note="lean start, --bare with the rules in $LEAN_RULES"
+        lean_args=(--bare --append-system-prompt-file "$LEAN_RULES")
+      else
+        bare_note="the lean rules file was not found ($LEAN_RULES): no lean start, a normal one"
+      fi
+      ;;
+  esac
   [ -z "$mcp_config" ] || lean_args+=(--mcp-config "$mcp_config")
   json_set "$sidecar" "launcher=$launcher" "bare=@json:$(true_false "$bare")" "bare_note=$bare_note" \
     "brief=$brief" "repo=$repo" "parent_worktree=$parent_worktree" "base_branch=$base_branch" ||
@@ -791,7 +814,7 @@ cmd_release() {
   done
   [ -n "$sidecar" ] || usage_error 'release needs --sidecar (the path dispatch printed)'
   [ -f "$sidecar" ] || usage_error "sidecar not found: $sidecar"
-  local form dispatch_id terminal worktree worktree_created report dispatch_dir state stage
+  local form dispatch_id terminal worktree worktree_created report dispatch_dir state stage kept
   form=$(json_get "$sidecar" form) || die 64 "$sidecar is not a dispatch sidecar (no form field, or not JSON)"
   if [ "$form" = headless ]; then
     warn "nothing to release: the dispatch in $sidecar ran headless and holds no Orca resource"
@@ -820,6 +843,18 @@ cmd_release() {
       die 2 "release refused: dispatch $dispatch_id is not ended (state=${state:-unknown}, stage=${stage:-unknown}); release only a settled worker"
       ;;
   esac
+
+  # A report the worker wrote inside the child worktree (a relative path is
+  # resolved against it) would go with the worktree: copied into the dispatch
+  # dir before anything is released, and the sidecar points at the copy from
+  # then on, so a release tried again finds it there. Only the worktree that is
+  # about to be removed is worth copying out of.
+  if [ "$worktree_created" = true ] && [ -n "$worktree" ] && inside_dir "$report" "$worktree"; then
+    kept=$dispatch_dir/report-from-worktree.md
+    cp -p -- "$report" "$kept" 2> "$dispatch_dir/report-copy.err" ||
+      die 6 "release refused: the report of dispatch $dispatch_id lies inside the worktree $worktree and could not be copied to $kept: $(cat "$dispatch_dir/report-copy.err"); nothing was released"
+    json_set "$sidecar" "worker_done.report_path=$kept" || die 6 "could not write the sidecar $sidecar"
+  fi
 
   orca_orchestration_worker_release "$dispatch_id" > "$dispatch_dir/worker-release.json" 2> "$dispatch_dir/worker-release.err" ||
     die 6 "orca orchestration worker-release failed for $dispatch_id: $(cat "$dispatch_dir/worker-release.err")"

@@ -365,8 +365,10 @@ worker_record() { # dispatchId liveness [terminal] [terminalState] [workspace]
 }
 
 worker_show() { # dispatchId liveness [terminal] [terminalState] -> a worker-show receipt
+  # A terminal left out is given a name; an empty one ('') stays empty, as Orca
+  # reports a terminal it has already released.
   printf '{"ok": true, "result": {"dispatchId": "%s", "taskId": "task_x", "runId": "run_x", "state": "running", "stage": "running", "liveness": "%s", "terminal": "%s", "terminalState": "%s", "workspace": "repo_test::%s", "waitingOnHuman": "unknown"}}\n' \
-    "$1" "$2" "${3:-term_$1}" "${4:-active}" "$WT"
+    "$1" "$2" "${3-term_$1}" "${4-active}" "$WT"
 }
 
 write_worker_show() { # dispatchId liveness [terminal] [terminalState]
@@ -534,6 +536,33 @@ expect_has $'\tEXITED\t' "exited, terminal released: logs the conclusion" "$WORK
 expect_count "" 0 "exited, terminal released: closes nothing" "$WORK/orca.log"
 expect_count "release 19 --force" 1 "exited, terminal released: releases the claim" "$WORK/claim.log"
 expect_has "--only 19 --apply" "exited, terminal released: resumes the spec" "$WORK/launch.log"
+
+# The same receipt with no terminal at all: Orca leaves the field empty for a
+# terminal it released. The empty column must stay where it is (the receipt's
+# columns are split on the unit separator; a tab would let read fold it into
+# its neighbour and hand `released` around as a handle): nothing is closed,
+# so nothing fails, and the rest is as above.
+new_fixture stalled-exited-terminal-empty
+stall_spec_19
+write_workers '' "$(worker_record ctx_19 exited '' released)"
+write_worker_show ctx_19 exited '' released
+STALL_MIN=0 run_keeper "$WORK/exited-terminal-empty.out"
+expect_exit 0 "exited, terminal empty: exits 0"
+expect_has $'\tEXITED\t' "exited, terminal empty: logs the conclusion" "$WORK/exited-terminal-empty.out"
+expect_has 'liveness=exited dispatch=ctx_19' "exited, terminal empty: the log line carries the evidence" "$WORK/exited-terminal-empty.out"
+expect_count "" 0 "exited, terminal empty: closes nothing, released being a state and not a handle" "$WORK/orca.log"
+expect_without $'\tCLOSE_TERMINAL\t' "exited, terminal empty: no close is logged" "$WORK/exited-terminal-empty.out"
+expect_without $'\tERROR\t' "exited, terminal empty: no failed close, so no error" "$WORK/exited-terminal-empty.out"
+expect_count "release 19 --force" 1 "exited, terminal empty: releases the claim" "$WORK/claim.log"
+expect_has "--only 19 --apply" "exited, terminal empty: resumes the spec" "$WORK/launch.log"
+new_fixture stalled-exited-terminal-empty-dry-run
+stall_spec_19
+write_workers '' "$(worker_record ctx_19 exited '' released)"
+write_worker_show ctx_19 exited '' released
+STALL_MIN=0 run_keeper "$WORK/exited-terminal-empty-dry.out" --dry-run
+expect_exit 0 "exited, terminal empty, dry-run: exits 0"
+expect_has $'\tEXITED\t' "exited, terminal empty, dry-run: reaches the conclusion" "$WORK/exited-terminal-empty-dry.out"
+expect_without 'WOULD_CLOSE_TERMINAL' "exited, terminal empty, dry-run: would close nothing, not even on a handle called released" "$WORK/exited-terminal-empty-dry.out"
 
 # unverifiable: Orca's own rule is that nothing is stopped, retried or released
 # on it. The human is told once, with the evidence, and keeper stays out.

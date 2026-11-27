@@ -614,7 +614,17 @@ case "$1" in
         ;;
       worker-stop)
         printf '%s\n' 'ORCA_STOP' >> "$LAUNCH_SEQUENCE_LOG"
-        if [ "${LAUNCH_ORCA_STOP_FAIL:-0}" = 1 ]; then
+        dispatch=
+        previous=
+        for arg in "$@"; do
+          [ "$previous" = --dispatch ] && dispatch=$arg
+          previous=$arg
+        done
+        # LAUNCH_ORCA_STOP_FAIL refuses every stop; LAUNCH_ORCA_STOP_FAIL_RETRY
+        # only the stop of a retry's dispatch (ctx_<n>_r), so that a first
+        # dispatch can be stopped and retried while the retry's cannot.
+        if [ "${LAUNCH_ORCA_STOP_FAIL:-0}" = 1 ] ||
+           { [ "${LAUNCH_ORCA_STOP_FAIL_RETRY:-0}" = 1 ] && [[ "$dispatch" == *_r ]]; }; then
           # Orca reports a refusal as JSON on stdout, like every other answer.
           printf '%s\n' '{"ok":false,"error":{"code":"stop_unknown","message":"cannot prove the agent stopped"}}'
           exit 1
@@ -1745,6 +1755,49 @@ expect_count 'ORCA_RETRY' 1 'the retry happens once only' "$SEQUENCE_LOG"
 expect_count 'ORCA_STOP' 1 'only the first dispatch is stopped' "$SEQUENCE_LOG"
 expect_has '已启动 0 份，跳过 0 份，失败 1 份。' 'the parked retry counts as failed' "$WORK/retry-unclaimed.out"
 unset LAUNCH_ORCA_SCREEN_FILE LAUNCH_ORCA_SHOW_FILE
+
+# A retry that sits idle too (a TUI up without the spec) gets what the first
+# dispatch got, on the same evidence: stopped, then parked, the reservation
+# released so that --only runs again at once and no idle TUI is left behind.
+LAUNCH_ORCA_SCREEN_FILE=$SCREEN_IDLE
+LAUNCH_ORCA_RETRY_SCREEN_FILE=$SCREEN_IDLE
+export LAUNCH_ORCA_SCREEN_FILE LAUNCH_ORCA_RETRY_SCREEN_FILE
+: > "$CLAIM_LOG"; : > "$ORCA_LOG"; : > "$SEQUENCE_LOG"
+run_launch "$WORK/retry-idle-stopped.out" --apply --only 237
+expect_exit 1 "a retry that sits idle is stopped and parked"
+expect_has '#237 没开始（screen/running' 'the first dispatch was read as not started and retried' "$WORK/retry-idle-stopped.out"
+expect_has '#237 停车：重派后仍没开始，已停掉（终端 screen/running：' \
+  'the park line says the idle retry was stopped' "$WORK/retry-idle-stopped.out"
+expect_has '；Run run_wave，dispatch ctx_237_r。' 'the park line names the retry dispatch' "$WORK/retry-idle-stopped.out"
+expect_has '重新启动：launch-wave.sh --repo test/repo --only 237 --apply' \
+  'a stopped idle retry says to run --only again' "$WORK/retry-idle-stopped.out"
+expect_has 'release' 'a stopped idle retry releases the reservation' "$CLAIM_LOG"
+expect_count 'ORCA_RETRY' 1 'there is still only one retry' "$SEQUENCE_LOG"
+expect_count 'ORCA_STOP' 2 'the retry is stopped after the first dispatch was' "$SEQUENCE_LOG"
+expect_arg_after '--dispatch' ctx_237_r 'the second stop names the retry dispatch' "$ORCA_LOG"
+expect_arg_after '--terminal' term_237_r 'the retry terminal is what was read the second time' "$ORCA_LOG"
+expect_has '已启动 0 份，跳过 0 份，失败 1 份。' 'the stopped idle retry counts as failed' "$WORK/retry-idle-stopped.out"
+unset LAUNCH_ORCA_SCREEN_FILE LAUNCH_ORCA_RETRY_SCREEN_FILE
+
+# Orca refusing that stop (stop_unknown) leaves the retry's session and the
+# reservation as they are, like any park that cannot prove a stop: the restart
+# line asks for the terminal to be stopped by hand first.
+LAUNCH_ORCA_SCREEN_FILE=$SCREEN_IDLE
+LAUNCH_ORCA_RETRY_SCREEN_FILE=$SCREEN_IDLE
+LAUNCH_ORCA_STOP_FAIL_RETRY=1
+export LAUNCH_ORCA_SCREEN_FILE LAUNCH_ORCA_RETRY_SCREEN_FILE LAUNCH_ORCA_STOP_FAIL_RETRY
+: > "$CLAIM_LOG"; : > "$ORCA_LOG"; : > "$SEQUENCE_LOG"
+run_launch "$WORK/retry-idle-stop-refused.out" --apply --only 237
+expect_exit 1 "a retry that sits idle and cannot be stopped is parked"
+expect_has '#237 停车：重派后仍没开始，要停掉但无法确认原会话已停（worker-stop：cannot prove the agent stopped；终端 screen/running' \
+  'the park line carries the refused stop' "$WORK/retry-idle-stop-refused.out"
+expect_has "重新启动：确认该终端已停后 cd $CREATED_237 运行 claude-flash '/implement-spec-split 237 --auto-land --parallel 2'，或等预留到期后运行 launch-wave.sh --repo test/repo --only 237 --apply" \
+  'an unstopped idle retry asks for the terminal to be stopped by hand first' "$WORK/retry-idle-stop-refused.out"
+expect_without 'release' 'an unstopped idle retry keeps the reservation' "$CLAIM_LOG"
+expect_count 'ORCA_RETRY' 1 'there is still only one retry' "$SEQUENCE_LOG"
+expect_count 'ORCA_STOP' 2 'the retry was tried to be stopped once' "$SEQUENCE_LOG"
+expect_has '已启动 0 份，跳过 0 份，失败 1 份。' 'the unstopped idle retry counts as failed' "$WORK/retry-idle-stop-refused.out"
+unset LAUNCH_ORCA_SCREEN_FILE LAUNCH_ORCA_RETRY_SCREEN_FILE LAUNCH_ORCA_STOP_FAIL_RETRY
 
 # --- the retry's terminal is working -> the same extended wait, the same report ---
 # "Still not claimed after the retry" parks only a retry that did not start

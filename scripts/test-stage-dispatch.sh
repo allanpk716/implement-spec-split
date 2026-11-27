@@ -332,7 +332,9 @@ run_module() {
 
 # Starts a case clean: empty logs, a fresh run dir and child worktree path
 # (nothing is deleted; each case gets its own), the default routes and every
-# knob back.
+# knob back. The lean start is on by default, so a case that does not care
+# about it names a rules file that does not exist: its start is then a normal
+# one whether or not #39 has landed templates/lean-rules.md.
 CASE_N=0
 fresh_case() {
   CASE_N=$((CASE_N + 1))
@@ -358,7 +360,7 @@ fresh_case() {
   DISPATCH_TEST_FAKE_ROUTE_EXIT=0
   DISPATCH_TEST_FAKE_LAUNCHER=claude
   ISS_DISPATCH_BARE=
-  ISS_DISPATCH_LEAN_RULES=
+  ISS_DISPATCH_LEAN_RULES=$WORK/no-such-rules.md
   STAGE_DISPATCH_CODEX_WORKER=$BIN/fake-codex-worker
   STAGE_DISPATCH_OPUS_REVIEW=$BIN/fake-opus-review
   STAGE_DISPATCH_STAGE_ROUTE=$ROOT/scripts/stage-route.sh
@@ -520,7 +522,7 @@ expect_file_without 'ARG --focus' 'the worker terminal opens in the background' 
 expect_file_has 'ARG claude-glm --dangerously-skip-permissions --model glm-5.4\[1m\] --effort high; echo $? > ' \
   'the typed command runs the default route: claude-glm, its model in the [1m] form, and the effort' "$ORCA_LOG"
 expect_file_has '/implement-41/exit-code' 'the typed command records the launcher exit code' "$ORCA_LOG"
-expect_file_without 'ARG --bare' 'without the lean switch the start is a normal one' "$ORCA_LOG"
+expect_file_without 'ARG --bare' 'with no rules file the default start is a normal one' "$ORCA_LOG"
 expect_file_has 'ARG --run' 'worker-start names its Run' "$ORCA_LOG"
 expect_file_has 'ARG run_spec26' 'worker-start targets the given Run' "$ORCA_LOG"
 expect_file_has 'ARG --terminal' 'worker-start adopts the terminal' "$ORCA_LOG"
@@ -562,6 +564,7 @@ expect_json ctx_impl 'sidecar names the dispatch id' "$SIDECAR" dispatch_id
 expect_json task_impl 'sidecar names the task id' "$SIDECAR" task_id
 expect_json "$RUN_DIR/implement-41/report.md" 'sidecar names the report path it told the worker' "$SIDECAR" report_path
 expect_json false 'sidecar says the start was not a lean one' "$SIDECAR" bare
+expect_file_has 'was not found' 'the sidecar bare_note says why: the rules file is missing' "$SIDECAR"
 expect_json 1 'sidecar names the attempt' "$SIDECAR" attempt
 expect_file_has '本次派发路由：实现（implementation）：claude-glm / glm-5.4 / high' 'the route is reported on stderr' "$RUN_STDERR"
 
@@ -639,17 +642,28 @@ run_module dispatch --stage implementation --brief "$WORK/brief-41.md" \
   --run run_spec26 --run-dir "$RUN_DIR" --parent-worktree "$SPEC_WT" --base-branch spec-26 --ticket 41 --attempt 0
 expect_exit 64 '--attempt 0 exits 64'
 
-# --- the lean switch ----------------------------------------------------------------
+# --- the lean start: on by default, ISS_DISPATCH_BARE is the opt-out -----------------
 
+# The default rules file is templates/lean-rules.md (#39's to settle): whether
+# or not it is there, that is the path the sidecar talks about.
+fresh_case
+ISS_DISPATCH_LEAN_RULES=
+run_module dispatch --stage implementation --brief "$WORK/brief-41.md" \
+  --run run_spec26 --run-dir "$RUN_DIR" --parent-worktree "$SPEC_WT" --base-branch spec-26 --ticket 40
+expect_exit 0 'a dispatch with the rules file left to its default exits 0'
+expect_file_has 'templates/lean-rules.md' 'the default rules file is templates/lean-rules.md' \
+  "$RUN_DIR/dispatch-implement-40.json"
+
+# On (the default: the switch unset), with a rules file: the implementation
+# stage starts bare.
 fresh_case
 printf '%s\n' '# lean rules' 'Commit your work; no hooks here.' > "$WORK/lean-rules.md"
 printf '%s\n' '{"mcpServers":{"ssh-manager":{"command":"sshmgr"}}}' > "$WORK/mcp.json"
-ISS_DISPATCH_BARE=1
 ISS_DISPATCH_LEAN_RULES=$WORK/lean-rules.md
 run_module dispatch --stage implementation --brief "$WORK/brief-41.md" \
   --run run_spec26 --run-dir "$RUN_DIR" --parent-worktree "$SPEC_WT" --base-branch spec-26 --ticket 41 \
   --mcp-config "$WORK/mcp.json"
-expect_exit 0 'a dispatch with the lean switch on exits 0'
+expect_exit 0 'a dispatch with the lean start on by default exits 0'
 expect_file_has "ARG claude-glm --dangerously-skip-permissions --model glm-5.4\[1m\] --effort high --bare --append-system-prompt-file $WORK/lean-rules.md --mcp-config $WORK/mcp.json; echo \$? > " \
   'the lean start adds --bare, the rules file and the MCP config after the route arguments' \
   "$ORCA_LOG"
@@ -661,29 +675,58 @@ expect_file_has "$WORK/lean-rules.md" 'the sidecar bare_note names the rules fil
 ISS_DISPATCH_LEAN_RULES=$WORK/no-such-rules.md
 run_module dispatch --stage implementation --brief "$WORK/brief-41.md" \
   --run run_spec26 --run-dir "$RUN_DIR" --parent-worktree "$SPEC_WT" --base-branch spec-26 --ticket 42
-expect_exit 0 'a dispatch with the lean switch on but no rules file exits 0'
+expect_exit 0 'a dispatch with the lean start on but no rules file exits 0'
 expect_file_has 'ARG claude-glm --dangerously-skip-permissions --model glm-5.4\[1m\] --effort high; echo $? > ' \
   'no rules file means a normal start' "$ORCA_LOG"
 expect_file_without 'ARG --bare' 'no rules file means no --bare' "$ORCA_LOG"
 expect_json false 'the sidecar says the start was not a lean one' "$RUN_DIR/dispatch-implement-42.json" bare
 expect_file_has 'was not found' 'the sidecar bare_note says the rules file is missing' "$RUN_DIR/dispatch-implement-42.json"
+expect_file_has "$WORK/no-such-rules.md" 'the sidecar bare_note names the rules file it looked for' \
+  "$RUN_DIR/dispatch-implement-42.json"
 
-# Off is the default, and the only value that turns it on is 1.
+# Explicitly off, with a rules file that is there: a normal start, and the
+# sidecar says the switch did it. 0, off, no and false all turn it off.
 ISS_DISPATCH_BARE=0
 ISS_DISPATCH_LEAN_RULES=$WORK/lean-rules.md
 : > "$ORCA_LOG"
 run_module dispatch --stage implementation --brief "$WORK/brief-41.md" \
   --run run_spec26 --run-dir "$RUN_DIR" --parent-worktree "$SPEC_WT" --base-branch spec-26 --ticket 43
-expect_exit 0 'a dispatch with the lean switch off exits 0'
-expect_file_without 'ARG --bare' 'the switch off means no --bare' "$ORCA_LOG"
-expect_file_has 'is off' 'the sidecar bare_note says the switch is off' "$RUN_DIR/dispatch-implement-43.json"
+expect_exit 0 'a dispatch with ISS_DISPATCH_BARE=0 exits 0'
+expect_file_without 'ARG --bare' 'ISS_DISPATCH_BARE=0 means no --bare, rules file or not' "$ORCA_LOG"
+expect_json false 'the sidecar says ISS_DISPATCH_BARE=0 made the start a normal one' "$RUN_DIR/dispatch-implement-43.json" bare
+expect_file_has 'ISS_DISPATCH_BARE=0 turns the lean start off' 'the sidecar bare_note names the switch and its value' \
+  "$RUN_DIR/dispatch-implement-43.json"
+off_ticket=46
+for off in off no false OFF; do
+  ISS_DISPATCH_BARE=$off
+  : > "$ORCA_LOG"
+  run_module dispatch --stage implementation --brief "$WORK/brief-41.md" \
+    --run run_spec26 --run-dir "$RUN_DIR" --parent-worktree "$SPEC_WT" --base-branch spec-26 --ticket "$off_ticket"
+  OFF_SIDECAR=$RUN_DIR/dispatch-implement-$off_ticket.json
+  if [ "$RUN_EXIT" -eq 0 ] && [ "$(json_field "$OFF_SIDECAR" bare)" = false ] &&
+     ! grep -Fq 'ARG --bare' "$ORCA_LOG" && ! grep -Fq 'ARG --append-system-prompt-file' "$ORCA_LOG"; then
+    record PASS "ISS_DISPATCH_BARE=$off turns the lean start off too"
+  else
+    record FAIL "ISS_DISPATCH_BARE=$off turns the lean start off too" "exit=$RUN_EXIT, log=$(grep -F 'ARG --bare' "$ORCA_LOG")"
+  fi
+  off_ticket=$((off_ticket + 1))
+done
+
+# Any other value is on, 1 included: the switch only ever turns the lean start off.
+ISS_DISPATCH_BARE=1
+: > "$ORCA_LOG"
+run_module dispatch --stage implementation --brief "$WORK/brief-41.md" \
+  --run run_spec26 --run-dir "$RUN_DIR" --parent-worktree "$SPEC_WT" --base-branch spec-26 --ticket 45
+expect_exit 0 'a dispatch with ISS_DISPATCH_BARE=1 exits 0'
+expect_file_has "ARG claude-glm --dangerously-skip-permissions --model glm-5.4\[1m\] --effort high --bare --append-system-prompt-file $WORK/lean-rules.md; echo \$? > " \
+  'ISS_DISPATCH_BARE=1 is on, like the default' "$ORCA_LOG"
+expect_json true 'ISS_DISPATCH_BARE=1 records a lean start' "$RUN_DIR/dispatch-implement-45.json" bare
 
 # A fix role gets the lean arguments too, on the same route.
-ISS_DISPATCH_BARE=1
 : > "$ORCA_LOG"
 run_module dispatch --stage implementation --role fix --brief "$WORK/brief-41.md" \
   --run run_spec26 --run-dir "$RUN_DIR" --parent-worktree "$SPEC_WT" --base-branch spec-26
-expect_exit 0 'a fix dispatch with the lean switch on exits 0'
+expect_exit 0 'a fix dispatch with the lean start on exits 0'
 expect_file_has "ARG claude-glm --dangerously-skip-permissions --model glm-5.4\[1m\] --effort high --bare --append-system-prompt-file $WORK/lean-rules.md; echo \$? > " \
   'a fix role gets the lean arguments as well' "$ORCA_LOG"
 
@@ -970,7 +1013,8 @@ expect_exit 6 'a worker_done that names a report not on disk exits 6'
 expect_file_has 'not on disk' 'the missing report is reported' "$RUN_STDERR"
 
 # A worker that reports its path relative to its worktree (as the smoke test's
-# worker did) is understood: the path is resolved against the worktree.
+# worker did) is understood: wait resolves it against the worktree. What that
+# means for release, which removes the worktree, is under release below.
 ORCA_TEST_DISPATCH_ID=ctx_48a
 dispatch_ticket 48
 SIDECAR_48=$RUN_DIR/dispatch-implement-48.json
@@ -1066,6 +1110,89 @@ if [ -n "$(json_field "$SIDECAR_50" released_at)" ]; then
   record PASS 'the sidecar records the release time'
 else
   record FAIL 'the sidecar records the release time'
+fi
+
+# A report the worker wrote inside the child worktree (it reported a relative
+# path, which wait resolved against the worktree; the smoke test's worker did
+# just that) would go with the worktree release removes: the report is copied
+# into the dispatch dir first and the sidecar points at the copy, before
+# anything is released. The Orca order is as ever: the copy is no Orca call.
+ORCA_TEST_DISPATCH_ID=ctx_51
+dispatch_ticket 51
+SIDECAR_51=$RUN_DIR/dispatch-implement-51.json
+TICKET_WT_51=$WORK/wt/case-$CASE_N/spec-26-t51
+printf '%s\n' 'report written inside the worktree' > "$TICKET_WT_51/report.md"
+write_check "$WORK/check-51.json" ctx_51 report.md
+ORCA_TEST_CHECK_JSON=$WORK/check-51.json
+run_module wait --sidecar "$SIDECAR_51" --timeout 1
+expect_json "$TICKET_WT_51/report.md" 'wait recorded the report where the worker put it: inside the worktree' \
+  "$SIDECAR_51" worker_done.report_path
+: > "$ORCA_LOG"
+run_module release --sidecar "$SIDECAR_51"
+expect_exit 0 'release of a report inside the child worktree exits 0'
+SEQUENCE=$(orca_sequence)
+if [ "$SEQUENCE" = 'worker-show worker-release close rm ' ]; then
+  record PASS 'the copy is no Orca call: still worker-show, worker-release, terminal close, worktree rm'
+else
+  record FAIL 'the copy is no Orca call: still worker-show, worker-release, terminal close, worktree rm' "sequence=[$SEQUENCE]"
+fi
+expect_json "$RUN_DIR/implement-51/report-from-worktree.md" 'the sidecar points at the copy in the dispatch dir' \
+  "$SIDECAR_51" worker_done.report_path
+if [ "$(cat "$RUN_DIR/implement-51/report-from-worktree.md" 2>/dev/null)" = 'report written inside the worktree' ]; then
+  record PASS 'the report is in the dispatch dir, out of the worktree release removes'
+else
+  record FAIL 'the report is in the dispatch dir, out of the worktree release removes' \
+    "copy=[$(cat "$RUN_DIR/implement-51/report-from-worktree.md" 2>/dev/null)]"
+fi
+expect_json "$RUN_DIR/implement-51/report.md" 'the report path the worker was told stays as told' "$SIDECAR_51" report_path
+expect_stdout "released ctx_51 ($TICKET_WT_51 removed)" 'the worktree is removed all the same'
+run_module wait --sidecar "$SIDECAR_51" --timeout 1
+expect_stdout "$RUN_DIR/implement-51/report-from-worktree.md" 'a later wait prints the copy, outside the worktree'
+
+# The copy stands between the report and the worktree rm: when it cannot be
+# made, release refuses before releasing anything (exit 6), the sidecar keeps
+# naming the file in the worktree, and a release tried again, once the copy
+# can be made, goes through.
+ORCA_TEST_DISPATCH_ID=ctx_52
+dispatch_ticket 52
+SIDECAR_52=$RUN_DIR/dispatch-implement-52.json
+TICKET_WT_52=$WORK/wt/case-$CASE_N/spec-26-t52
+printf '%s\n' 'report to rescue' > "$TICKET_WT_52/report.md"
+write_check "$WORK/check-52.json" ctx_52 report.md
+ORCA_TEST_CHECK_JSON=$WORK/check-52.json
+run_module wait --sidecar "$SIDECAR_52" --timeout 1
+mkdir "$RUN_DIR/implement-52/report-from-worktree.md"
+chmod 500 "$RUN_DIR/implement-52/report-from-worktree.md"
+: > "$ORCA_LOG"
+run_module release --sidecar "$SIDECAR_52"
+COPY_EXIT=$RUN_EXIT
+chmod 700 "$RUN_DIR/implement-52/report-from-worktree.md"
+RUN_EXIT=$COPY_EXIT
+expect_exit 6 'a report inside the worktree that cannot be copied out exits 6'
+expect_file_has 'could not be copied' 'the failure says the report could not be copied' "$RUN_STDERR"
+expect_file_has 'nothing was released' 'the refusal says nothing was released' "$RUN_STDERR"
+SEQUENCE=$(orca_sequence)
+if [ "$SEQUENCE" = 'worker-show ' ]; then
+  record PASS 'only worker-show was asked: nothing released, closed or removed'
+else
+  record FAIL 'only worker-show was asked: nothing released, closed or removed' "sequence=[$SEQUENCE]"
+fi
+expect_json "$TICKET_WT_52/report.md" 'the sidecar still names the report in the worktree' "$SIDECAR_52" worker_done.report_path
+expect_json '' 'the sidecar records no release' "$SIDECAR_52" released_at
+if [ -e "$RUN_DIR/implement-52/report-from-worktree.md/report.md" ]; then
+  record FAIL 'nothing half-copied is left behind' 'a copy landed despite the refusal'
+else
+  record PASS 'nothing half-copied is left behind'
+fi
+rmdir "$RUN_DIR/implement-52/report-from-worktree.md"
+: > "$ORCA_LOG"
+run_module release --sidecar "$SIDECAR_52"
+expect_exit 0 'a release tried again, with the copy possible, goes through'
+expect_json "$RUN_DIR/implement-52/report-from-worktree.md" 'the sidecar now points at the copy' "$SIDECAR_52" worker_done.report_path
+if [ "$(cat "$RUN_DIR/implement-52/report-from-worktree.md" 2>/dev/null)" = 'report to rescue' ]; then
+  record PASS 'the retried release copied the report out'
+else
+  record FAIL 'the retried release copied the report out' "copy=[$(cat "$RUN_DIR/implement-52/report-from-worktree.md" 2>/dev/null)]"
 fi
 
 # Recorded, but the report is gone: refused before Orca is asked anything.
@@ -1165,6 +1292,29 @@ if grep -Fq "ARG path:$SPEC_WT" "$ORCA_LOG"; then
   record FAIL 'the Spec worktree is never removed'
 else
   record PASS 'the Spec worktree is never removed'
+fi
+
+# A fix role's report inside the Spec worktree stays where it is: release does
+# not remove that worktree, so there is nothing to copy out of.
+ORCA_TEST_DISPATCH_ID=ctx_53
+run_module dispatch --stage implementation --role fix --brief "$WORK/brief-41.md" --ticket 53 \
+  --run run_spec26 --run-dir "$RUN_DIR" --parent-worktree "$SPEC_WT" --base-branch spec-26
+mkdir -p "$SPEC_WT/.reports"
+printf '%s\n' 'fix report inside the Spec worktree' > "$SPEC_WT/.reports/fix-53.md"
+write_check "$WORK/check-53.json" ctx_53 .reports/fix-53.md
+ORCA_TEST_CHECK_JSON=$WORK/check-53.json
+run_module wait --sidecar "$RUN_DIR/dispatch-fix-53.json" --timeout 1
+expect_json "$SPEC_WT/.reports/fix-53.md" 'wait resolved the relative path against the Spec worktree' \
+  "$RUN_DIR/dispatch-fix-53.json" worker_done.report_path
+: > "$ORCA_LOG"
+run_module release --sidecar "$RUN_DIR/dispatch-fix-53.json"
+expect_exit 0 'release of a fix role whose report is in the Spec worktree exits 0'
+expect_json "$SPEC_WT/.reports/fix-53.md" 'the sidecar still names the report in the Spec worktree, which is not removed' \
+  "$RUN_DIR/dispatch-fix-53.json" worker_done.report_path
+if [ -e "$RUN_DIR/fix-53/report-from-worktree.md" ]; then
+  record FAIL 'a report in a worktree that stays is not copied' "$RUN_DIR/fix-53/report-from-worktree.md"
+else
+  record PASS 'a report in a worktree that stays is not copied'
 fi
 
 # An incomplete sidecar has nothing to release.
@@ -1349,8 +1499,8 @@ for text in 'Usage:' 'stage-dispatch.sh dispatch --stage implementation' \
   'stage-dispatch.sh wait --sidecar <file>' 'stage-dispatch.sh release --sidecar <file>' \
   'Exit codes:' '2  release refused' '5  the wait timed out' '64 bad usage' \
   'Sidecar fields:' 'dispatch_id' 'terminal' 'worktree' 'route' 'bare_note' \
-  'ISS_DISPATCH_BARE=1' '--append-system-prompt-file' '--mcp-config' \
-  'worker_done' '--delete-branch' 'Test hooks:'; do
+  'ISS_DISPATCH_BARE is the' '--append-system-prompt-file' '--mcp-config' \
+  'report-from-worktree.md' 'worker_done' '--delete-branch' 'Test hooks:'; do
   expect_file_has "$text" "header documents [$text]" "$HEADER"
 done
 run_module --help
