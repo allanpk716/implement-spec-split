@@ -247,6 +247,8 @@ expect_has '## 本组补充' 'S2 note heading is inserted' "$SUCCESS/S2/brief.md
 expect_has 'S2-only supplementary material.' 'S2 note content is inserted' "$SUCCESS/S2/brief.md"
 expect_without 'S2-only supplementary material.' \
   'S2 note is absent from S1' "$SUCCESS/S1/brief.md"
+expect_has '会改同一处计数器的执行票按顺序挂 `blocked_by` 链，本组内写 `T<n>`，后一张等前一张，不是全部等第一张' \
+  'spec-group brief carries the shared-counter rule' "$SUCCESS/S1/brief.md"
 
 EXISTING_SPEC=$WORK/existing-spec
 run_brief "$WORK/existing-spec.out" --example 205 "$EXISTING_SPEC" \
@@ -273,6 +275,8 @@ expect_has '不要写 `body`' 'existing-spec manifest omits spec body' \
   "$EXISTING_SPEC/S2/brief.md"
 expect_has '不要生成 `spec.md`' 'existing-spec brief does not draft a spec' \
   "$EXISTING_SPEC/S2/brief.md"
+expect_has '会改同一处计数器的执行票按顺序挂 `blocked_by` 链，本组内写 `T<n>`，后一张等前一张，不是全部等第一张' \
+  'existing-spec brief carries the shared-counter rule' "$EXISTING_SPEC/S2/brief.md"
 
 MAP_SPEC=$WORK/map-spec
 run_brief "$WORK/map-spec.out" "$MAP_SPEC" S1=map:22
@@ -291,6 +295,8 @@ expect_has '"map_number": 22' 'map-spec manifest field is documented' \
   "$MAP_SPEC/S1/brief.md"
 expect_pattern_without '@@[A-Z_]+@@' 'map-spec brief has no variable left' \
   "$MAP_SPEC/S1/brief.md"
+expect_has '会改同一处计数器的执行票按顺序挂 `blocked_by` 链，本组内写 `T<n>`，后一张等前一张，不是全部等第一张' \
+  'map-spec brief carries the shared-counter rule' "$MAP_SPEC/S1/brief.md"
 
 DUPLICATE_MAP=$WORK/duplicate-map
 run_brief "$WORK/duplicate-map.out" "$DUPLICATE_MAP" S1=map:22 S2=map:22

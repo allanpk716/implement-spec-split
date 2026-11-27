@@ -176,6 +176,10 @@ One of the machine-wide places an External worker wrapper must hold while its ag
 **Integration branch**:
 The single branch where every Ticket of a Spec is merged before review.
 
+**Shared counter**:
+A file or sequence that exists in one place and is incremented by every change that touches it (a version number, a CHANGELOG, a migration number). Two Tickets that each bump the same shared counter can be edited in parallel worktrees without git seeing a conflict, so the second to merge carries a duplicate number; drafting chains such Tickets with `blocked_by` inside one Spec, and across Specs reports them in the drafting worker's `result.md` so that find-next keeps the two Specs `--apart`.
+_Avoid_: version conflict, counter conflict (git's textual conflict is exactly what this is not)
+
 **Frontier**:
 The Tickets whose blockers are all merged, so they can be started now.
 _Avoid_: using it for a map's open decisions (that is the Map frontier)
