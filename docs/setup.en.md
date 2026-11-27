@@ -173,7 +173,7 @@ This makes `codex exec` do work with GLM. Both Stage 1's `--impl codex` and Stag
    requires_openai_auth = true
    ```
 
-   The provider name must be `custom`: the wrappers pin the provider and model with `-c model_provider=custom -m glm-5.4`. If the model is not `glm-5.4`, add `--model <id>` when calling `codex-worker.sh`; in Stage 1, change `CODEX_MODEL` in the Config section of `SKILL.md`. Do not put the key in this repository.
+   The provider name must be `custom`: the wrappers pin the provider with `-c model_provider=custom` and pass the model with `-m`; the model and reasoning effort come from the Stage route table (`scripts/stage-route.sh`, default `glm-5.4` / `high`). If the model is not `glm-5.4`, set the `implementation` and `research` stages to a combination in the verified catalog with `/grill-router` (for example `/grill-router use implementation=codex-glm/glm-5.3/high research=codex-glm/glm-5.3/high`) instead of passing `--model` to `codex-worker.sh`. Do not put the key in this repository.
 
    If you follow Zhipu's official Codex recipe (direct to `open.bigmodel.cn`), its provider is named `ZAI`: rename both `model_provider = "ZAI"` and `[model_providers.ZAI]` to `custom`; `name = "ZAI"` can stay (codex 0.164+ requires a non-empty `name`). Otherwise the worker fails with `model_providers.custom: provider name must not be empty`. Support for other provider names is tracked in issue #6.
 

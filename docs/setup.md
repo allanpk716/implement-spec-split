@@ -179,7 +179,7 @@ ln -s ~/.claude/skills/implement-spec-split/judgment-model ~/.claude/skills/judg
    requires_openai_auth = true
    ```
 
-   provider 的名字必须是 `custom`：wrapper 用 `-c model_provider=custom -m glm-5.4` 钉死 provider 和模型。模型不是 `glm-5.4` 时，调用 `codex-worker.sh` 要加 `--model <id>`，阶段 1 则修改 `SKILL.md` Config 里的 `CODEX_MODEL`。key 不要写进本仓库。
+   provider 的名字必须是 `custom`：wrapper 用 `-c model_provider=custom -m <模型>` 钉死 provider 和模型，模型和思考强度取自阶段路由表（`scripts/stage-route.sh`，默认 `glm-5.4` / `high`）。模型不是 `glm-5.4` 时，用 `/grill-router` 把「实现」和「调研起草」两个阶段设到已验证目录里的组合（例如 `/grill-router use implementation=codex-glm/glm-5.3/high research=codex-glm/glm-5.3/high`），不要给 `codex-worker.sh` 传 `--model`。key 不要写进本仓库。
 
    照智谱官方 Codex 教程配置、直连 `open.bigmodel.cn` 的话，教程里的 provider 叫 `ZAI`：把 `model_provider = "ZAI"` 和 `[model_providers.ZAI]` 都改成 `custom`，`name = "ZAI"` 可以保留（codex 0.164 起 `name` 不能为空）。否则 worker 会报 `model_providers.custom: provider name must not be empty`。支持其他 provider 名见 issue #6。
 

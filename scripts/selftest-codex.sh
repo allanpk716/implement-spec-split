@@ -1,24 +1,39 @@
 #!/usr/bin/env bash
 # Self-test for the codex External worker backend.
 #
-# Usage: scripts/selftest-codex.sh [--model glm-5.4] [--only L1|V1|V2|V3]
+# Usage: scripts/selftest-codex.sh [--model <id>] [--only L1|V1|V2|V3]
 #
 # V1 uses a deterministic fake codex and costs no tokens. V2 uses real codex-cli
 # against local mock Responses servers and costs no GLM tokens. L1 and V3 use real GLM
 # through the author's Ferryman proxy and do cost tokens. Scratch dirs live under
 # ~/.cache/implement-spec-split-selftest-codex/<timestamp>-<pid> and are removed only after a
 # successful token-free level; a failed level keeps its artifacts for diagnosis.
+#
+# The model under test follows the Stage route table rules (ADR 0004):
+#   1. --model given: that model is tested, and the table is kept out of the test
+#      (ISS_STAGE_ROUTE_FILE points at /dev/null, a table with no line: every stage on
+#      its default), so the explicit value is what codex gets: a route off the default
+#      would override it.
+#   2. no --model: the model is the implementation stage's effective route
+#      (stage-route.sh --print implementation model) and the table is not isolated, so
+#      step 0's L1 preflight tests what a worker really runs on.
+#   3. V1, V2 and V3 always keep the wrapper away from the real table; the V1 route
+#      cases point ISS_STAGE_ROUTE_FILE at a scratch file one call at a time. L1 restores
+#      the table file rule 1 or 2 decided on, so a whole-suite run keeps that rule for L1.
+#      V1 also runs under a scratch HOME, so nothing it starts can read or migrate the
+#      real ~/.claude/state, whichever table file is in effect at that moment.
 
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 WORKER="$HERE/codex-worker.sh"
 PROGRESS="$HERE/progress.sh"
 FAKE="$HERE/testing/fake-codex.sh"
-MODEL="glm-5.4"
+MODEL=""
+GOT_MODEL=false
 ONLY=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --model) MODEL="$2"; shift 2 ;;
+    --model) MODEL="$2"; GOT_MODEL=true; shift 2 ;;
     --only) ONLY="$2"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 64 ;;
   esac
@@ -26,6 +41,23 @@ done
 case "${ONLY:-all}" in L1|V1|V2|V3|all) ;; *) echo "--only must be L1, V1, V2, or V3" >&2; exit 64 ;; esac
 
 ROOT="$HOME/.cache/implement-spec-split-selftest-codex/$(date +%Y%m%d-%H%M%S)-$$"
+if $GOT_MODEL; then
+  # Rule 1: test the explicit model, isolated from the machine's real route table.
+  export ISS_STAGE_ROUTE_FILE=/dev/null
+else
+  # Rule 2: no --model tests the implementation stage's effective model. The route is
+  # defined only in stage-route.sh; an empty answer must not become `--model ""`.
+  MODEL=$("$HERE/stage-route.sh" --print implementation model 2>/dev/null || true)
+  [ -n "$MODEL" ] || { echo "stage-route.sh --print implementation model returned nothing" >&2; exit 64; }
+fi
+# The table file as rule 1 or 2 left it. V1, V2 and V3 isolate themselves from the real
+# table for their own duration; L1 follows rule 1/2 and restores this before it runs, so a
+# whole-suite run does not carry the V1/V2 isolation into L1.
+CALLER_STAGE_ROUTE_FILE=${ISS_STAGE_ROUTE_FILE-__unset__}
+use_caller_route_file() {
+  if [ "$CALLER_STAGE_ROUTE_FILE" = __unset__ ]; then unset ISS_STAGE_ROUTE_FILE
+  else export ISS_STAGE_ROUTE_FILE="$CALLER_STAGE_ROUTE_FILE"; fi
+}
 mkdir -p "$ROOT"
 export ISS_STATE_DIR="$ROOT/worker-state"
 FAILS=0
@@ -131,6 +163,13 @@ command = "gamma"
 command = "unsafe"
 EOF
   export CODEX_WORKER_HOME CODEX_WORKER_CODEX="$FAKE" CODEX_WORKER_SKIP_PREFLIGHT=1 CODEX_WORKER_POLL=1
+  # Rule 3: every V1 case but the route cases below runs with the route table isolated.
+  # The level also runs under a scratch HOME: without ISS_STAGE_ROUTE_FILE stage-route.sh
+  # reads the table, and on a machine that has none yet runs its first-time migration,
+  # from $HOME/.claude/state, so the scratch HOME keeps even a dispatch that lost the
+  # variable away from the real one. The real HOME comes back when the level ends.
+  export ISS_STAGE_ROUTE_FILE=/dev/null
+  V1_CALLER_HOME=$HOME; export HOME="$ROOT/v1-shell-home"; mkdir -p "$HOME"
   export FAKE_CODEX_PID_LOG="$ROOT/fake-pids.log"
   export FAKE_CODEX_HOME_LOG="$ROOT/fake-codex-homes.log"
   BRIEF="$ROOT/brief.md"
@@ -496,10 +535,269 @@ EOF
   printf '%s %s\n' "$REUSE_WIN" "$REUSE_TICKS" > "$ROOT/pid-reuse-run/pid"
   check "live pid with matching start ticks is running" bash -c "'$PROGRESS' '$ROOT/pid-reuse-run' | grep -q '^state: running'"
   kill_tree_test "$REUSE_WIN"
+
+  # Stage route (ADR 0004). Each case points ISS_STAGE_ROUTE_FILE at a scratch file for
+  # one wrapper call; every other V1 case above stays isolated from the real table.
+  ROUTE_DIR="$ROOT/route"; mkdir -p "$ROUTE_DIR"
+  ROUTE_FILE="$ROUTE_DIR/stage-route"
+  route_run() {
+    # <name> <table file> <content: '-' leaves the file alone, '' removes it> [wrapper args]
+    # ROUTE_CWD overrides the worktree (a --read-only dispatch needs a Git one),
+    # ROUTE_HOME the worker home, ROUTE_SCENARIO the fake codex scenario, ROUTE_BIN the
+    # table script the wrapper reads and FAKE_ROUTE_MODE what that stand-in answers.
+    local name="$1" file="$2" state="$3"; shift 3
+    if [ "$state" = - ]; then :; elif [ -z "$state" ]; then rm -f "$file"; else printf '%s\n' "$state" > "$file"; fi
+    env ISS_STAGE_ROUTE_FILE="$file" CODEX_WORKER_HOME="${ROUTE_HOME:-$CODEX_WORKER_HOME}" \
+      CODEX_WORKER_STAGE_ROUTE="${ROUTE_BIN:-$HERE/stage-route.sh}" FAKE_ROUTE_MODE="${FAKE_ROUTE_MODE:-}" \
+      FAKE_CODEX_SCENARIO="${ROUTE_SCENARIO:-ok}" FAKE_CODEX_ARGS_LOG="$ROUTE_DIR/$name.args.jsonl" \
+      "$WORKER" --cwd "${ROUTE_CWD:-$ROOT/v1}" --brief "$BRIEF" --run-dir "$ROUTE_DIR/$name" --retries 0 --time-limit 120 --idle-timeout 20 "$@" \
+      >"$ROUTE_DIR/$name.out" 2>"$ROUTE_DIR/$name.err"
+    ROUTE_EXIT=$?
+  }
+  ran_arg() {
+    # The value after the first <flag> in the last codex invocation of a route run.
+    node -e 'const a=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8").trim().split(/\r?\n/).pop());const i=a.indexOf(process.argv[2]);process.stdout.write(i<0?"<none>":a[i+1])' \
+      "$(codex_home_for_platform "$ROUTE_DIR/$1/fake-codex-args.jsonl")" "$2"
+  }
+  ran_model() { ran_arg "$1" -m; }
+  ran_effort() {
+    node -e 'const a=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8").trim().split(/\r?\n/).pop());const c=a.find(x=>x.startsWith("model_reasoning_effort="));process.stdout.write(c?c.slice("model_reasoning_effort=".length):"<none>")' \
+      "$(codex_home_for_platform "$ROUTE_DIR/$1/fake-codex-args.jsonl")"
+  }
+  notice_lines() { local n; n=$(grep -Fc "$1" "$2" 2>/dev/null) || n=0; printf '%s\n' "$n"; }
+
+  # A route off the default overrides an explicit --model and --thinking and says so.
+  route_run override "$ROUTE_FILE" implementation=codex-glm/glm-5.3/medium --model glm-5.4
+  RO=$ROUTE_EXIT
+  check "route off the default overrides --model (exit $RO)" test "$RO" -eq 0 -a "$(ran_model override)" = glm-5.3
+  check "route effort reaches codex" test "$(ran_effort override)" = medium
+  check "route line appears exactly once on stderr" test "$(notice_lines '阶段路由生效' "$ROUTE_DIR/override.err")" = 1
+  check "route line names the stage, the route and the overridden --model" bash -c "grep -Fq '阶段路由生效：实现（implementation）：codex-glm / glm-5.3 / medium' '$ROUTE_DIR/override.err' && grep -Fq '覆盖 --model glm-5.4' '$ROUTE_DIR/override.err' && grep -Fq '复位 /grill-router use implementation=claude-glm/glm-5.4/high' '$ROUTE_DIR/override.err'"
+  check "route line is in the run dir's stderr.log exactly once" test "$(notice_lines '阶段路由生效' "$ROUTE_DIR/override/stderr.log")" = 1
+  check "status.json records the routed model, effort and profile" test "$(json "$ROUTE_DIR/override/status.json" model)" = glm-5.3 -a "$(json "$ROUTE_DIR/override/status.json" thinking)" = medium -a "$(json "$ROUTE_DIR/override/status.json" profile)" = codex-glm
+  check "resume.json records the routed model, effort and profile" test "$(json "$ROUTE_DIR/override/resume.json" model)" = glm-5.3 -a "$(json "$ROUTE_DIR/override/resume.json" thinking)" = medium -a "$(json "$ROUTE_DIR/override/resume.json" profile)" = codex-glm
+  route_run override-no-model "$ROUTE_FILE" implementation=codex-glm/glm-5.3/medium
+  RO=$ROUTE_EXIT
+  check "route off the default applies without --model (exit $RO)" test "$RO" -eq 0 -a "$(ran_model override-no-model)" = glm-5.3 -a "$(ran_effort override-no-model)" = medium
+  check "route line without --model has no override part" bash -c "test \"\$(grep -Fc '阶段路由生效' '$ROUTE_DIR/override-no-model.err')\" -eq 1 && ! grep -Fq '覆盖 --model' '$ROUTE_DIR/override-no-model.err'"
+  route_run override-thinking "$ROUTE_FILE" implementation=codex-glm/glm-5.3/medium --thinking low
+  RO=$ROUTE_EXIT
+  check "route off the default overrides --thinking (exit $RO)" test "$RO" -eq 0 -a "$(ran_effort override-thinking)" = medium
+  check "route line names the overridden --thinking" grep -Fq '覆盖 --thinking low' "$ROUTE_DIR/override-thinking.err"
+  route_run override-until "$ROUTE_FILE" 'implementation=codex-glm/glm-5.3/high@4102444800' --model glm-5.4
+  RO=$ROUTE_EXIT
+  check "route with an expiry runs the routed model (exit $RO)" test "$RO" -eq 0 -a "$(ran_model override-until)" = glm-5.3
+  check "route line shows the expiry and the reset command" bash -c "grep -Eq '到期 [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} [+-][0-9]{2}:[0-9]{2}；复位 /grill-router use implementation=claude-glm/glm-5.4/high' '$ROUTE_DIR/override-until.err'"
+
+  # --read-only dispatches read the research stage, every other dispatch implementation.
+  ROUTE_CWD="$ROOT/ro-clean-repo"
+  route_run stage-research "$ROUTE_FILE" research=codex-glm/glm-5.3/high --read-only
+  RO=$ROUTE_EXIT
+  check "a --read-only dispatch runs on the research route (exit $RO)" test "$RO" -eq 0 -a "$(ran_model stage-research)" = glm-5.3 -a "$(ran_effort stage-research)" = high
+  check "the research route line names the research stage and its reset command" bash -c "grep -Fq '阶段路由生效：调研起草（research）：codex-glm / glm-5.3 / high' '$ROUTE_DIR/stage-research.err' && grep -Fq '复位 /grill-router use research=codex-glm/glm-5.4/high' '$ROUTE_DIR/stage-research.err'"
+  check "the research route's profile is recorded" test "$(json "$ROUTE_DIR/stage-research/status.json" profile)" = codex-glm
+  route_run stage-implementation-2 "$ROUTE_FILE" implementation=codex-glm/glm-5.3/medium --read-only
+  RO=$ROUTE_EXIT
+  check "an implementation route does not reach a --read-only dispatch (exit $RO)" test "$RO" -eq 0 -a "$(ran_model stage-implementation-2)" = glm-5.4 -a "$(ran_effort stage-implementation-2)" = high -a "$(notice_lines '阶段路由生效' "$ROUTE_DIR/stage-implementation-2.err")" = 0
+  ROUTE_CWD=
+  route_run stage-implementation "$ROUTE_FILE" research=codex-glm/glm-5.3/high
+  RO=$ROUTE_EXIT
+  check "a dispatch without --read-only stays on the implementation route (exit $RO)" test "$RO" -eq 0 -a "$(ran_model stage-implementation)" = glm-5.4 -a "$(notice_lines '阶段路由生效' "$ROUTE_DIR/stage-implementation.err")" = 0
+
+  # The default route: nothing is overridden, one line says it is the default, and an
+  # explicit --model / --thinking is what codex runs on.
+  route_run default-model "$ROUTE_FILE" '' --model glm-5.3
+  RO=$ROUTE_EXIT
+  check "without a table an explicit --model is honoured (exit $RO)" test "$RO" -eq 0 -a "$(ran_model default-model)" = glm-5.3 -a "$(ran_effort default-model)" = high
+  check "no line says a route is in effect" test "$(notice_lines '阶段路由生效' "$ROUTE_DIR/default-model.err")" = 0
+  check "the default route line names the default and the --model in effect" grep -Fq '阶段路由：实现（implementation）：claude-glm / glm-5.4 / high（默认）；--model glm-5.3 生效' "$ROUTE_DIR/default-model.err"
+  check "the default route line is in stderr.log too" grep -Fq '阶段路由：实现（implementation）：claude-glm / glm-5.4 / high（默认）' "$ROUTE_DIR/default-model/stderr.log"
+  check "status.json records the explicit model on the default route" test "$(json "$ROUTE_DIR/default-model/status.json" model)" = glm-5.3 -a "$(json "$ROUTE_DIR/default-model/status.json" thinking)" = high -a "$(json "$ROUTE_DIR/default-model/status.json" profile)" = claude-glm
+  route_run default "$ROUTE_FILE" ''
+  RO=$ROUTE_EXIT
+  check "without a table the default route runs (exit $RO)" test "$RO" -eq 0 -a "$(ran_model default)" = glm-5.4 -a "$(ran_effort default)" = high
+  check "the default route line is the only route line" bash -c "test \"\$(grep -c 'codex-worker: 阶段路由' '$ROUTE_DIR/default.err')\" -eq 1"
+  route_run default-thinking "$ROUTE_FILE" '' --thinking low
+  RO=$ROUTE_EXIT
+  check "an explicit --thinking is honoured on the default route (exit $RO)" test "$RO" -eq 0 -a "$(ran_effort default-thinking)" = low
+  check "the default route line names the --thinking in effect" grep -Fq '（默认）；--thinking low 生效' "$ROUTE_DIR/default-thinking.err"
+
+  # Dispatch-time catalog check: the route line names a model the worker home's
+  # catalog (model_catalog_json in its config.toml) does not list, and says nothing
+  # about one it does list.
+  CATALOG_HOME="$ROUTE_DIR/catalog-home"; mkdir -p "$CATALOG_HOME/sessions"
+  printf 'model_catalog_json = "%s/models.json"\n\n[model_providers.custom]\nname = "custom"\nbase_url = "https://api.example.invalid/v1"\n' \
+    "$(codex_home_for_platform "$CATALOG_HOME")" > "$CATALOG_HOME/config.toml"
+  printf '{"models":[{"slug":"glm-5.4"},{"slug":"glm-5.3"}]}\n' > "$CATALOG_HOME/models.json"
+  ROUTE_HOME="$CATALOG_HOME"
+  route_run catalog-listed "$ROUTE_FILE" implementation=codex-glm/glm-5.3/medium
+  RO=$ROUTE_EXIT
+  check "a routed model inside the worker catalog runs (exit $RO)" test "$RO" -eq 0 -a "$(ran_model catalog-listed)" = glm-5.3
+  check "the route line does not question a model inside the worker catalog" bash -c "test \"\$(grep -Fc '阶段路由生效' '$ROUTE_DIR/catalog-listed.err')\" -eq 1 && ! grep -Fq '不在 worker 目录' '$ROUTE_DIR/catalog-listed.err'"
+  printf '{"models":[{"slug":"glm-5.4"}]}\n' > "$CATALOG_HOME/models.json"
+  route_run catalog-missing "$ROUTE_FILE" implementation=codex-glm/glm-5.3/medium
+  RO=$ROUTE_EXIT
+  check "a routed model outside the worker catalog still runs (exit $RO)" test "$RO" -eq 0 -a "$(ran_model catalog-missing)" = glm-5.3
+  check "the route line names a model outside the worker catalog" bash -c "test \"\$(grep -Fc '阶段路由生效' '$ROUTE_DIR/catalog-missing.err')\" -eq 1 && grep -Fq '不在 worker 目录，L1 未验' '$ROUTE_DIR/catalog-missing.err'"
+  check "the route line puts the catalog note before the reset command" grep -Fq '不在 worker 目录，L1 未验；复位 /grill-router use implementation=claude-glm/glm-5.4/high' "$ROUTE_DIR/catalog-missing.err"
+  printf '{"models":[{"slug":"glm-5.3"}]}\n' > "$CATALOG_HOME/models.json"
+  route_run catalog-default "$ROUTE_FILE" ''
+  RO=$ROUTE_EXIT
+  check "the default route line carries the catalog note too (exit $RO)" bash -c "test $RO -eq 0 && grep -Fq 'claude-glm / glm-5.4 / high（默认）；不在 worker 目录，L1 未验' '$ROUTE_DIR/catalog-default.err'"
+  ROUTE_HOME=
+
+  # An expired route, an unknown line and an unreadable table all mean the default
+  # again; the table's own hint about the last two reaches stderr and stderr.log.
+  route_run expired "$ROUTE_FILE" 'implementation=codex-glm/glm-5.3/high@1000000000'
+  RO=$ROUTE_EXIT
+  check "an expired route runs on the default (exit $RO)" test "$RO" -eq 0 -a "$(ran_model expired)" = glm-5.4 -a "$(ran_effort expired)" = high
+  check "an expired route has no line in effect" test "$(notice_lines '阶段路由生效' "$ROUTE_DIR/expired.err")" = 0 -a "$(notice_lines '阶段路由生效' "$ROUTE_DIR/expired/stderr.log")" = 0
+  check "an expired route records the default route" test "$(json "$ROUTE_DIR/expired/status.json" model)" = glm-5.4 -a "$(json "$ROUTE_DIR/expired/status.json" thinking)" = high -a "$(json "$ROUTE_DIR/expired/status.json" profile)" = claude-glm
+  route_run unknown "$ROUTE_FILE" implementation=codex-glm/gpt-x/high
+  RO=$ROUTE_EXIT
+  check "an unknown line runs on the default (exit $RO)" test "$RO" -eq 0 -a "$(ran_model unknown)" = glm-5.4 -a "$(notice_lines '阶段路由生效' "$ROUTE_DIR/unknown.err")" = 0
+  check "the table's hint about an unknown line reaches stderr and stderr.log" bash -c "grep -Fq '不在已验证目录' '$ROUTE_DIR/unknown.err' && grep -Fq '不在已验证目录' '$ROUTE_DIR/unknown/stderr.log'"
+  route_run broken "$ROUTE_FILE" $'garbage\nnot key value\n'
+  RO=$ROUTE_EXIT
+  check "an unreadable table runs on the default (exit $RO)" test "$RO" -eq 0 -a "$(ran_model broken)" = glm-5.4 -a "$(notice_lines '阶段路由生效' "$ROUTE_DIR/broken.err")" = 0
+  check "the table's hint about an unreadable table reaches stderr and stderr.log" bash -c "grep -Fq '无法解析' '$ROUTE_DIR/broken.err' && grep -Fq '无法解析' '$ROUTE_DIR/broken/stderr.log'"
+  # A line in effect that names the default model and effort counts as the default.
+  route_run same-as-default "$ROUTE_FILE" implementation=codex-glm/glm-5.4/high --model glm-5.3
+  RO=$ROUTE_EXIT
+  check "a route on the default model and effort honours --model (exit $RO)" test "$RO" -eq 0 -a "$(ran_model same-as-default)" = glm-5.3 -a "$(notice_lines '阶段路由生效' "$ROUTE_DIR/same-as-default.err")" = 0
+  # Once the implementation stage is back on its default, --model is honoured again.
+  route_run reset "$ROUTE_FILE" $'research=codex-glm/glm-5.3/high\n' --model glm-5.3
+  RO=$ROUTE_EXIT
+  check "after the implementation route is reset --model is honoured again (exit $RO)" test "$RO" -eq 0 -a "$(ran_model reset)" = glm-5.3 -a "$(notice_lines '阶段路由生效' "$ROUTE_DIR/reset.err")" = 0
+
+  # A route codex cannot run is a usage error that names the route and the reset
+  # command: codex is not started.
+  route_run refusal-effort "$ROUTE_FILE" implementation=claude-glm/glm-5.4/max
+  RO=$ROUTE_EXIT
+  check "a route effort codex-glm does not take exits 64 without starting codex (got $RO)" bash -c "test $RO -eq 64 && ! test -e '$ROUTE_DIR/refusal-effort/fake-codex-args.jsonl'"
+  check "the refusal names the route, the effort and the reset command" bash -c "grep -Fq '实现（implementation）阶段是 claude-glm / glm-5.4 / max' '$ROUTE_DIR/refusal-effort.err' && grep -Fq '思考强度 max' '$ROUTE_DIR/refusal-effort.err' && grep -Fq '复位：/grill-router use implementation=claude-glm/glm-5.4/high' '$ROUTE_DIR/refusal-effort.err'"
+  # A model outside codex-glm's combinations cannot be put in the table while the
+  # catalog stands, so a stand-in table script answers one.
+  FAKE_ROUTE="$ROUTE_DIR/fake-stage-route.sh"
+  cat > "$FAKE_ROUTE" <<EOF
+#!/usr/bin/env bash
+# Stands in for scripts/stage-route.sh: answers from FAKE_ROUTE_MODE for the dispatch's
+# own table, and defers to the real script for the default route (the wrapper reads it
+# from /dev/null) and for a table file that does not exist.
+case "\$ISS_STAGE_ROUTE_FILE" in /dev/null) exec "$HERE/stage-route.sh" "\$@" ;; esac
+[ -e "\$ISS_STAGE_ROUTE_FILE" ] || exec "$HERE/stage-route.sh" "\$@"
+case "\${FAKE_ROUTE_MODE:-}" in
+  empty) exit 0 ;;
+  fail) echo "stage-route: boom" >&2; exit 66 ;;
+  opus) case "\$3" in profile) echo claude ;; model) echo opus ;; effort) echo high ;; esac; exit 0 ;;
+esac
+exec "$HERE/stage-route.sh" "\$@"
+EOF
+  chmod +x "$FAKE_ROUTE"
+  ROUTE_BIN="$FAKE_ROUTE"; FAKE_ROUTE_MODE=opus
+  route_run refusal-model "$ROUTE_FILE" implementation=claude/opus/high
+  RO=$ROUTE_EXIT
+  check "a route model outside codex-glm's combinations exits 64 without starting codex (got $RO)" bash -c "test $RO -eq 64 && ! test -e '$ROUTE_DIR/refusal-model/fake-codex-args.jsonl'"
+  check "the refusal names the route, the model and the reset command" bash -c "grep -Fq '实现（implementation）阶段是 claude / opus / high' '$ROUTE_DIR/refusal-model.err' && grep -Fq '模型 opus' '$ROUTE_DIR/refusal-model.err' && grep -Fq '复位：/grill-router use implementation=claude-glm/glm-5.4/high' '$ROUTE_DIR/refusal-model.err'"
+  # When the table cannot answer, the run is a usage error too: codex is never
+  # started without a route.
+  FAKE_ROUTE_MODE=empty
+  route_run read-empty "$ROUTE_FILE" implementation=codex-glm/glm-5.3/medium
+  RO=$ROUTE_EXIT
+  check "a table script that prints nothing exits 64 without starting codex (got $RO)" bash -c "test $RO -eq 64 && ! test -e '$ROUTE_DIR/read-empty/fake-codex-args.jsonl'"
+  check "the error names the field that came back empty" grep -Fq -- '--print implementation profile returned nothing' "$ROUTE_DIR/read-empty.err"
+  FAKE_ROUTE_MODE=fail
+  route_run read-fail "$ROUTE_FILE" implementation=codex-glm/glm-5.3/medium
+  RO=$ROUTE_EXIT
+  check "a table script that fails exits 64 without starting codex (got $RO)" bash -c "test $RO -eq 64 && ! test -e '$ROUTE_DIR/read-fail/fake-codex-args.jsonl'"
+  check "the error names the table script's exit code" grep -Fq -- '--print implementation profile exited 66' "$ROUTE_DIR/read-fail.err"
+  ROUTE_BIN=; FAKE_ROUTE_MODE=
+
+  # An explicit empty --model or --thinking never reaches codex.
+  "$WORKER" --cwd "$ROOT/v1" --brief "$BRIEF" --run-dir "$ROUTE_DIR/empty-model" --model "" --retries 0 --time-limit 120 --idle-timeout 20 >/dev/null 2>"$ROUTE_DIR/empty-model.err"
+  EM=$?
+  check "an explicit empty --model exits 64 without starting codex (got $EM)" bash -c "test $EM -eq 64 && ! test -e '$ROUTE_DIR/empty-model/fake-codex-args.jsonl'"
+  check "an explicit empty --model names the argument" grep -q -- '--model must not be empty' "$ROUTE_DIR/empty-model.err"
+  "$WORKER" --cwd "$ROOT/v1" --brief "$BRIEF" --run-dir "$ROUTE_DIR/empty-thinking" --thinking "" --retries 0 --time-limit 120 --idle-timeout 20 >/dev/null 2>"$ROUTE_DIR/empty-thinking.err"
+  ET=$?
+  check "an explicit empty --thinking exits 64 without starting codex (got $ET)" bash -c "test $ET -eq 64 && ! test -e '$ROUTE_DIR/empty-thinking/fake-codex-args.jsonl'"
+  check "an explicit empty --thinking names the argument" grep -q -- '--thinking must not be empty' "$ROUTE_DIR/empty-thinking.err"
+
+  # Rule 1 and rule 2: with --model this selftest isolates the table, so the explicit
+  # model is what codex gets even on a machine whose route is off the default; without
+  # --model the wrapper takes the route from the table file the caller named.
+  printf 'implementation=codex-glm/glm-5.3/medium\n' > "$ROUTE_DIR/outer.table"
+  route_run rule1 /dev/null - --model glm-5.3
+  RO=$ROUTE_EXIT
+  check "rule 1: an explicit --model is isolated from a routed machine (exit $RO)" test "$RO" -eq 0 -a "$(ran_model rule1)" = glm-5.3 -a "$(ran_effort rule1)" = high -a "$(notice_lines '阶段路由生效' "$ROUTE_DIR/rule1.err")" = 0
+  route_run rule2 "$ROUTE_DIR/outer.table" -
+  RO=$ROUTE_EXIT
+  check "rule 2: without --model the wrapper runs on the table's route (exit $RO, -m $(ran_model rule2))" test "$RO" -eq 0 -a "$(ran_model rule2)" = glm-5.3 -a "$(ran_effort rule2)" = medium -a "$(notice_lines '阶段路由生效' "$ROUTE_DIR/rule2.err")" = 1
+  # A whole-suite run must not carry the V1/V2 isolation into L1: the L1 block restores
+  # the table file rule 1 or 2 decided on at the entry. The probes run in a subshell, so
+  # this level's own isolation, exported above, is never lifted in the parent shell; the
+  # subshell exits with the number of probes that failed, to keep the count.
+  L1_ISO_FAILS=$FAILS
+  (
+    CALLER_STAGE_ROUTE_FILE="$ROUTE_DIR/outer.table"; use_caller_route_file
+    check "L1 restores a caller's table file" test "${ISS_STAGE_ROUTE_FILE:-}" = "$ROUTE_DIR/outer.table"
+    CALLER_STAGE_ROUTE_FILE=__unset__; use_caller_route_file
+    check "L1 drops the isolation when the caller set no table file" test "${ISS_STAGE_ROUTE_FILE+set}" != set
+    exit $((FAILS - L1_ISO_FAILS))
+  )
+  L1_ISO_FAILED=$?; FAILS=$((FAILS + L1_ISO_FAILED))
+
+  # A Resume keeps the first segment's model, effort and profile and prints no route
+  # line, even when the table has since moved to another route; state saved before the
+  # route table existed resumes the same way.
+  ROUTE_SCENARIO=busy-forever
+  route_run resume "$ROUTE_FILE" implementation=codex-glm/glm-5.3/medium --time-limit 6
+  ROUTE_SCENARIO=ok
+  RS=$ROUTE_EXIT
+  check "routed first segment times out (got $RS)" test "$RS" -eq 5
+  check "first segment saved the routed model, effort and profile" test "$(json "$ROUTE_DIR/resume/resume.json" model)" = glm-5.3 -a "$(json "$ROUTE_DIR/resume/resume.json" thinking)" = medium -a "$(json "$ROUTE_DIR/resume/resume.json" profile)" = codex-glm
+  printf '%s\n' 'implementation=codex-glm/glm-5.4/xhigh' > "$ROUTE_FILE"
+  env ISS_STAGE_ROUTE_FILE="$ROUTE_FILE" FAKE_CODEX_SCENARIO=ok FAKE_CODEX_ARGS_LOG="$ROUTE_DIR/resume-resumed.args.jsonl" \
+    "$WORKER" --resume --run-dir "$ROUTE_DIR/resume" --retries 0 --time-limit 30 --idle-timeout 20 >"$ROUTE_DIR/resume-resumed.out" 2>"$ROUTE_DIR/resume-resumed.err"
+  RR=$?
+  check "resume under another route exit code (got $RR)" test "$RR" -eq 0
+  check "resume keeps the first segment's model and effort" test "$(ran_model resume)" = glm-5.3 -a "$(ran_effort resume)" = medium
+  check "resume prints no route line" bash -c "test \"\$(grep -c 'codex-worker: 阶段路由' '$ROUTE_DIR/resume-resumed.err')\" -eq 0"
+  check "status.json after the resume keeps the first segment's route" test "$(json "$ROUTE_DIR/resume/status.json" model)" = glm-5.3 -a "$(json "$ROUTE_DIR/resume/status.json" thinking)" = medium -a "$(json "$ROUTE_DIR/resume/status.json" profile)" = codex-glm
+  node -e 'const p=process.argv[1],f=require("fs");const s=JSON.parse(f.readFileSync(p+"/resume.json"));delete s.profile;s.thinking="";f.writeFileSync(p+"/resume.json",JSON.stringify(s,null,2))' "$ROUTE_DIR/default"
+  env ISS_STAGE_ROUTE_FILE="$ROUTE_FILE" FAKE_CODEX_SCENARIO=ok "$WORKER" --resume --run-dir "$ROUTE_DIR/default" --retries 0 --time-limit 30 --idle-timeout 20 >/dev/null 2>"$ROUTE_DIR/legacy-resume.err"
+  LR=$?
+  LR_LINES=$(grep -c 'codex-worker: 阶段路由' "$ROUTE_DIR/legacy-resume.err")
+  check "legacy resume state without a profile resumes without reading the table (got $LR)" test "$LR" -eq 0 -a "$(json "$ROUTE_DIR/default/status.json" profile)" = "" -a "$(json "$ROUTE_DIR/default/status.json" model)" = glm-5.4 -a "$(json "$ROUTE_DIR/default/status.json" thinking)" = "" -a "$LR_LINES" -eq 0
+
+  # Rule 3: every other V1 case ran codex on $MODEL, whatever the machine's table says.
+  check "every existing V1 case ran codex on \$MODEL ($MODEL)" node -e '
+    const fs = require("fs"), path = require("path");
+    const root = process.argv[1], want = process.argv[2], skip = process.argv[3];
+    const bad = [];
+    const walk = d => {
+      for (const e of fs.readdirSync(d, {withFileTypes: true})) {
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) { if (p !== skip) walk(p); continue; }
+        if (e.name !== "fake-codex-args.jsonl") continue;
+        for (const line of fs.readFileSync(p, "utf8").split("\n").filter(Boolean)) {
+          const a = JSON.parse(line), i = a.indexOf("-m");
+          if (a[i + 1] !== want) bad.push(p + ": " + a[i + 1]);
+        }
+      }
+    };
+    walk(root);
+    if (bad.length) console.error(bad.join("\n"));
+    process.exit(bad.length ? 1 : 0);
+  ' "$(codex_home_for_platform "$ROOT")" "$MODEL" "$(codex_home_for_platform "$ROUTE_DIR")"
+  # The levels below run the real codex: back on the real HOME.
+  HOME=$V1_CALLER_HOME
 fi
 
 if [ -z "$ONLY" ] || [ "$ONLY" = V2 ]; then
   echo "V2 real codex + mock provider"
+  # Rule 3: V2 passes --model "$MODEL" explicitly and stays isolated from the real table.
+  export ISS_STAGE_ROUTE_FILE=/dev/null
   V2_HOME="$ROOT/v2-home"; write_config "$V2_HOME" "http://127.0.0.1:1/v1"
   V2_WORKER_HOME="$V2_HOME"
   if command -v cygpath >/dev/null 2>&1; then V2_WORKER_HOME=$(cygpath -m "$V2_HOME"); fi
@@ -537,6 +835,8 @@ fi
 
 if [ -z "$ONLY" ] || [ "$ONLY" = L1 ]; then
   echo "L1 real GLM (not run by agent)"
+  # L1 follows rule 1/2, not the V1/V2/V3 isolation: put back the table file the entry decided on.
+  use_caller_route_file
   mkdir -p "$ROOT/l1"; printf 'Reply with exactly the word: ok. Do not use any tools.\n' > "$ROOT/l1.brief"
   "$WORKER" --cwd "$ROOT/l1" --brief "$ROOT/l1.brief" --run-dir "$ROOT/l1-run" --model "$MODEL" --time-limit 120 --idle-timeout 30 --retries 0 >/dev/null
   [ $? -eq 0 ] && pass "codex answered on $MODEL" || fail "codex L1 failed"
@@ -544,6 +844,8 @@ fi
 
 if [ -z "$ONLY" ] || [ "$ONLY" = V3 ]; then
   echo "V3 real GLM integration (not run by agent)"
+  # Rule 3: V3 always passes --model "$MODEL" explicitly, so it is isolated from the real table like rule 1.
+  export ISS_STAGE_ROUTE_FILE=/dev/null
   TDD_SKILL=$(ls -d "$HOME"/.claude/plugins/cache/mattpocock/mattpocock-skills/*/skills/*/tdd 2>/dev/null | sort -V | tail -1)
   [ -n "$TDD_SKILL" ] || TDD_SKILL="$HOME/.agents/skills/tdd"
   [ -d "$TDD_SKILL" ] || fail "tdd skill not found"
