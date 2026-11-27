@@ -146,6 +146,7 @@
     - `pipeline-status.sh`：带 `ready-for-human` 的执行票算「非待实现」，在票列表里加 `(人工)` 后缀；规格未关执行票只剩人工票（可混搁置票）时，不进「可以实现」、`--order` 和波次，改在 `--all` 的「状态没收尾」提示 `人工票待做：#n`。`--order --json` 现有字段不变，`--graph` 只新增 `tickets[].human`、`specs[].human_only` 和 `status: human`。
     - SKILL 新增 **Ops tickets**：票面写明经 ssh-manager 执行、带「## 护栏」或带 `ops` 标签的票是运维票；agent 后端在提示词里允许 `mcp__ssh-manager__*`（先 `list_servers`）并原文照抄护栏，codex 后端给 worker 加 `--mcp ssh-manager`、Brief 同样照抄护栏；违反护栏或验收不过时实现者只报告、不硬推，主会话停车，类别 `error`，停车报告附回滚步骤；运维票不走 TDD、不要求 commit，没有代码改动时验证闸门改为「票面验收标准逐条有证据」。
     - `ready-for-human` 票一律不派发。
+    - 2026-11-27 注：find-next 三份批量起草 Brief 模板里「本票由 Opus 执行」的触发条件收窄为「真的不能交给实现者的事（需要用户本人的身份、凭据或物理动作）」；能由实现者经 ssh-manager 做的按上面的运维票写（正文写明经 ssh-manager 执行 + 「## 护栏」），保持 `ready-for-agent`。起因见 find-next 设计要点第 21 条。
 
 37. **2026-11-26：落地时补开的后续票必须挂到规格下并登记 `blocked_by`。** 证据：spec-22 落地时补开收尾票 #50/#51/#52，只把依赖写在标题里（「依赖规格②」），没有挂到规格下，也没有登记 `blocked_by`，之后还把规格关了；三张票成了散票，按跟踪器的阻塞关系计算前沿时还会被误判为可以开工。决定：同时做到三件事——`gh api -X POST .../issues/<spec>/sub_issues -F sub_issue_id=<id>` 挂到本规格下；对它依赖的每张票 `gh api -X POST .../issues/<t>/dependencies/blocked_by -F issue_id=<id>`；规格保持开着，按部分落地处理。`<id>` 是 issue 的 `id` 字段（`gh issue view <n> --json id --jq .id`），不是编号。只写标题或正文不算依赖。
 
@@ -255,6 +256,7 @@
 20. **2026-11-27：`S<k>=spec:<n>` 支持没有「实现票：」行的已有规格。** 起因：Design session 只发规格不拆票时（#25、#26），`make-batch-briefs.sh` 遇到正文没有「实现票：」行的规格直接 `die`（#27），而扫描器和 SKILL.md 都把「没有子票的规格」算「有规格、未拆票」，文档承诺覆盖、脚本却不支持。决定：
     - 没有「实现票：」行时再解析正文的「地图：#N」/「来源地图：#N」行（正则与 `pipeline-status.sh` 的 `bodyMapReferences` 一致），解析到就把那张地图当本组的地图（取标题、走既有地图校验，Brief 保留 `地图 #N「标题」` 和 `gh issue view N` 指引）；两行都没有才是手写规格：不取地图，并在 stderr 提示一行，不硬停（第 29 条：停车只留给真要人决定的事）。子票数不为 0 的仍拒绝。
     - Brief 里随规格形态变化的三句（身份句、实现票行、地图行）由脚本整句注入（`@@SPEC_ORIGIN@@`、`@@TICKETS_LINE@@`、`@@MAP_LINE@@`），不让模板用空变量拼句：第一版让模板同时兼顾两种形态，手写规格渲染出「它覆盖的地图实现票 已在…列出」这种假句，审查打回。
+21. **2026-11-27：起草模板里的「本票由 Opus 执行」只留给真的不能交给实现者的票。** 起因：flash 轮次审查发现三张真机票靠审查 M1 才在发布前拦下——模板只说「用到 ssh-manager 的写『本票由 Opus 执行』」，没说标签，发布后就是 `ready-for-agent` 的人工票（#27 评论 B-1）。第一版修法让这类票标 `ready-for-human`，但触发条件仍是「用到 ssh-manager MCP、真机或远程服务器」，与第 36 条运维票规则相反（那类票本该派给实现者）。决定：三份批量模板的触发条件收窄为「真的不能交给实现者的（需要用户本人的身份、凭据或物理动作）」才写「本票由 Opus 执行」，并在 manifest 该票写 `"labels": ["ready-for-human"]`；能由实现者经 ssh-manager 做的写成运维票（正文写明经 ssh-manager 执行 + `## 护栏`，模板给了最小护栏样例），保持 `ready-for-agent`。
 
 ## 评估过、没有采纳的方案
 

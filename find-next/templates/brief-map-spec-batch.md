@@ -46,8 +46,17 @@ find-next --batch 起草 Brief 模板：一张已收口的地图 → 一份地�
 - **只综合已拍板的东西。** `spec.md` 的每条实现决定后面用括号注明出处（`（#24 结论）`、`（地图 #@@MAP@@ Notes）`、`（ADR 0015）`）。
 - `spec.md` 第一行固定为 `地图：#@@MAP@@`，然后按 to-spec 模板写 `## Problem Statement` 等各节。不要写 `实现票：` 行。
 - 执行票按 to-tickets 的 issue 模板写。`## Parent` 下一行写 `#{{@@KEY@@}}`，发布时会替换成规格票号；正文里提到本组别的执行票写 `#{{T<n>}}`（如 `#{{T2}}`），提到别组规格写 `#{{S<n>}}`（同批其他组的 key）。只有 `{{S<n>}}`、`{{T<n>}}`、`{{S<n>/T<n>}}`、`{{#<n>}}` 四种算占位符，其他花括号文本（例如产品自身的模板语法）原样保留。阻塞关系写进清单的 `blocked_by`，执行票正文里的 `## Blocked by` 一节照样写（用同样的占位符）。
-- 执行票要用到 ssh-manager MCP、真机或远程服务器的（不能交给 codex worker 做的），在正文里写明「本票由 Opus 执行」。
+- 执行票要用到远程服务器或真机的，先看实现者能不能经 ssh-manager MCP 做：能做的写成运维票——正文写明经 ssh-manager 执行、带一节 `## 护栏`（样例见下），`labels` 照旧省略；只有真的不能交给实现者的（需要用户本人的身份、凭据或物理动作），才在正文里写明「本票由 Opus 执行」。
 - 用中文，遵守目标仓库的写作规范。
+
+运维票的 `## 护栏` 一节最小样例（按票的实际情况改写）：
+
+```markdown
+## 护栏
+
+- 只操作 `list_servers` 查到的 `<server_id>` 上的 `<服务>`，不碰其他服务器和服务
+- 改动前先备份 `<文件或配置>`；回滚：`<命令>`
+```
 
 ## 未决的两种处理
 
@@ -78,7 +87,7 @@ find-next --batch 起草 Brief 模板：一张已收口的地图 → 一份地�
 }
 ```
 
-`map_number` 固定为 @@MAP@@。`labels` 省略即可（默认 `ready-for-agent`）。`blocked_by` 的引用只能是本组的 `T<n>`、别组的 `S<n>`（不能是本组 @@KEY@@）、或已有的 `#票号`。没有 `unresolved` 或 `handoffs` 时写空数组。
+`map_number` 固定为 @@MAP@@。`labels` 省略即可（默认 `ready-for-agent`）；不能交给外部实现 worker（codex 等）的票（正文写了「本票由 Opus 执行」的）在该票写 `"labels": ["ready-for-human"]`，否则会按 `ready-for-agent` 派出去。`blocked_by` 的引用只能是本组的 `T<n>`、别组的 `S<n>`（不能是本组 @@KEY@@）、或已有的 `#票号`。没有 `unresolved` 或 `handoffs` 时写空数组。
 
 ## 最终回复
 
