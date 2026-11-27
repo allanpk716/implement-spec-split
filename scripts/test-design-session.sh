@@ -203,11 +203,48 @@ case "\$command" in
     shift
     printf '%s\\n' "\$subcommand" >> "\$ORCA_LOG"
     case "\$subcommand" in
-      wait)
-        if [ "\${DESIGN_TEST_SESSION_EXIT:-0}" != 1 ]; then
-          sleep 2
+      create)
+        # A terminal created for the substitute judgment model. Orca's terminal
+        # outlives the command typed into it, so the fake writes the exit code
+        # the typed command would write, and never reports the exit itself.
+        marker='\$(cat '
+        run_dir=
+        previous=
+        for argument in "\$@"; do
+          if [ "\$previous" = --command ]; then
+            rest=\${argument#*"\$marker"}
+            run_dir=\$(dirname "\${rest%%)*}")
+          fi
+          previous=\$argument
+        done
+        cat "\$run_dir/prompt.txt" > "\$PROMPT_LOG"
+        (
+          if [ "\${DESIGN_TEST_SESSION_EXIT:-0}" = 1 ]; then sleep 0.3; else sleep 1.5; fi
+          printf '0\n' > "\$run_dir/exit-code"
+        ) >/dev/null 2>&1 &
+        if [ "\${DESIGN_TEST_CREATE_FAIL:-0}" = 1 ]; then
+          printf '%s\\n' 'fake orca terminal create failed' >&2
+          exit 70
         fi
-        printf '%s\\n' '{"ok":true,"result":{"exited":true}}'
+        if [ "\${DESIGN_TEST_CREATE_NO_HANDLE:-0}" = 1 ]; then
+          printf '%s\\n' '{"ok":true,"result":{"terminal":{"tabId":"tab_glm"}}}'
+          exit 0
+        fi
+        printf '%s\\n' '{"ok":true,"result":{"terminal":{"handle":"term_glm","tabId":"tab_glm","worktreeId":"wt-test"}}}'
+        ;;
+      wait)
+        case " \$* " in
+          *" term_glm "*)
+            sleep 6
+            printf '%s\\n' '{"ok":true,"result":{"exited":false}}'
+            ;;
+          *)
+            if [ "\${DESIGN_TEST_SESSION_EXIT:-0}" != 1 ]; then
+              sleep 2
+            fi
+            printf '%s\\n' '{"ok":true,"result":{"exited":true}}'
+            ;;
+        esac
         ;;
       close|switch) printf '%s\\n' '{"ok":true}' ;;
       *) exit 70 ;;
@@ -221,18 +258,33 @@ esac
 EOF
 chmod +x "$BIN/orca"
 
+# Started only by the (fake) Orca terminal, never by the wrapper under test.
+cat > "$BIN/claude-glm" <<'FAKE'
+#!/usr/bin/env bash
+echo "fake claude-glm must only be started by Orca, never by the wrapper" >&2
+exit 99
+FAKE
+chmod +x "$BIN/claude-glm"
+JUDGMENT_MODEL_FILE=$WORK/judgment-model
+printf 'grill=%s\n' opus > "$JUDGMENT_MODEL_FILE"
+
 run_design_session() {
   output=$1
   shift
   DESIGN_SESSION_ROOT=$WORK/runs \
   ISS_ORCA=$BIN/orca \
   ISS_DESIGN_SESSION_POLL=0.01 \
+  PATH=$BIN:$PATH \
+  ISS_JUDGMENT_MODEL_FILE=$WORK/judgment-model \
+  ISS_GLM_LAUNCHER=${ISS_GLM_LAUNCHER:-claude-glm} \
   ORCA_LOG=$ORCA_LOG \
   PROMPT_LOG=$PROMPT_LOG \
   CHECK_LOG=$CHECK_LOG \
   DESIGN_TEST_TIMEOUT=${DESIGN_TEST_TIMEOUT:-0} \
   DESIGN_TEST_SESSION_EXIT=${DESIGN_TEST_SESSION_EXIT:-0} \
   DESIGN_TEST_LAUNCH_FAIL=${DESIGN_TEST_LAUNCH_FAIL:-0} \
+  DESIGN_TEST_CREATE_FAIL=${DESIGN_TEST_CREATE_FAIL:-0} \
+  DESIGN_TEST_CREATE_NO_HANDLE=${DESIGN_TEST_CREATE_NO_HANDLE:-0} \
   DESIGN_TEST_CHECK_FAIL=${DESIGN_TEST_CHECK_FAIL:-0} \
   DESIGN_TEST_MISSING_HANDOFF=${DESIGN_TEST_MISSING_HANDOFF:-0} \
   DESIGN_TEST_CLOSED_AFTER_HANDOFF=${DESIGN_TEST_CLOSED_AFTER_HANDOFF:-0} \
@@ -641,6 +693,161 @@ else
 fi
 unset DESIGN_TEST_MISSING_HANDOFF
 
+# --- judgment model switch --------------------------------------------------
+# With opus (or no setting) nothing changes: the official Claude agent is
+# launched and mock pages still go through a worker.
+: > "$ORCA_LOG"
+: > "$PROMPT_LOG"
+printf 'grill=%s\n' opus > "$JUDGMENT_MODEL_FILE"
+run_design_session "$WORK/switch-off.out" feature 'Switch off' --timeout 3
+expect_exit 0 'an opus switch launches a Design session'
+expect_file_has 'ARG --agent' 'an opus switch launches the official Claude agent' "$ORCA_LOG"
+if grep -qx 'create' "$ORCA_LOG"; then
+  record FAIL 'an opus switch creates no Orca terminal'
+else
+  record PASS 'an opus switch creates no Orca terminal'
+fi
+expect_file_has '交给 codex-worker.sh 出页面并自检' \
+  'an opus switch keeps handing mock pages to a worker' "$PROMPT_LOG"
+if grep -Fq '全局判断模型开关（grill）为' "$RUN_STDERR"; then
+  record FAIL 'an opus switch reports nothing about the switch'
+else
+  record PASS 'an opus switch reports nothing about the switch'
+fi
+
+# An expired or unknown setting is the same as opus.
+printf 'grill=%s\ngrill.until=1000000000\n' glm-5.4 > "$JUDGMENT_MODEL_FILE"
+: > "$ORCA_LOG"
+run_design_session "$WORK/switch-expired.out" feature 'Switch expired' --timeout 3
+expect_exit 0 'an expired switch launches a Design session'
+expect_file_has 'ARG --agent' 'an expired switch launches the official Claude agent' "$ORCA_LOG"
+
+# With glm-5.4 the session is an Orca terminal running the GLM launcher.
+printf 'grill=%s\n' glm-5.4 > "$JUDGMENT_MODEL_FILE"
+rm -f "$CHECK_ATTEMPTS"
+: > "$ORCA_LOG"
+: > "$PROMPT_LOG"
+run_design_session "$WORK/switch-on.out" map 'Switched map' --timeout 5
+expect_exit 0 'a glm-5.4 switch opens a Design session'
+if grep -qx 'launch' "$ORCA_LOG"; then
+  record FAIL 'a glm-5.4 switch does not launch the official Claude agent'
+else
+  record PASS 'a glm-5.4 switch does not launch the official Claude agent'
+fi
+expect_file_has 'create' 'a glm-5.4 switch creates an Orca terminal' "$ORCA_LOG"
+expect_file_has 'ARG --focus' 'a glm-5.4 switch focuses the new terminal' "$ORCA_LOG"
+expect_file_has 'ARG path:' 'a glm-5.4 switch names the repository checkout as the worktree' "$ORCA_LOG"
+expect_file_has 'run-create' 'a glm-5.4 switch keeps its own Run for the handoff' "$ORCA_LOG"
+expect_file_has 'ARG claude-glm --dangerously-skip-permissions "$(cat ' \
+  'a glm-5.4 switch types the launcher into the terminal' "$ORCA_LOG"
+GLM_RUN_DIR=$(sed -n 's|^ARG .*\$(cat \(.*\)/prompt\.txt)".*|\1|p' "$ORCA_LOG" | head -n 1)
+if [ -n "$GLM_RUN_DIR" ] && [ -d "$GLM_RUN_DIR" ]; then
+  record PASS 'the typed command reads the prompt from the run directory'
+  expect_file_has "/prompt.txt)\"; echo \$? > $GLM_RUN_DIR/exit-code" \
+    'the typed command records the launcher exit code' "$ORCA_LOG"
+  expect_file_has 'mattpocock-skills:wayfinder' 'glm-5.4 prompt names wayfinder' "$GLM_RUN_DIR/prompt.txt"
+  expect_file_has "运行目录：$GLM_RUN_DIR" 'glm-5.4 prompt carries the run directory' "$GLM_RUN_DIR/prompt.txt"
+  expect_file_has 'to-tickets' 'glm-5.4 prompt continues to to-tickets' "$GLM_RUN_DIR/prompt.txt"
+  expect_file_has 'mockit_submit' 'glm-5.4 prompt still submits mocks' "$GLM_RUN_DIR/prompt.txt"
+  expect_file_has '自己做候选页面和自检脚本' \
+    'glm-5.4 prompt has the session make mock pages itself' "$GLM_RUN_DIR/prompt.txt"
+  expect_file_has "$GLM_RUN_DIR/mock/check.mjs" \
+    'glm-5.4 prompt names its self-check script' "$GLM_RUN_DIR/prompt.txt"
+  if grep -Fq 'codex-worker.sh' "$GLM_RUN_DIR/prompt.txt"; then
+    record FAIL 'glm-5.4 prompt does not hand mock pages to a worker'
+  else
+    record PASS 'glm-5.4 prompt does not hand mock pages to a worker'
+  fi
+else
+  record FAIL 'the typed command reads the prompt from the run directory' "log=$(cat "$ORCA_LOG")"
+fi
+expect_file_has '全局判断模型开关（grill）为 glm-5.4' 'a glm-5.4 grill switch is reported on stderr' "$RUN_STDERR"
+expect_file_has 'term_glm' 'handoff closes the glm-5.4 terminal' "$ORCA_LOG"
+expect_file_has 'term_orchestrator' 'a glm-5.4 handoff switches back to the Orchestrator' "$ORCA_LOG"
+if [ "$(cat "$WORK/switch-on.out")" = "$GLM_RUN_DIR/handoff.md" ]; then
+  record PASS 'a glm-5.4 switch prints the handoff path'
+else
+  record FAIL 'a glm-5.4 switch prints the handoff path' "stdout=$(cat "$WORK/switch-on.out")"
+fi
+
+# Attaching to a glm-5.4 run reads the terminal handle from launch.json.
+if [ -n "$GLM_RUN_DIR" ] && [ -d "$GLM_RUN_DIR" ]; then
+  rm -f "$GLM_RUN_DIR/handoff.md" "$GLM_RUN_DIR/exit-code"
+  : > "$ORCA_LOG"
+  run_design_session "$WORK/switch-attach.out" --attach "$GLM_RUN_DIR" --timeout 5
+  expect_exit 0 'attaching to a glm-5.4 run succeeds'
+  expect_file_has 'term_glm' 'attaching to a glm-5.4 run waits on and closes its terminal' "$ORCA_LOG"
+  if grep -qx 'create' "$ORCA_LOG" || grep -qx 'launch' "$ORCA_LOG"; then
+    record FAIL 'attaching to a glm-5.4 run launches nothing'
+  else
+    record PASS 'attaching to a glm-5.4 run launches nothing'
+  fi
+fi
+
+# The typed command's exit code is how a ended glm-5.4 session is noticed.
+: > "$ORCA_LOG"
+DESIGN_TEST_SESSION_EXIT=1
+run_design_session "$WORK/switch-exit.out" feature 'Closed glm session' --timeout 5
+expect_exit 7 'a glm-5.4 session that exits without a handoff returns exit code seven'
+expect_file_has '启动命令已退出，退出码 0' 'the launcher exit code is reported' "$RUN_STDERR"
+if grep -Fq 'Design session 已结束' "$RUN_STDERR"; then
+  record PASS 'a glm-5.4 session exit message is reported'
+else
+  record FAIL 'a glm-5.4 session exit message is reported'
+fi
+GLM_EXIT_DIR=$(sed -n 's|^ARG .*\$(cat \(.*\)/prompt\.txt)".*|\1|p' "$ORCA_LOG" | head -n 1)
+unset DESIGN_TEST_SESSION_EXIT
+if [ -n "$GLM_EXIT_DIR" ] && [ -d "$GLM_EXIT_DIR" ]; then
+  : > "$ORCA_LOG"
+  # Keep the fake check from delivering a handoff: an ended session sends none.
+  DESIGN_TEST_SESSION_EXIT=1
+  run_design_session "$WORK/switch-attach-ended.out" --attach "$GLM_EXIT_DIR" --timeout 3
+  expect_exit 7 'attaching to an ended glm-5.4 run returns exit code seven'
+  unset DESIGN_TEST_SESSION_EXIT
+else
+  record FAIL 'the ended glm-5.4 run directory is found' "log=$(cat "$ORCA_LOG")"
+fi
+
+: > "$ORCA_LOG"
+ISS_GLM_LAUNCHER=iss-missing-launcher
+run_design_session "$WORK/switch-no-launcher.out" feature x --timeout 3
+expect_exit 6 'a glm-5.4 switch without its launcher returns exit code six'
+expect_file_has 'iss-missing-launcher' 'the missing launcher is named' "$RUN_STDERR"
+unset ISS_GLM_LAUNCHER
+if grep -qx 'create' "$ORCA_LOG"; then
+  record FAIL 'a missing launcher opens no terminal'
+else
+  record PASS 'a missing launcher opens no terminal'
+fi
+
+DESIGN_TEST_CREATE_FAIL=1
+run_design_session "$WORK/switch-create-fail.out" feature x --timeout 3
+expect_exit 6 'a failed terminal create returns exit code six'
+expect_file_has 'orca terminal create failed' 'the terminal create failure is surfaced' "$RUN_STDERR"
+unset DESIGN_TEST_CREATE_FAIL
+
+DESIGN_TEST_CREATE_NO_HANDLE=1
+run_design_session "$WORK/switch-create-no-handle.out" feature x --timeout 3
+expect_exit 6 'a terminal create without a handle returns exit code six'
+expect_file_has 'no terminal handle' 'the missing terminal handle is reported' "$RUN_STDERR"
+unset DESIGN_TEST_CREATE_NO_HANDLE
+
+# Only the grill role is consulted: a switched review leaves the Design
+# session on the official Claude agent.
+printf 'review=%s\n' glm-5.4 > "$JUDGMENT_MODEL_FILE"
+: > "$ORCA_LOG"
+run_design_session "$WORK/switch-review-only.out" feature 'Review only' --timeout 3
+expect_exit 0 'a switched review alone launches a Design session'
+expect_file_has 'ARG --agent' 'a switched review alone keeps the official Claude agent' "$ORCA_LOG"
+if grep -qx 'create' "$ORCA_LOG"; then
+  record FAIL 'a switched review alone creates no Orca terminal'
+else
+  record PASS 'a switched review alone creates no Orca terminal'
+fi
+
+# The rest of the suite describes the official path.
+printf 'grill=%s\n' opus > "$JUDGMENT_MODEL_FILE"
+
 FEATURE_SKILL=$ROOT/grill-feature/SKILL.md
 MAP_SKILL=$ROOT/grill-map/SKILL.md
 expect_file_has 'name: grill-feature' 'feature skill has its name' "$FEATURE_SKILL"
@@ -677,6 +884,8 @@ expect_file_has 'grill-map' 'README documents the map skill symlink' "$ROOT/READ
 expect_file_has 'grill-feature' 'setup documents the feature skill symlink' "$ROOT/docs/setup.md"
 expect_file_has 'grill-map' 'setup documents the map skill symlink' "$ROOT/docs/setup.md"
 expect_file_has 'bash scripts/test-design-session.sh' 'MAINTAINING registers the new test' "$ROOT/MAINTAINING.md"
+expect_file_has 'bash scripts/test-judgment-model.sh' 'MAINTAINING registers the switch test' "$ROOT/MAINTAINING.md"
+expect_file_has 'judgment-model.sh' 'README documents the judgment model switch' "$ROOT/README.md"
 expect_file_has 'opens a Design session' 'README uses the Design session term' "$ROOT/README.md"
 if grep -RInE 'official-Opus session|Opus session' \
   "$ROOT/README.md" "$ROOT/grill-feature/SKILL.md" "$ROOT/grill-map/SKILL.md" \

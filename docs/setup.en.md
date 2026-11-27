@@ -133,10 +133,11 @@ After a wayfinder discussion leaves you with a pile of tickets and no idea which
 
 Maps and tickets marked shelved (搁置) are skipped. The implementation stage is not scanned; that is `/implement-spec-split --status`.
 
-**Install**: symlink it into the skills directory (on Windows use `mklink /J`, or copy):
+**Install**: symlink it into the skills directory (on Windows use `mklink /J`, or copy). Symlink the judgment-model switch command the same way; `/judgment-model` is described in Stage 4:
 
 ```bash
 ln -s ~/.claude/skills/implement-spec-split/find-next ~/.claude/skills/find-next
+ln -s ~/.claude/skills/implement-spec-split/judgment-model ~/.claude/skills/judgment-model
 ```
 
 **Use**: `/find-next [--worker codex|pi|self]`, or just ask "what's next". For the whole picture use `/find-next --list` (or ask "what is left"): it lists every to-do (in progress, needs tickets, needs a spec, open decisions, unfinished bookkeeping, loose issues) without a worker. To write every missing spec at once use `/find-next --batch`: codex workers draft a spec plus its tickets per group, you confirm once, then they are published and you get a start order for `/implement-spec-split`.
@@ -403,6 +404,41 @@ Everyday scheduling spends no subscription quota: the main session (Orchestrator
 
 - In a flash main session, `/find-next` has launch-wave open spec sessions through the OpenClaude slot (i.e. flash) with `--impl agent` by default (glm-5.4 subagents implement), so a spec runs start to finish without subscription quota.
 - Code review, draft review and consecutive-failure diagnosis inside a flash spec session never run in-session (an "opus" subagent in a GLM session is actually GLM — a fake review); they always call `scripts/opus-review.sh`, which runs outside the session on official Opus: `--kind code` (a branch/fixed point), `--kind draft` (a spec/ticket draft), `--kind diagnose` (a failure; recommends continue / re-brief / stop). Any non-zero exit parks the run with an explanation (meanings in the script's header comment); no automatic retry, no GLM downgrade, no in-session self-review.
+
+**The judgment model switch: glm-5.4 when Opus quota runs out**
+
+When Opus quota is exhausted, one slash command in any Claude Code session (the thin `judgment-model/` skill, symlinked as above) decides what stands in for Opus. The switch has two roles, and one command can set both:
+
+- `grill`: Design session discussions, i.e. `/grill-feature`, `/grill-map`, and the ones find-next opens when you reply 「展开」.
+- `review`: everywhere else Opus is used, i.e. all three Opus reviews (code, draft, diagnose).
+
+```text
+/judgment-model                                   # show what each role uses
+/judgment-model grill on opus, the rest on glm 5.4   # one command sets both
+/judgment-model the rest on glm-5.4 until 7:00 tomorrow  # only review, back to opus by itself then
+/judgment-model grill on glm-5.4 for 5 hours          # only grill
+/judgment-model glm-5.4                            # both on glm-5.4, until you switch back
+/judgment-model opus                               # both back
+```
+
+Outside a session the script does the same. Write one or two `role=model` settings; a model without a role sets both roles:
+
+```bash
+S=~/.claude/skills/implement-spec-split/scripts/judgment-model.sh
+$S grill=opus review=glm-5.4                        # both roles in one command
+$S review=glm-5.4 --until 2026-11-28T07:00:00+08:00  # back to opus by itself at that time
+$S review=glm-5.4 --for 5h                          # or: for the next 5 hours (30m, 2d12h also work)
+$S glm-5.4                                          # both roles; no time means it stays
+$S                                                  # show the current setting
+$S opus                                             # both back
+```
+
+- The setting is `~/.claude/state/judgment-model`, applies to every repository and session on this machine, and keeps a model and an expiry per role ([ADR 0002](adr/0002-judgment-model-hot-switch.md)).
+- `opus-review.sh` reads `review` and `design-session.sh` reads `grill`, each on every call, so **flash spec sessions and find-next sessions that are already running need no restart**: after `review` is switched, the review in progress is still Opus; the next one is glm-5.4.
+- Under the switch a review runs through `claude-glm` (`--model opus` maps to glm-5.4 there); stderr says so, and the findings file starts with `判断模型：glm-5.4…`. glm-5.4 reviewing code written by glm-5.4 is weaker than Opus: watch for that line when you read a landing report.
+- Design sessions read the switch only when they are **opened** (the `grill` role): after the switch, `/grill-feature` and `/grill-map` open a glm-5.4 session (an Orca terminal running `claude-glm`, which makes the mock pages itself instead of handing them to a worker); the handoff and the wait are unchanged.
+- A Design session that is already open on Opus cannot change model. To carry on in the same conversation, run `claude-glm --resume` in a terminal of that repository and pick it from the list; the handoff contract is still in that conversation, and the run directory and the wait are unchanged. If the wait timed out, continue it with the `design-session.sh --attach <run dir>` command printed on stderr.
+- Nothing switches by itself: an Opus review that fails on quota (exit code 3) still parks as `quota`, and a parked spec is still resumed by keeper after its 可恢复时间. Switching is your decision.
 
 **The flash boundary**
 

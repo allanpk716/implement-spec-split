@@ -138,11 +138,12 @@ spec 是一个 GitHub 父 issue，它的子 issue 就是 ticket，ticket 之间�
 ln -s ~/.claude/skills/implement-spec-split/find-next ~/.claude/skills/find-next
 ```
 
-再软链两个 Design session 薄包装技能（Windows 同样用 `mklink /J` 或复制）：
+再软链两个 Design session 薄包装技能和判断模型开关命令（Windows 同样用 `mklink /J` 或复制）：
 
 ```bash
 ln -s ~/.claude/skills/implement-spec-split/grill-feature ~/.claude/skills/grill-feature
 ln -s ~/.claude/skills/implement-spec-split/grill-map ~/.claude/skills/grill-map
+ln -s ~/.claude/skills/implement-spec-split/judgment-model ~/.claude/skills/judgment-model
 ```
 
 **用法**：`/find-next [--worker codex|pi|self]`，也可以直接问「下一步做什么」。想看全貌时用 `/find-next --list`，或者直接问「还有什么没做完」：列出全部待办（正在实现、未拆票、缺规格、待讨论的决策票、状态没收尾、散票），不派 worker。决定接下来开发什么时用 `/find-next --batch --workers 4`（`--workers` 是全机 GLM worker 总数，`--specs` 是同时开几份规格，默认 2）：缺规格的票和有规格未拆票的规格，每组由一个 codex worker 起草，你确认一轮后统一发布；最后总是给出全仓库可以开发的规格的编号顺序和每个会话要跑的命令，你确认后它在 Orca 里自动开 worktree 并启动会话（不在 Orca 里时把命令复制到各个 worktree 运行）。一波合入后再跑一次开下一波。同一仓库同一时间只在一个会话里跑 `--batch`。
@@ -409,6 +410,41 @@ node -e 'console.log(JSON.stringify({tool_name:"Write",tool_input:{file_path:"C:
 
 - flash 主会话里跑 `/find-next` 时，launch-wave 用 OpenClaude 槽位（即 flash）开规格会话，默认 `--impl agent`（glm-5.4 子代理实现），一份规格从头跑到尾不占订阅额度。
 - flash 规格会话里的代码审核、草稿审读、连续失败诊断不落在会话内（GLM 会话里的 "opus" 子代理实际是 GLM，等于假审核），一律调 `scripts/opus-review.sh` 出会话用官方 Opus 执行：`--kind code`（审分支/固定点）、`--kind draft`（审规格/票草稿）、`--kind diagnose`（诊断失败、建议续跑/改 Brief/停车）。任何非 0 退出码都停车并说明（含义见脚本头注释），不自动重试、不降级 GLM、不会话内自审。
+
+**判断模型开关：Opus 没额度时切 glm-5.4**
+
+Opus 额度用尽时，在任意 Claude Code 会话里敲一条斜杠命令（薄包装技能 `judgment-model/`，按上文软链安装）。开关分两个角色，一条命令可以同时定两样：
+
+- `grill`：Design session 讨论，即 `/grill-feature`、`/grill-map` 和 find-next 里回「展开」开的讨论。
+- `review`：其余全部 Opus 用途，即 Opus review 的三类（代码审核、草稿审读、失败诊断）。
+
+```text
+/judgment-model                                   # 查看两个角色当前各用什么
+/judgment-model 讨论用 opus，其他用 glm 5.4          # 一条命令同时定两样
+/judgment-model 其他用 glm-5.4 到 明早 7:00          # 只定其余的，到点自动回到 opus
+/judgment-model 讨论用 glm-5.4 持续 5 小时            # 只定讨论的
+/judgment-model glm-5.4                            # 两个都用 glm-5.4，一直生效
+/judgment-model opus                               # 两个都切回
+```
+
+不在会话里时用脚本，效果相同。`角色=模型` 可以写一至两个；不带角色的模型表示两个角色都设：
+
+```bash
+S=~/.claude/skills/implement-spec-split/scripts/judgment-model.sh
+$S grill=opus review=glm-5.4                        # 一次设两样
+$S review=glm-5.4 --until 2026-11-28T07:00:00+08:00  # 到点自动回到 opus
+$S review=glm-5.4 --for 5h                          # 或：从现在起 5 小时（也支持 30m、2d12h）
+$S glm-5.4                                          # 两个角色都设；不带时间就一直生效
+$S                                                  # 查看当前状态
+$S opus                                             # 两个都切回
+```
+
+- 开关是 `~/.claude/state/judgment-model`，对本机所有仓库、所有会话生效；两个角色各记各的模型和到期时间（[ADR 0002](adr/0002-judgment-model-hot-switch.md)）。
+- `opus-review.sh` 读 `review`，`design-session.sh` 读 `grill`，都是每次被调用时读，所以**已经在跑的 flash 规格会话和 find-next 会话不用重开**：`review` 切过去后，正在进行的这一次审查还是 Opus，下一次就是 glm-5.4。
+- 切换后审查经 `claude-glm` 执行（`--model opus` 在 claude-glm 里映射到 glm-5.4），stderr 会说明，findings 文件首行是 `判断模型：glm-5.4…`。glm-5.4 审 glm-5.4 写的代码不如 Opus，看落地报告时留意这一行。
+- Design session 只在**新开**时读开关（看的是 `grill`）：切过去后 `/grill-feature`、`/grill-map` 开出的是 glm-5.4 会话（Orca 终端里跑 `claude-glm`，界面 mock 由它自己做，不派 worker），交接和等待流程不变。
+- 已经开着的 Opus Design session 换不了模型。要在原对话上接着谈：在那个仓库的终端里运行 `claude-glm --resume`，从列表里选它；交接约定还在原对话里，运行目录和等待也不变。等待超时了，用 stderr 里打印的 `design-session.sh --attach <运行目录>` 续等。
+- 不会自动切换：Opus review 报额度错误（退出码 3）照旧按 `quota` 停车，已经停车的规格仍由 keeper 在可恢复时间之后恢复。切不切由你决定。
 
 **flash 的边界**
 

@@ -22,7 +22,17 @@
 #
 # This wrapper removes GLM/proxy Anthropic environment mappings before invoking
 # claude, then runs `claude -p --model opus` with read-only tools. Claude's final
-# standard output is written atomically to --out. It never downgrades to GLM.
+# standard output is written atomically to --out. It never downgrades to GLM
+# on its own.
+#
+# Judgment model switch: the `review` role of the setting managed by
+# scripts/judgment-model.sh is read on every invocation, so a session that is
+# already executing switches at its next review. When it names glm-5.4, the
+# same call runs through the launcher named by ISS_GLM_LAUNCHER (default:
+# claude-glm), where `--model opus` maps to glm-5.4; official Opus is not
+# called, the switch is reported on stderr, and the findings file starts with
+# a line naming the model that
+# produced it. With opus, or any unreadable setting, nothing changes here.
 #
 # Exit codes:
 #   0  success; findings are in --out
@@ -131,6 +141,27 @@ OUT_DIR=$(dirname "$OUT")
 [ -d "$OUT_DIR" ] || die "--out parent directory must exist: $OUT_DIR"
 [ ! -d "$OUT" ] || die "--out must be a file, not a directory: $OUT"
 
+# Read once per invocation: the review role. Anything unreadable means opus.
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+JUDGMENT_MODEL=$("$HERE/judgment-model.sh" --print review 2>/dev/null || true)
+case "$JUDGMENT_MODEL" in
+  glm-5.4) ;;
+  *) JUDGMENT_MODEL=opus ;;
+esac
+GLM_LAUNCHER=${ISS_GLM_LAUNCHER:-claude-glm}
+if [ "$JUDGMENT_MODEL" != opus ]; then
+  command -v "${GLM_LAUNCHER%% *}" >/dev/null 2>&1 || {
+    echo "opus-review: the judgment model switch for review names $JUDGMENT_MODEL, but its launcher '${GLM_LAUNCHER%% *}' was not found in PATH" >&2
+    exit 6
+  }
+  echo "opus-review: the judgment model switch for review is $JUDGMENT_MODEL (set by the user with scripts/judgment-model.sh): this review runs on $JUDGMENT_MODEL through '$GLM_LAUNCHER'; official Opus is not called" >&2
+fi
+if [ "$JUDGMENT_MODEL" = opus ]; then
+  REVIEWER_LINE="You are an Opus review running outside the calling session."
+else
+  REVIEWER_LINE="You are an Opus review running outside the calling session, executed by $JUDGMENT_MODEL, the model the user switched to in place of Opus."
+fi
+
 ALLOWED_TOOLS=(
   Read
   Grep
@@ -167,7 +198,7 @@ CLAUDE_ARGS=(
 
 case "$KIND" in
   code)
-    PROMPT="You are an Opus review running outside the calling session.
+    PROMPT="$REVIEWER_LINE
 Repository: $CWD
 Review fixed point: $INPUT
 
@@ -186,7 +217,7 @@ Output requirements:
 - This entire final response is saved verbatim as the findings file; do not add conversational wrapper text."
     ;;
   draft)
-    PROMPT="You are an Opus review running outside the calling session.
+    PROMPT="$REVIEWER_LINE
 Draft to review: $INPUT
 
 Read the complete draft. It may be a draft specification, ticket, or research result. Judge whether:
@@ -207,7 +238,7 @@ Output requirements:
 - This entire final response is saved verbatim as the findings file; do not add conversational wrapper text."
     ;;
   diagnose)
-    PROMPT="You are an Opus review running outside the calling session.
+    PROMPT="$REVIEWER_LINE
 Failure record: $INPUT
 
 Read the complete failure record and inspect the relevant read-only repository context. Diagnose the root cause; do not settle for restating the final symptom. Distinguish evidence from conjecture and check alternative explanations.
@@ -247,7 +278,13 @@ run_claude() {
       fi
     done < <(env)
     cd "$CWD" || exit 6
-    exec claude "${CLAUDE_ARGS[@]}" "$prompt"
+    # The substitute launcher sets its own GLM mappings on top of this clean
+    # environment, exactly as it does for a session the user starts by hand.
+    if [ "$JUDGMENT_MODEL" = opus ]; then
+      exec claude "${CLAUDE_ARGS[@]}" "$prompt"
+    else
+      exec $GLM_LAUNCHER "${CLAUDE_ARGS[@]}" "$prompt"
+    fi
   )
 }
 
@@ -468,6 +505,17 @@ case "$MISSING_MARKS" in
     rm -f "$RETRY_ERR"
     ;;
 esac
+
+# A substitute judgment model is weaker than the Opus review the Orchestrator
+# expects, so every consumer of the findings sees which model produced them.
+if [ "$JUDGMENT_MODEL" != opus ]; then
+  PROVENANCE_TMP=$(mktemp "$OUT.tmp.XXXXXX") || exit 6
+  { printf '判断模型：%s（用户用 judgment-model.sh 切换，代替 Opus）· %s\n\n' \
+      "$JUDGMENT_MODEL" "$(date '+%Y-%m-%d %H:%M:%S %z')"
+    cat "$OUTPUT_TMP"
+  } > "$PROVENANCE_TMP" || { rm -f "$PROVENANCE_TMP"; exit 6; }
+  mv -f "$PROVENANCE_TMP" "$OUTPUT_TMP" || { rm -f "$PROVENANCE_TMP"; exit 6; }
+fi
 
 if ! mv -f "$OUTPUT_TMP" "$OUT"; then
   echo "opus-review: cannot write findings to $OUT" >&2

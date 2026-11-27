@@ -2,6 +2,15 @@
 # Open an official-subscription Design session and wait for its handoff report,
 # or attach to an existing run directory and keep waiting for its handoff.
 #
+# The `grill` role of the judgment model switch (scripts/judgment-model.sh) is
+# read when a session is launched. With glm-5.4 the Design session is not
+# opened on the official subscription: an Orca terminal in the repository runs
+# the launcher named by ISS_GLM_LAUNCHER (default: claude-glm) with the same
+# prompt, run directory and handoff contract. The typed launch command records
+# its exit code in <run dir>/exit-code, which is how the wait notices that the
+# session ended. A session that is already open keeps the model it started on;
+# --attach keeps waiting for it either way.
+#
 # Usage:
 #   scripts/design-session.sh feature|map (<topic> | --topic-file <path>)
 #                   [--timeout <seconds>]
@@ -143,6 +152,15 @@ ORCA=${ISS_ORCA:-orca}
 # Git Bash rewrites a leading-slash --prompt as a POSIX path; exempt the skill prefix.
 export MSYS2_ARG_CONV_EXCL="${MSYS2_ARG_CONV_EXCL:+$MSYS2_ARG_CONV_EXCL;}/mattpocock-skills"
 
+# Read once per launch: the grill role. Anything unreadable means opus.
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+JUDGMENT_MODEL=$("$HERE/judgment-model.sh" --print grill 2>/dev/null || true)
+case "$JUDGMENT_MODEL" in
+  glm-5.4) ;;
+  *) JUDGMENT_MODEL=opus ;;
+esac
+GLM_LAUNCHER=${ISS_GLM_LAUNCHER:-claude-glm}
+
 run_id_from_json() {
   node -e '
     const fs = require("fs");
@@ -201,8 +219,15 @@ session_info_from_json() {
   node -e '
     const fs = require("fs");
     const root = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-    const outcome = root.result?.outcome ?? root.result ?? {};
-    process.stdout.write([outcome.kind ?? "", outcome.sessionId ?? "", outcome.handle ?? ""].join("\x1f"));
+    // An agent launch reports result.outcome; a terminal create reports
+    // result.terminal, which is always a terminal without a session id.
+    const terminal = root.result?.terminal;
+    const outcome = root.result?.outcome ?? terminal ?? {};
+    process.stdout.write([
+      outcome.kind ?? (terminal ? "terminal" : ""),
+      outcome.sessionId ?? "",
+      outcome.handle ?? terminal?.handle ?? "",
+    ].join("\x1f"));
   ' "$1"
 }
 
@@ -278,6 +303,16 @@ if [ "$MODE" = launch ]; then
   # The upstream skills set disable-model-invocation, so the Skill tool cannot
   # load them. Lead with the slash command: the launch prompt arrives as user
   # input, which may invoke them; everything after it becomes the arguments.
+  #
+  # Mock pages: on Opus the session only writes the direction card and hands
+  # the pages to a worker, because supervising them is what costs Opus quota.
+  # A session on the substitute model has no such quota to save and is told by
+  # its launcher not to use workers, so it makes and checks the pages itself.
+  if [ "$JUDGMENT_MODEL" = opus ]; then
+    MOCK_CLAUSE='涉及界面或交互取舍、用户要看到才能定时，先出 mock 再写规格：用 ~/.claude/skills/implement-spec-split/templates/brief-mock.md 写方向卡和 Brief，交给 codex-worker.sh 出页面并自检；你不看截图和 HTML，只按它产出的 mock/manifest.json 调一次 mockit_submit，等用户拍板后用 mockit_get_review 取裁决。选中的页面复制到仓库 docs/<主题>-mock/，规格引用它作为界面验收基准。'
+  else
+    MOCK_CLAUSE="涉及界面或交互取舍、用户要看到才能定时，先出 mock 再写规格：按 ~/.claude/skills/implement-spec-split/templates/brief-mock.md 的「方向卡」「产出」「验收」自己做候选页面和自检脚本，全部写在 $RUN_DIR/mock/ 下，node $RUN_DIR/mock/check.mjs 全部 PASS 后只调一次 mockit_submit，等用户拍板后用 mockit_get_review 取裁决。选中的页面复制到仓库 docs/<主题>-mock/，规格引用它作为界面验收基准。"
+  fi
   PROMPT=$(cat <<EOF
 /$UPSTREAM
 你是一个 Design session，由 Orchestrator 从当前仓库转来。请处理用户话题：
@@ -290,7 +325,7 @@ $KIND_INSTRUCTIONS
 
 交接约定：
 1. 讨论完成后，在同一会话接着做 to-spec 和 to-tickets；to-tickets 照常让用户确认拆分。
-   涉及界面或交互取舍、用户要看到才能定时，先出 mock 再写规格：用 ~/.claude/skills/implement-spec-split/templates/brief-mock.md 写方向卡和 Brief，交给 codex-worker.sh 出页面并自检；你不看截图和 HTML，只按它产出的 mock/manifest.json 调一次 mockit_submit，等用户拍板后用 mockit_get_review 取裁决。选中的页面复制到仓库 docs/<主题>-mock/，规格引用它作为界面验收基准。
+   $MOCK_CLAUSE
 2. 上下文过重、一次要产出多份规格，或 main 已经变化时，提示用户另开 Design session，不要硬塞进本次会话。
 3. GLOSSARY、ADR 等文档改动由你自己 commit 并 push。
 4. 写不超过 30 行的 $RUN_DIR/handoff.md，包含：规格号、票号、新增或改动的 ADR 与术语、给 Orchestrator 的待办。实现类待办只写「实现规格 #N」（多份写各自规格号和先后顺序），不写由谁、用 worker 还是子代理、串行还是并行去做：执行方式由 /implement-spec-split 决定。
@@ -298,15 +333,37 @@ $KIND_INSTRUCTIONS
 ${EARLY_HANDOFF}
 EOF
   )
-  LAUNCH_JSON=$("$ORCA" agent launch --agent claude --focus --json --prompt "$PROMPT" 2>"$RUN_DIR/launch.err") ||
-    die 6 "orca agent launch failed: $(cat "$RUN_DIR/launch.err")"
+  if [ "$JUDGMENT_MODEL" = opus ]; then
+    LAUNCH_JSON=$("$ORCA" agent launch --agent claude --focus --json --prompt "$PROMPT" 2>"$RUN_DIR/launch.err") ||
+      die 6 "orca agent launch failed: $(cat "$RUN_DIR/launch.err")"
+  else
+    command -v "${GLM_LAUNCHER%% *}" >/dev/null 2>&1 ||
+      die 6 "the judgment model switch for grill is $JUDGMENT_MODEL, but its launcher '${GLM_LAUNCHER%% *}' was not found in PATH"
+    printf 'design-session: 全局判断模型开关（grill）为 %s（用户用 judgment-model.sh 设置）：本次 Design session 由 %s 经 %s 执行，不是官方 Opus\n' \
+      "$JUDGMENT_MODEL" "$JUDGMENT_MODEL" "$GLM_LAUNCHER" >&2
+    # The prompt is far too long to type into a terminal, so the terminal reads
+    # it back from the run directory. The typed command also records the
+    # launcher's exit code: an Orca terminal outlives what was typed into it,
+    # so `terminal wait --for exit` alone would not notice the session ending.
+    printf '%s' "$PROMPT" > "$RUN_DIR/prompt.txt" ||
+      die 6 "could not persist the prompt to $RUN_DIR/prompt.txt"
+    LAUNCH_COMMAND="$GLM_LAUNCHER --dangerously-skip-permissions \"\$(cat $(printf '%q' "$RUN_DIR/prompt.txt"))\"; echo \$? > $(printf '%q' "$RUN_DIR/exit-code")"
+    LAUNCH_JSON=$("$ORCA" terminal create --worktree "path:$REPO_ROOT" --focus --json \
+      --command "$LAUNCH_COMMAND" \
+      2>"$RUN_DIR/launch.err") ||
+      die 6 "orca terminal create failed: $(cat "$RUN_DIR/launch.err")"
+  fi
   printf '%s\n' "$LAUNCH_JSON" > "$RUN_DIR/launch.json"
   SESSION_INFO=$(session_info_from_json "$RUN_DIR/launch.json") ||
-    die 6 'orca agent launch JSON could not be parsed'
+    die 6 'orca launch JSON could not be parsed'
   # \x1f is not IFS whitespace, so an empty sessionId cannot shift handle left.
   IFS=$'\037' read -r SESSION_KIND SESSION_ID SESSION_HANDLE <<EOF
 $SESSION_INFO
 EOF
+  # Without the handle the wait could neither follow nor close the terminal.
+  if [ "$JUDGMENT_MODEL" != opus ] && [ -z "$SESSION_HANDLE" ]; then
+    die 6 'orca terminal create returned no terminal handle'
+  fi
 fi
 
 TIMEOUT_MS=$((TIMEOUT_SECONDS * 1000))
@@ -367,6 +424,20 @@ accept_handoff() {
   exit 0
 }
 
+# Ends the wait for a Design session that stopped without handing off. Without
+# an argument the ending was observed through Orca; with one it is the exit
+# code the substitute launcher wrote to $RUN_DIR/exit-code.
+session_ended() {
+  if [ -f "$RUN_DIR/handoff.md" ]; then
+    accept_handoff "$RUN_DIR/handoff.md"
+  fi
+  cleanup_wait
+  if [ -n "${1:-}" ]; then
+    printf 'design-session: 启动命令已退出，退出码 %s；输出见 Orca 里的 Design session 标签\n' "$1" >&2
+  fi
+  die 7 'Design session 已结束且未交出 handoff.md'
+}
+
 if [ "$MODE" = attach ] && [ -f "$RUN_DIR/handoff.md" ]; then
   # A consuming check may already have taken the handoff message before the
   # previous waiter exited. The report file is authoritative in that case.
@@ -407,16 +478,15 @@ elif [ "$SESSION_KIND" = terminal ] && [ -n "$SESSION_HANDLE" ]; then
       if [ -s "$RUN_DIR/check.out" ]; then
         return 0
       fi
+      if [ -s "$RUN_DIR/exit-code" ]; then
+        session_ended "$(tr -d '[:space:]' < "$RUN_DIR/exit-code")"
+      fi
       if ! kill -0 "$SESSION_WAIT_PID" 2>/dev/null; then
         wait "$SESSION_WAIT_PID"
         SESSION_WAIT_STATUS=$?
         SESSION_WAIT_PID=
         if [ "$SESSION_WAIT_STATUS" -eq 0 ]; then
-          if [ -f "$RUN_DIR/handoff.md" ]; then
-            accept_handoff "$RUN_DIR/handoff.md"
-          fi
-          cleanup_wait
-          die 7 'Design session 已结束且未交出 handoff.md'
+          session_ended
         fi
       fi
     done

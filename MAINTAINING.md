@@ -155,6 +155,8 @@
 
 40. **2026-11-26：守护进程 spec-keeper 接管死掉、卡住和额度停车的 Run（`scripts/keeper.sh`，服务在 `~/ops/services/spec-keeper/`，launchd 每 10 分钟）。** 证据：11-20 以来无人值守 Run 等人约 32.5 小时，其中约 22 小时是会话/worker 卡死或断线没人叫醒、以及 429/额度停车要人手动恢复；总控 find-next 会话自己也会死、会被 `/clear`。决定：用确定性脚本而不是再开一个 LLM 会话盯着；只处理启动状态 `auto_land` 不为 false 的仓库；动作只有四种：quota/transient 停车过了可恢复时间 → `launch-wave --only <n> --apply`；claim interrupted 且无新报告 → 同样恢复；claim active、phase 不是 done/parked、transcript（含 `<session>/subagents/` 下的子代理 transcript）与 Run 目录、worker 运行目录都超过 45 分钟没写入 → 先在会话终端发一行「继续…」，再过 45 分钟仍无写入才关终端、`claim.sh release --force`、恢复；decision/error/other 停车每份报告只通知一次。同一规格 24 小时最多自动恢复 3 次，「launch-wave 退出 0 且之后 claim 为 active」才计数（launch-wave 对不可启动的规格也退出 0）。缺 `run.json` 或 transcript 时一律跳过，宁可漏判不误杀；handoff 预留期内不做卡住处理。旧报告没有机器可读行时按关键词兜底（额度/429/quota/rate limit/resets → quota，其余 decision）。不写 GitHub、不 push、不删分支。暂停：`touch ~/ops/state/spec-keeper/paused`。
 
+41. **2026-11-26：判断模型全局热切换（`scripts/judgment-model.sh`，ADR 0002）。** 证据：Opus 周额度用到 99%（`orca account list` 的 `rateLimits.claude.weekly.usedPercent`），要到周五 10:00 才重置，期间每次 Opus review 都会以退出码 3 停车。用户要一个全局开关：Opus 没额度时把所有用 Opus 的地方切到 glm-5.4，已经在执行的会话也要跟着切。决定：开关是 `~/.claude/state/judgment-model`，按角色记（`grill=`、`review=` 各一行模型、一行 `until=<epoch 秒>`，到期自动回 opus）。两个角色：`grill` 管 Design session 讨论，`review` 管全部 Opus review。用户要求一条命令同时定两样，所以写法是 `judgment-model.sh grill=opus review=glm-5.4 [--until <ISO 8601> | --for <时长>]`：不带角色的模型表示两个都设，没提到的角色保持原样（模型和到期时间都不动）。`opus-review.sh` 报 `--print review`，`design-session.sh` 报 `--print grill`。给用户敲的入口是 `/judgment-model`（薄包装技能 `judgment-model/`，软链到 `~/.claude/skills/`，和 grill-feature 一样）：它只运行脚本并转述那一行状态；设了 `disable-model-invocation`，只能由用户敲，否则会话看到额度错误就可能自己调用它把模型降了。读开关放在两个出口脚本里：`opus-review.sh` 和 `design-session.sh` 每次被调用时读一次，所以运行中的 flash 会话不用重开、SKILL.md 里的旧指令也不用变，下一次审查就是新模型。仍然是用户手动切，退出码 3 不自动降级，ADR 0001 的「不降级」对会话不变。glm-5.4 的走法：审查清掉会话继承的 GLM/flash 环境变量后经 `ISS_GLM_LAUNCHER`（默认 `claude-glm`）执行 `--model opus`（启动器里映射到 glm-5.4），工具白名单、`--permission-prompts none`、超时和退出码都不变；Design session 用 `orca terminal create --worktree path:<仓库根>` 起终端，敲入 `claude-glm --dangerously-skip-permissions "$(cat <运行目录>/prompt.txt)"`（提示词太长，不能直接敲进终端），界面 mock 改由它自己做，因为 claude-glm 的系统提示词不让派 worker。踩的坑：Orca 终端里敲入的命令结束后 shell 还活着，`orca terminal wait --for exit` 察觉不到 `claude-glm` 退出（实测 `sleep 4` 结束后等满 30 秒才超时），所以启动命令末尾加 `echo $? > <运行目录>/exit-code`，等待循环轮询这个文件来判断会话已结束，`--attach` 同样认它。切换后 findings 首行加 `判断模型：glm-5.4…`，stderr 也报告；opus 路径逐字不变。测试：`scripts/test-judgment-model.sh`，外加 `test-opus-review.sh`、`test-design-session.sh` 各一组切换用例（测试里用 `ISS_JUDGMENT_MODEL_FILE` 指到临时文件，免得本机真实的开关影响测试）。
+
 ## flash 模式设计要点（2026-11-20 规格定稿，ADR 0001）
 
 三档分工：flash 主会话/规格会话（`claude-flash` = glm-5.3-flash，只执行与转述）、glm-5.4 子代理（全部源码修改与大量阅读）、官方 Opus（一切结论性判断）。要点：
@@ -162,6 +164,7 @@
 - **白名单默认禁止**（不是黑名单）：flash 只做白名单内的事，漏列的情况会上交而不是被当成允许。评估过"flash 自己做小判断"和"黑名单"，都否了——flash 过度自信的小错会在后续波次放大，黑名单漏列即放行。
 - **一行源码都不写**：delegate-guard flash 模式对源码写入阈值 0、`allow-direct-edit` 不生效，靠 hook 硬拦而不是靠 flash 自觉。
 - **判断一律出会话**：GLM 会话里 "opus" 子代理是假的 Opus（见第 24 条），所以审核、诊断、冲突复审全走 `scripts/opus-review.sh`。Opus 不可用（退出码非 0）就停车，不降级、不自审、不自动重试。
+- **判断模型可由用户热切换（2026-11-26，ADR 0002）**：`/judgment-model`（`judgment-model.sh grill=… review=…`）分 `grill`、`review` 两个角色，一条命令可以同时设，到点自动回 opus。两个出口脚本每次调用时读开关，运行中的会话下一次审查就生效；会话自己仍然不许降级。切换后 findings 首行写明判断模型，落地报告和最终报告要注明。
 - **Design session 承担讨论**：`/grill-feature`、`/grill-map` 由 Orca 开官方 Opus 会话，用户直接谈；讨论完当场 to-spec/to-tickets/commit/push（文档推送预授权），写 `handoff.md` 通知 flash。flash 在等待期间阻塞、不轮询不耗 token。
 - **结论必须带出处**：flash 汇报的每个结论注明支撑它的 findings/result 文件路径，拿不出出处的结论不许说。防止 flash 把自己当判断者。
 - **拿不准默认上交 Opus**，不自己在两个上交对象之间挑。
@@ -305,6 +308,7 @@
   改了 `codex-worker.sh` 或 `progress.sh`，或者升级了 codex，都要把 V1、V2、V3 全部重跑一遍。用 `--impl codex` 跑技能时，第 0 步会跑 L1。
 - **codex worker home 生成**：`bash scripts/test-setup-worker-home.sh`。用临时目录里的假源 home 测配置键/表过滤、`model_catalog_json` 改写、文件复制、权限、幂等备份和输出不泄漏配置值，不访问网络、不碰真实 `~/.codex`。
 - **Opus review 入口**：`bash scripts/test-opus-review.sh`。用临时 HOME/PATH 里的假 `claude` 测三类 prompt、GLM 代理环境变量清理、`--model opus`、只读工具白名单、findings 原子写入、认证/额度/超时/其他错误的不同退出码、超时进程树回收，以及 `## 需要人取舍` 的标记校验（缺标 → 同模型补标一次、补标仍失败退出码 7 并列出条目、标记齐全不重试、「无」和没有这一节都通过），不访问网络、不花 Opus 额度。
+- **判断模型开关入口**：`bash scripts/test-judgment-model.sh`。用临时设置文件和假 `date` 测默认值、一条命令设两个角色、只动一个角色时另一个的模型和到期时间不变、切换与切回、`--until` / `--for` 与按角色到期、坏用法不改设置、`--print <角色>` 对各种坏文件只答 opus 或替代模型。切换本身在 `test-opus-review.sh`（经假 `claude-glm` 执行、findings 首行、补标与额度错误不回落到官方 claude）和 `test-design-session.sh`（终端创建、提示词文件、退出码文件、`--attach`、缺启动器）里各有用例；`/judgment-model` 技能文件和各文档对它的说法也在这个测试里核对。
 - **L1 连通性（pi）**：`scripts/selftest.sh --only L1`。用 `--impl pi` 跑技能时，第 0 步也会执行这个检查。
 - **L2 wrapper（pi）**：`scripts/selftest.sh`。它会在 `~/.cache/implement-spec-split-selftest/` 下建一个临时仓库和 worktree，让 pi 用 tdd 技能实现一个很小的 ticket，然后检查这几件事：
   - 有新 commit，工作区是干净的，测试我们自己重跑能通过；
@@ -396,5 +400,6 @@
 - 验收检查能不能拦住不合格的 worker。L3 里所有 worker 一次就通过了，没有触发过拦截。
 - GLM 出错的处理：碰到 auth、quota 或 transient 错误时，主代理会不会停下来问用户。L2 只测了 wrapper 会不会给出正确的退出码。
 - 有 PR 流程的仓库里，draft PR 能不能开出来、最后能不能标成可以 review。
+- 判断模型切到 glm-5.4 后的真实 Design session（Orca 终端里起 `claude-glm`、靠 `exit-code` 判定结束、mockit 提交）没有实机跑过；`claude-glm --resume` 续接官方 Opus 开的 Design session 只验证了同一端点下的续接。`opus-review.sh` 经 `claude-glm` 的无头调用已冒烟（落到 `glm-5.4[1m]`）。
 
 验证过的项目从这里删掉，发现的新问题补到"设计要点"里。

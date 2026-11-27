@@ -122,6 +122,16 @@ esac
 FAKE
 chmod +x "$BIN/claude"
 
+# Stands in for the GLM launcher: the same fake model, with a log of its own,
+# so a test can tell which of the two was started.
+cat > "$BIN/claude-glm" <<'FAKE'
+#!/usr/bin/env bash
+export FAKE_CLAUDE_LOG="$FAKE_GLM_LOG" FAKE_CLAUDE_CWD="$FAKE_GLM_CWD"
+exec "$FAKE_BIN_DIR/claude" "$@"
+FAKE
+chmod +x "$BIN/claude-glm"
+SWITCH=$HERE/judgment-model.sh
+
 cat > "$BIN/date" <<'FAKE'
 #!/usr/bin/env bash
 if [ "${FAKE_DATE_JUMP_SECONDS:-0}" -eq 0 ]; then
@@ -166,6 +176,11 @@ export FAKE_CLAUDE_CHILD_PID="$WORK/timeout-child.pid"
 export FAKE_CLAUDE_SCENARIO=ok
 export FAKE_DATE_STATE="$WORK/fake-date-state"
 export FAKE_CLAUDE_CALLS="$WORK/claude-calls"
+export FAKE_GLM_LOG="$WORK/glm-env-args.log"
+export FAKE_GLM_CWD="$WORK/glm-cwd.log"
+export FAKE_BIN_DIR="$BIN"
+# The judgment model switch of the user running the tests must not leak in.
+export ISS_JUDGMENT_MODEL_FILE="$WORK/judgment-model"
 
 reset_calls() { : > "$FAKE_CLAUDE_CALLS"; }
 call_count() { cat "$FAKE_CLAUDE_CALLS" 2>/dev/null || echo 0; }
@@ -400,6 +415,123 @@ expect_rc "a findings file without the section passes" 0 "$RUN_RC"
 check "a missing section needs no retry" test "$(call_count)" = 1
 check "the exit-code table documents code 7" grep -Eq '^# +7 ' "$HERE/opus-review.sh"
 
+# --- judgment model switch --------------------------------------------------
+# Without a setting nothing changes: official claude is called, the GLM
+# launcher never is, and the findings carry no extra line.
+rm -f "$ISS_JUDGMENT_MODEL_FILE"
+export FAKE_GLM_LOG="$WORK/switch-off-glm.log" FAKE_CLAUDE_LOG="$WORK/switch-off-claude.log"
+export FAKE_CLAUDE_SCENARIO=ok
+run_review --kind code --input main --out "$WORK/switch-off-findings.md" --cwd "$REPO" --timeout 5
+expect_rc "without the switch the review still runs on claude" 0 "$RUN_RC"
+check "without the switch the GLM launcher is not called" test ! -e "$FAKE_GLM_LOG"
+check "opus findings carry no provenance line" \
+  bash -c "head -n 1 '$WORK/switch-off-findings.md' | grep -Fqx 'fake Opus findings'"
+check "without the switch nothing is reported about the switch" \
+  bash -c "! grep -Fq 'judgment model switch' '$WORK/run.err'"
+
+"$SWITCH" use glm-5.4 >/dev/null 2>&1
+export FAKE_GLM_LOG="$WORK/switch-on-glm.log" FAKE_CLAUDE_LOG="$WORK/switch-on-claude.log"
+export FAKE_CLAUDE_SCENARIO=ok
+run_review --kind code --input main --out "$WORK/switch-on-findings.md" --cwd "$REPO" --timeout 5
+expect_rc "a switched code review succeeds" 0 "$RUN_RC"
+check "a switched review does not call claude" test ! -e "$FAKE_CLAUDE_LOG"
+check "a switched review calls the GLM launcher" test -e "$FAKE_GLM_LOG"
+check "switched findings start with the provenance line" \
+  bash -c "head -n 1 '$WORK/switch-on-findings.md' | grep -Fq '判断模型：glm-5.4'"
+check "the provenance line is followed by a blank line" \
+  bash -c "test \"\$(sed -n 2p '$WORK/switch-on-findings.md')\" = ''"
+check "switched findings keep the model output" grep -Fqx 'fake Opus findings' "$WORK/switch-on-findings.md"
+check "the switch is reported on stderr" grep -Fq 'the judgment model switch for review is glm-5.4' "$WORK/run.err"
+check "the report says official Opus is not called" grep -Fq 'official Opus is not called' "$WORK/run.err"
+check "GLM launcher runs headless" awk '
+  /^ARG\t/ { arg = substr($0, 5); if (arg == "-p" || arg == "--print") found = 1 }
+  END { exit !found }
+' "$FAKE_GLM_LOG"
+check "GLM launcher is asked for opus, which the launcher maps to glm-5.4" awk '
+  /^ARG\t/ { arg = substr($0, 5); args[++count] = arg }
+  END { for (i = 1; i < count; i++) if (args[i] == "--model" && args[i + 1] == "opus") exit 0; exit 1 }
+' "$FAKE_GLM_LOG"
+check "GLM launcher cwd is the reviewed repository" test "$(cat "$FAKE_GLM_CWD")" = "$REPO"
+for variable in ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_MODEL CLAUDE_CODE_SUBAGENT_MODEL CLAUDE_CODE_SUBAGENT_MODEL_FORCE FLASH_ORCHESTRATOR; do
+  check "$variable is unset for the GLM launcher" bash -c "! grep -Eq '^$variable=' '$FAKE_GLM_LOG'"
+done
+check "all ANTHROPIC_DEFAULT_*_MODEL variables are unset for the GLM launcher" \
+  bash -c "! grep -Eq '^ANTHROPIC_DEFAULT_[A-Za-z0-9_]+_MODEL=' '$FAKE_GLM_LOG'"
+GOT_ALLOWED=$(tool_block "$FAKE_GLM_LOG" "--allowedTools" "--disallowedTools")
+if [ "$GOT_ALLOWED" = "$EXPECTED_ALLOWED" ]; then pass "the switched allowed tool list is exactly read-only"
+else fail "the switched allowed tool list is exactly read-only"; fi
+GOT_DISALLOWED=$(tool_block "$FAKE_GLM_LOG" "--disallowedTools" "--permission-prompts")
+if [ "$GOT_DISALLOWED" = "$EXPECTED_DISALLOWED" ]; then pass "the switched review still disallows editing and network tools"
+else fail "the switched review still disallows editing and network tools"; fi
+check "the switched review still denies unprompted permissions" awk '
+  /^ARG\t/ { arg = substr($0, 5); args[++count] = arg }
+  END { for (i = 1; i < count; i++) if (args[i] == "--permission-prompts" && args[i + 1] == "none") exit 0; exit 1 }
+' "$FAKE_GLM_LOG"
+check "the switched prompt names the executing model" grep -Fq 'executed by glm-5.4' "$FAKE_GLM_LOG"
+check "the switched prompt still names the full code-review skill" \
+  grep -Fq 'mattpocock-skills:code-review' "$FAKE_GLM_LOG"
+
+export FAKE_GLM_LOG="$WORK/switch-draft-glm.log" FAKE_CLAUDE_LOG="$WORK/switch-draft-claude.log"
+run_review --kind draft --input "$WORK/draft.md" --out "$WORK/switch-draft-findings.md" --cwd "$REPO" --timeout 5
+expect_rc "a switched draft review succeeds" 0 "$RUN_RC"
+check "a switched draft review does not call claude" test ! -e "$FAKE_CLAUDE_LOG"
+check "switched draft findings carry the provenance line" \
+  bash -c "head -n 1 '$WORK/switch-draft-findings.md' | grep -Fq '判断模型：glm-5.4'"
+export FAKE_GLM_LOG="$WORK/switch-diagnose-glm.log" FAKE_CLAUDE_LOG="$WORK/switch-diagnose-claude.log"
+run_review --kind diagnose --input "$WORK/failure.md" --out "$WORK/switch-diagnose-findings.md" --cwd "$REPO" --timeout 5
+expect_rc "a switched diagnose review succeeds" 0 "$RUN_RC"
+check "a switched diagnose review does not call claude" test ! -e "$FAKE_CLAUDE_LOG"
+check "switched diagnose findings carry the provenance line" \
+  bash -c "head -n 1 '$WORK/switch-diagnose-findings.md' | grep -Fq '判断模型：glm-5.4'"
+
+reset_calls
+export FAKE_GLM_LOG="$WORK/switch-repair-glm.log" FAKE_CLAUDE_LOG="$WORK/switch-repair-claude.log"
+export FAKE_CLAUDE_SCENARIO=missingmarks FAKE_CLAUDE_SCENARIO_2=fullmarks
+run_review --kind draft --input "$WORK/draft.md" --out "$WORK/switch-repaired.md" --cwd "$REPO" --timeout 5
+expect_rc "a switched review repairs missing marks" 0 "$RUN_RC"
+REPAIR_CALLS=$(call_count)
+check "both passes of a switched repair go through the GLM launcher" \
+  bash -c "test '$REPAIR_CALLS' = 2 && test ! -e '$FAKE_CLAUDE_LOG'"
+check "repaired switched findings keep the provenance line first" \
+  bash -c "head -n 1 '$WORK/switch-repaired.md' | grep -Fq '判断模型：glm-5.4'"
+check "repaired switched findings have the marks" grep -Fq '可自动采纳：是' "$WORK/switch-repaired.md"
+export FAKE_CLAUDE_SCENARIO=ok FAKE_CLAUDE_SCENARIO_2=
+
+export FAKE_GLM_LOG="$WORK/switch-quota-glm.log" FAKE_CLAUDE_LOG="$WORK/switch-quota-claude.log"
+export FAKE_CLAUDE_SCENARIO=quota
+run_review --kind draft --input "$WORK/draft.md" --out "$WORK/switch-quota-findings.md" --cwd "$REPO" --timeout 5
+expect_rc "a quota failure under the switch still exits 3" 3 "$RUN_RC"
+check "a quota failure under the switch does not fall back to claude" test ! -e "$FAKE_CLAUDE_LOG"
+check "a quota failure under the switch writes no findings" test ! -e "$WORK/switch-quota-findings.md"
+export FAKE_CLAUDE_SCENARIO=ok
+
+printf 'review=glm-5.4\nreview.until=1000000000\n' > "$ISS_JUDGMENT_MODEL_FILE"
+export FAKE_GLM_LOG="$WORK/switch-expired-glm.log" FAKE_CLAUDE_LOG="$WORK/switch-expired-claude.log"
+run_review --kind draft --input "$WORK/draft.md" --out "$WORK/switch-expired-findings.md" --cwd "$REPO" --timeout 5
+expect_rc "an expired switch runs the review on claude" 0 "$RUN_RC"
+check "an expired switch calls claude" test -e "$FAKE_CLAUDE_LOG"
+check "an expired switch does not call the GLM launcher" test ! -e "$FAKE_GLM_LOG"
+check "an expired switch adds no provenance line" \
+  bash -c "head -n 1 '$WORK/switch-expired-findings.md' | grep -Fqx 'fake Opus findings'"
+
+# Only the review role is consulted: switching grill alone changes nothing here.
+printf 'grill=glm-5.4\ngrill.until=\n' > "$ISS_JUDGMENT_MODEL_FILE"
+export FAKE_GLM_LOG="$WORK/switch-grill-only-glm.log" FAKE_CLAUDE_LOG="$WORK/switch-grill-only-claude.log"
+run_review --kind draft --input "$WORK/draft.md" --out "$WORK/switch-grill-only-findings.md" --cwd "$REPO" --timeout 5
+expect_rc "a switched grill role alone keeps the review on claude" 0 "$RUN_RC"
+check "a switched grill role alone calls claude" test -e "$FAKE_CLAUDE_LOG"
+check "a switched grill role alone does not call the GLM launcher" test ! -e "$FAKE_GLM_LOG"
+
+"$SWITCH" use glm-5.4 >/dev/null 2>&1
+export ISS_GLM_LAUNCHER=iss-missing-glm-launcher
+export FAKE_GLM_LOG="$WORK/switch-no-launcher-glm.log" FAKE_CLAUDE_LOG="$WORK/switch-no-launcher-claude.log"
+run_review --kind draft --input "$WORK/draft.md" --out "$WORK/switch-no-launcher.md" --cwd "$REPO" --timeout 5
+expect_rc "a switched review without its launcher exits 6" 6 "$RUN_RC"
+check "the missing launcher is named" grep -Fq 'iss-missing-glm-launcher' "$WORK/run.err"
+check "a missing launcher calls neither model" bash -c "test ! -e '$FAKE_CLAUDE_LOG' && test ! -e '$FAKE_GLM_LOG'"
+unset ISS_GLM_LAUNCHER
+"$SWITCH" use opus >/dev/null 2>&1
+
 EXIT_CODE_SENTENCE='退出码为 3（额度或 429）时按 quota 停车，其余非 0 退出码仍按原规则停车并说明（退出码含义见 scripts/opus-review.sh 头注释）'
 check "SKILL delegates exit codes to the wrapper header" \
   grep -Fq "$EXIT_CODE_SENTENCE" "$HERE/../SKILL.md"
@@ -409,6 +541,12 @@ check "SKILL does not duplicate the exit-code table" \
   bash -c "! grep -Fq 'authentication failed' '$HERE/../SKILL.md'"
 check "find-next does not duplicate the exit-code table" \
   bash -c "! grep -Fq '认证失败（2）' '$HERE/../find-next/SKILL.md'"
+check "the wrapper header documents the judgment model switch" \
+  grep -Fq 'judgment-model.sh' "$HERE/opus-review.sh"
+check "SKILL documents the judgment model switch" \
+  grep -Fq 'judgment-model.sh' "$HERE/../SKILL.md"
+check "find-next documents the judgment model switch" \
+  grep -Fq 'judgment-model.sh' "$HERE/../find-next/SKILL.md"
 
 if [ "$FAIL" -gt 0 ]; then
   echo "Artifacts: $WORK"

@@ -12,3 +12,5 @@
 
 - 规格会话由 launch-wave 以 OpenClaude 槽位（`claude-flash`）启动，不再占用订阅的 Opus Orchestrator；订阅额度只花在 Design session（grill → to-spec → to-tickets）和 Opus review 上。
 - Design session 自己 commit 并 push 文档改动（用户已预先授权），flash 不负责推送。
+
+> 2026-11-26 修订：「不降级」指会话不自行降级。用户可以用全局开关把判断模型切到 glm-5.4，由两个出口脚本按开关执行，见 ADR 0002。

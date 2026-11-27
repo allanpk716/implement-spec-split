@@ -39,12 +39,16 @@ The exploration, implementer, merger and fix roles; everything except review.
 The Standards and Spec reviewers of `mattpocock-skills:code-review`; always In-session subagents on a strong model.
 
 **Design session**:
-A separate Claude Code session on the official subscription (Opus) that the Orchestrator opens through Orca for a design discussion (grill-with-docs, a wayfinder grilling ticket); the user talks to it directly, and it carries the discussion through to-spec before handing control back.
+A separate Claude Code session on the official subscription (Opus) that the Orchestrator opens through Orca for a design discussion (grill-with-docs, a wayfinder grilling ticket); the user talks to it directly, and it carries the discussion through to-spec before handing control back. When the Judgment model is switched to a substitute, it is an Orca terminal running that model's launcher instead, with the same handoff.
 _Avoid_: Opus session, grill session, hop
 
 **Opus review**:
-A non-interactive judgment pass run on the official subscription's Opus, outside the Orchestrator's session, that reads a diff or draft and returns findings for the Orchestrator to act on.
+A non-interactive judgment pass run outside the Orchestrator's session that reads a diff or draft and returns findings for the Orchestrator to act on. It runs on the official subscription's Opus, or on the switched Judgment model, in which case the findings file's first line names that model.
 _Avoid_: strong-model review (ambiguous in a GLM session, where "opus" maps to GLM)
+
+**Judgment model**:
+The model that stands in for Opus in each of two roles: `review` (every Opus review) and `grill` (Design sessions). Each role is Opus, or the substitute the user names with the global switch (`/judgment-model`, backed by `scripts/judgment-model.sh` and stored in `~/.claude/state/judgment-model`), today only glm-5.4; one command sets both roles. Both wrappers read their own role on every call, so a session that is already executing changes model at its next review or new Design session.
+_Avoid_: strong model, fallback model (the switch is the user's decision, never an automatic downgrade)
 
 ## Work
 

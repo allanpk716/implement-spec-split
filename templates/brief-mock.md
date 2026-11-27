@@ -4,6 +4,8 @@ Copy it into <run dir>/brief.md, fill every <...>, and delete this comment.
 Run codex-worker.sh WITHOUT --read-only and WITHOUT --mcp; the worker only writes under <run dir>/mock/.
 Afterwards the Design session reads only mock/manifest.json and calls mockit_submit once with its paths;
 it does not open screenshots or HTML.
+When the Design session itself runs on the switched judgment model (glm-5.4), no worker is involved:
+it fills in the direction card and makes and checks the pages itself, to the same 产出 and 验收.
 -->
 
 # Mock：<一句话主题>
