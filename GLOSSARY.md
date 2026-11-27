@@ -123,7 +123,7 @@ _Avoid_: stale claim (older than 3 days, decided by update time alone)
 One invocation of the skill, implementing one Spec from start to finish; several Runs may work on different Specs at the same time. Not an Orca Run: a Run reports into its wave's Orca Run and creates one of its own for its Ticket workers.
 
 **Orca Run**:
-An Orca orchestration Run, named by its id on every Orca orchestration call and never inherited from the terminal: the one `launch-wave.sh` creates per wave for the Spec sessions it dispatches (kept in the Launch state as `run`), and the one each Spec session creates for the Ticket workers it dispatches.
+An Orca orchestration Run, named by its id on every Orca orchestration call that acts on a Run and never inherited from the terminal (the calls that name none are the two kinds `lib-orca.sh` Rule 2 excepts: the ones addressing one dispatch by its id, `worker-stop` / `worker-show` / `worker-release`, and `worker-list`, which the keeper calls without a Run of its own): the one `launch-wave.sh` creates per wave for the Spec sessions it dispatches (kept in the Launch state as `run`), and the one each Spec session creates for the Ticket workers it dispatches.
 _Avoid_: Run without "Orca" (that is one invocation of the skill), wave (that is the batch, not Orca's object)
 
 **Recovery**:
@@ -201,7 +201,7 @@ The self-contained task description handed to an External worker, made of contex
 _Avoid_: prompt
 
 **Lean start (精简启动)**:
-Starting an implementation worker (a Ticket's implementation, fix or merge role, dispatched by `scripts/stage-dispatch.sh` on the implementation Stage route) with the Launcher profile's `--bare`: no CLAUDE.md, skills, plugins or hooks are loaded; the rules it must follow come from a rules file injected as a system prompt (`--append-system-prompt-file`, the file named by `ISS_DISPATCH_LEAN_RULES`, default `templates/lean-rules.md`) and the MCP servers it needs from `--mcp-config`, which takes a trivial task from 18.6K to 1.2K input tokens (ADR 0004). It is the default; without the rules file the start is a normal one, `ISS_DISPATCH_BARE` (0, off, no or false) turns it off, and the dispatch's Sidecar records which it was (`bare`, `bare_note`).
+Starting an implementation worker (a Ticket's implementation or fix role, dispatched by `scripts/stage-dispatch.sh` on the implementation Stage route; the merge role starts normally, since it resolves conflicts on the Integration branch and needs the CLAUDE.md and hooks `--bare` drops) with the Launcher profile's `--bare`: no CLAUDE.md, skills, plugins or hooks are loaded; the rules it must follow come from a rules file injected as a system prompt (`--append-system-prompt-file`, the file named by `ISS_DISPATCH_LEAN_RULES`, default `templates/lean-rules.md`) and the MCP servers it needs from `--mcp-config`, which takes a trivial task from 18.6K to 1.2K input tokens (ADR 0004). It is the default; without the rules file the start is a normal one, `ISS_DISPATCH_BARE` (0, off, no or false) turns it off, and the dispatch's Sidecar records which it was (`bare`, `bare_note`).
 _Avoid_: 精简开关 as the name of the start (the switch is only the opt-out), bare mode
 
 **Sidecar**:

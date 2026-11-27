@@ -481,6 +481,45 @@ expect_file_has 'iss-missing-launcher' 'the missing launcher is named' "$RUN_STD
 expect_file_has 'claude / opus / high' 'the missing launcher is reported against its route' "$RUN_STDERR"
 expect_file_without 'worktree' 'a missing launcher calls Orca not at all' "$ORCA_LOG"
 
+# --- a missing prerequisite is exit 6, not a usage error -----------------------------
+# node, and a run directory or a dispatch directory that cannot be created,
+# are no misuse of the command line: like a missing launcher, they exit 6 and
+# nothing starts (spec #26, review round 3). node is the one prerequisite the
+# module checks before any subcommand: a PATH of this test's own, holding
+# bash and dirname alone, is what makes it missing.
+
+fresh_case
+NO_NODE_BIN=$WORK/no-node-bin
+mkdir -p "$NO_NODE_BIN"
+ln -s "$(command -v bash)" "$NO_NODE_BIN/bash"
+ln -s "$(command -v dirname)" "$NO_NODE_BIN/dirname"
+env PATH="$NO_NODE_BIN" HOME="$WORK/home" bash "$SCRIPT" dispatch --stage implementation \
+  --brief "$WORK/brief-41.md" --run run_spec26 --run-dir "$RUN_DIR" \
+  --parent-worktree "$SPEC_WT" --base-branch spec-26 --ticket 41 > "$RUN_STDOUT" 2> "$RUN_STDERR" </dev/null
+RUN_EXIT=$?
+expect_exit 6 'a missing node exits 6'
+expect_file_has 'node is required' 'the missing prerequisite is named' "$RUN_STDERR"
+expect_file_without 'Usage:' 'a missing node is not a usage error' "$RUN_STDERR"
+printf 'not a directory\n' > "$WORK/not-a-dir"
+run_module dispatch --stage implementation --brief "$WORK/brief-41.md" \
+  --run run_spec26 --run-dir "$WORK/not-a-dir/runs" --parent-worktree "$SPEC_WT" --base-branch spec-26 --ticket 41
+expect_exit 6 'a run directory that cannot be created exits 6'
+expect_file_has 'could not create the run directory' 'the failure is reported' "$RUN_STDERR"
+expect_file_without 'Usage:' 'a run directory that cannot be created is not a usage error' "$RUN_STDERR"
+expect_file_without 'worktree' 'nothing starts without a run directory' "$ORCA_LOG"
+printf 'not a directory\n' > "$RUN_DIR/implement-42"
+run_module dispatch --stage implementation --brief "$WORK/brief-41.md" \
+  --run run_spec26 --run-dir "$RUN_DIR" --parent-worktree "$SPEC_WT" --base-branch spec-26 --ticket 42
+expect_exit 6 'a dispatch directory that cannot be created exits 6'
+expect_file_has 'could not create the dispatch directory' 'the failure is reported' "$RUN_STDERR"
+expect_file_without 'Usage:' 'a dispatch directory that cannot be created is not a usage error' "$RUN_STDERR"
+expect_file_without 'worktree' 'nothing starts without a dispatch directory' "$ORCA_LOG"
+if [ -e "$RUN_DIR/dispatch-implement-42.json" ]; then
+  record FAIL 'no sidecar is written for a dispatch directory that could not be created'
+else
+  record PASS 'no sidecar is written for a dispatch directory that could not be created'
+fi
+
 # --- the default implementation route: child worktree, terminal, adoption --------
 
 fresh_case
@@ -730,6 +769,35 @@ expect_exit 0 'a fix dispatch with the lean start on exits 0'
 expect_file_has "ARG claude-glm --dangerously-skip-permissions --model glm-5.4\[1m\] --effort high --bare --append-system-prompt-file $WORK/lean-rules.md; echo \$? > " \
   'a fix role gets the lean arguments as well' "$ORCA_LOG"
 
+# The merge role never starts lean, whatever the switch and the rules file
+# (spec #26, review round 3, trade-off 1 B): it resolves conflicts on the
+# Integration branch, where CLAUDE.md and the hooks must stay loaded. The
+# sidecar names the role as the reason, and --mcp-config is passed all the
+# same, as on any normal start.
+: > "$ORCA_LOG"
+run_module dispatch --stage implementation --role merge --brief "$WORK/brief-41.md" --ticket 41 \
+  --run run_spec26 --run-dir "$RUN_DIR" --parent-worktree "$SPEC_WT" --base-branch spec-26 \
+  --mcp-config "$WORK/mcp.json"
+expect_exit 0 'a merge dispatch with the lean start on and a rules file exits 0'
+expect_file_has "ARG claude-glm --dangerously-skip-permissions --model glm-5.4\[1m\] --effort high --mcp-config $WORK/mcp.json; echo \$? > " \
+  'the merge role starts normally: no --bare and no rules file, the MCP config still passed' "$ORCA_LOG"
+expect_file_without 'ARG --bare' 'the merge dispatch carries no --bare' "$ORCA_LOG"
+expect_file_without 'ARG --append-system-prompt-file' 'the merge dispatch carries no rules file' "$ORCA_LOG"
+expect_json false 'the merge sidecar says the start was not a lean one' "$RUN_DIR/dispatch-merge-41.json" bare
+expect_file_has 'the merge role starts normally' 'the merge sidecar bare_note names the role as the reason' \
+  "$RUN_DIR/dispatch-merge-41.json"
+expect_file_without 'was not found' 'the merge bare_note does not blame the rules file, which is there' \
+  "$RUN_DIR/dispatch-merge-41.json"
+ISS_DISPATCH_BARE=0
+: > "$ORCA_LOG"
+run_module dispatch --stage implementation --role merge --brief "$WORK/brief-41.md" --ticket 42 \
+  --run run_spec26 --run-dir "$RUN_DIR" --parent-worktree "$SPEC_WT" --base-branch spec-26
+expect_exit 0 'a merge dispatch with ISS_DISPATCH_BARE=0 exits 0'
+expect_file_without 'ARG --bare' 'still no --bare with the switch off' "$ORCA_LOG"
+expect_file_has 'the merge role starts normally' 'the merge bare_note still names the role, not the switch' \
+  "$RUN_DIR/dispatch-merge-42.json"
+ISS_DISPATCH_BARE=1
+
 # --- fix and merge roles: in the Spec worktree, no child -----------------------------
 
 fresh_case
@@ -959,6 +1027,7 @@ run_module wait --sidecar "$SIDECAR_42" --timeout 1
 expect_exit 5 'a wait that times out exits 5'
 expect_file_has '超时' 'the timeout is reported' "$RUN_STDERR"
 expect_file_has 'ctx_42' 'the timeout names the dispatch' "$RUN_STDERR"
+expect_file_without 'the check took mail' 'an empty batch (the timeout) is not mistaken for mail taken' "$RUN_STDERR"
 CHECK_CALLS=$(grep -c '^check$' "$ORCA_LOG")
 if [ "$CHECK_CALLS" = 1 ]; then
   record PASS 'a timed-out wait made one check and did not retry'
@@ -1000,6 +1069,95 @@ if [ -s "$ORCA_LOG" ]; then
   record FAIL 'it asks Orca nothing' "log=$(cat "$ORCA_LOG")"
 else
   record PASS 'it asks Orca nothing'
+fi
+
+# Woken by mail that is no worker_done (another Ticket's worker asking its
+# Spec session, in the same Run; spec #26, review round 3, trade-off 2 B).
+# --types narrows what wakes the wait, not what the batch holds, and the
+# check took the mail, so it is in no mailbox now but wait.json: it is
+# printed on stdout, one line of JSON each, and the wait exits 8 before
+# reporting anything else. The caller handles it and waits again.
+ORCA_TEST_DISPATCH_ID=ctx_60
+dispatch_ticket 60
+SIDECAR_60=$RUN_DIR/dispatch-implement-60.json
+printf '%s\n' '{"ok":true,"result":{"messages":[{"id":"msg_ask_1","type":"ask","payload":{"taskId":"task_impl","dispatchId":"ctx_other","subject":"which file?","body":"The Brief names two."}}]}}' \
+  > "$WORK/check-ask.json"
+ORCA_TEST_CHECK_JSON=$WORK/check-ask.json
+: > "$ORCA_LOG"
+run_module wait --sidecar "$SIDECAR_60" --timeout 1
+expect_exit 8 'a wait that took mail that is no worker_done exits 8'
+expect_stdout '{"id":"msg_ask_1","type":"ask","payload":{"taskId":"task_impl","dispatchId":"ctx_other","subject":"which file?","body":"The Brief names two."}}' \
+  'each taken message is printed on stdout as one line of JSON, as Orca gave it'
+expect_file_has 'no worker_done' 'stderr says what was taken' "$RUN_STDERR"
+expect_file_has 'wait again' 'stderr tells the caller to wait again' "$RUN_STDERR"
+if json_field "$SIDECAR_60" worker_done >/dev/null; then
+  record FAIL 'a wait that took other mail records no worker_done of its own'
+else
+  record PASS 'a wait that took other mail records no worker_done of its own'
+fi
+if grep -Fq '"msg_ask_1"' "$RUN_DIR/implement-60/wait.json" 2>/dev/null; then
+  record PASS 'the taken batch is kept in wait.json'
+else
+  record FAIL 'the taken batch is kept in wait.json'
+fi
+CHECK_CALLS=$(grep -c '^check$' "$ORCA_LOG")
+if [ "$CHECK_CALLS" = 1 ]; then
+  record PASS 'one check, not a loop, took the mail'
+else
+  record FAIL 'one check, not a loop, took the mail' "calls=$CHECK_CALLS"
+fi
+
+# The same batch carrying this dispatch's own worker_done too: the worker_done
+# is recorded all the same, but the exit is still 8 (the mail must not hide
+# behind a report path), and the next wait returns the report at once.
+ORCA_TEST_DISPATCH_ID=ctx_61
+dispatch_ticket 61
+SIDECAR_61=$RUN_DIR/dispatch-implement-61.json
+printf '%s\n' 'worker 61 report' > "$RUN_DIR/implement-61/report.md"
+printf '%s\n' '{"ok":true,"result":{"messages":[{"id":"msg_done_61","type":"worker_done","payload":{"taskId":"task_impl","dispatchId":"ctx_61","outcome":"succeeded","reportPath":"'"$RUN_DIR"'/implement-61/report.md"}},{"id":"msg_ask_2","type":"ask","payload":{"dispatchId":"ctx_other","subject":"and this one?"}}]}}' \
+  > "$WORK/check-done-ask.json"
+ORCA_TEST_CHECK_JSON=$WORK/check-done-ask.json
+: > "$ORCA_LOG"
+run_module wait --sidecar "$SIDECAR_61" --timeout 1
+expect_exit 8 'a batch with the own worker_done and other mail still exits 8'
+expect_stdout '{"id":"msg_ask_2","type":"ask","payload":{"dispatchId":"ctx_other","subject":"and this one?"}}' \
+  'only the mail that is no worker_done is printed'
+expect_json "$RUN_DIR/implement-61/report.md" 'the own worker_done in the same batch is recorded all the same' \
+  "$SIDECAR_61" worker_done.report_path
+: > "$ORCA_LOG"
+run_module wait --sidecar "$SIDECAR_61" --timeout 1
+expect_exit 0 'the next wait, the mail handled, returns at once'
+expect_stdout "$RUN_DIR/implement-61/report.md" 'it prints the report path'
+if [ -s "$ORCA_LOG" ]; then
+  record FAIL 'it asks Orca nothing' "log=$(cat "$ORCA_LOG")"
+else
+  record PASS 'it asks Orca nothing'
+fi
+
+# Another dispatch's worker_done in the same batch as other mail: recorded,
+# and the exit is 8, not 7, since the mail is what the caller must act on
+# first; this dispatch's own worker_done is still to come.
+ORCA_TEST_DISPATCH_ID=ctx_62
+dispatch_ticket 62
+SIDECAR_62=$RUN_DIR/dispatch-implement-62.json
+ORCA_TEST_DISPATCH_ID=ctx_63
+dispatch_ticket 63
+SIDECAR_63=$RUN_DIR/dispatch-implement-63.json
+printf '%s\n' 'worker 63 report' > "$RUN_DIR/implement-63/report.md"
+printf '%s\n' '{"ok":true,"result":{"messages":[{"id":"msg_done_63","type":"worker_done","payload":{"dispatchId":"ctx_63","outcome":"succeeded","reportPath":"'"$RUN_DIR"'/implement-63/report.md"}},{"id":"msg_ask_3","type":"ask","payload":{"dispatchId":"ctx_other","subject":"the third"}}]}}' \
+  > "$WORK/check-63-ask.json"
+ORCA_TEST_CHECK_JSON=$WORK/check-63-ask.json
+: > "$ORCA_LOG"
+run_module wait --sidecar "$SIDECAR_62" --timeout 1
+expect_exit 8 'a batch with another dispatch worker_done and other mail exits 8, not 7'
+expect_stdout '{"id":"msg_ask_3","type":"ask","payload":{"dispatchId":"ctx_other","subject":"the third"}}' \
+  'the mail is printed'
+expect_json "$RUN_DIR/implement-63/report.md" "the other dispatch's worker_done is recorded all the same" \
+  "$SIDECAR_63" worker_done.report_path
+if json_field "$SIDECAR_62" worker_done >/dev/null; then
+  record FAIL 'the waiting dispatch still records nothing'
+else
+  record PASS 'the waiting dispatch still records nothing'
 fi
 
 # A worker_done whose report is not on disk is an error, not a path to nowhere.
@@ -1497,9 +1655,11 @@ HEADER=$WORK/header.txt
 sed -n '1,/^set -u$/p' "$SCRIPT" > "$HEADER"
 for text in 'Usage:' 'stage-dispatch.sh dispatch --stage implementation' \
   'stage-dispatch.sh wait --sidecar <file>' 'stage-dispatch.sh release --sidecar <file>' \
-  'Exit codes:' '2  release refused' '5  the wait timed out' '64 bad usage' \
+  'Exit codes:' '2  release refused' '5  the wait timed out' '6  a prerequisite is missing' \
+  '7  the wait returned on another dispatch' '8  the wait took mail' '64 bad usage' \
   'Sidecar fields:' 'dispatch_id' 'terminal' 'worktree' 'route' 'bare_note' \
   'ISS_DISPATCH_BARE is the' '--append-system-prompt-file' '--mcp-config' \
+  'merge role never starts lean' 'exits 8 before reporting anything else' \
   'report-from-worktree.md' 'worker_done' '--delete-branch' 'Test hooks:'; do
   expect_file_has "$text" "header documents [$text]" "$HEADER"
 done

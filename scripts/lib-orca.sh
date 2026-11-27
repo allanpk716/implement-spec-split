@@ -480,6 +480,10 @@ orca_orchestration_worker_dispatch() { # run_id --worktree <path> --agent <slot>
   orca_run "${args[@]}"
 }
 
+# Rule 2: the three calls that follow address one dispatch by its id and name
+# no Run: a dispatch belongs to exactly one Run, and the id is what
+# worker-start returned.
+
 # Stops that dispatch's agent. Orca refuses (exit 1, stop_unknown) when it
 # cannot prove the agent has stopped; the caller must then look before acting
 # again, not assume it is gone.
@@ -487,9 +491,6 @@ orca_orchestration_worker_stop() { # dispatch_id: stops that worker
   orca_require_value "${1:-}" 'a dispatch id' worker_stop
   orca_run orchestration worker-stop --dispatch "$1" --json
 }
-
-# The two calls that address one dispatch by its id. Neither names a Run: a
-# dispatch belongs to exactly one, and the id is what worker-start returned.
 
 orca_orchestration_worker_show() { # dispatch_id: prints `worker-show --json` (state, stage, liveness)
   orca_require_value "${1:-}" 'a dispatch id' worker_show

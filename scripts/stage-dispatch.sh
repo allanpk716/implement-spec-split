@@ -64,7 +64,7 @@
 # environment variable ISS_DISPATCH_BARE, the flag it passes the launcher is
 # --bare (hence the sidecar's bare and bare_note fields), and the rules file
 # variable is named after the lean rules it points at. On, which is the
-# default, the implementation stage starts with `--bare
+# default, the implement and fix roles start with `--bare
 # --append-system-prompt-file <rules> [--mcp-config <file>]`: --bare loads no
 # CLAUDE.md, skills, plugins or hooks, so the rules file carries them as a
 # prompt and --mcp-config adds the MCP servers the ticket needs (ops tickets:
@@ -76,7 +76,12 @@
 # finds it unusable), so the day #39's verification (the TUI + adoption form
 # under --bare, and whether a second --append-system-prompt-file stacks) says
 # it cannot be used, the default is turned back off here. --mcp-config is
-# passed on a normal start too.
+# passed on a normal start too. The merge role never starts lean, whatever
+# the switch and the rules file: it resolves conflicts on the Integration
+# branch itself, the riskiest work a worker does here, and --bare would drop
+# the CLAUDE.md and the hooks (land-push-guard, delegate-guard) that work
+# needs; it is dispatched only on a conflict, so the tokens saved are not
+# worth it. Its sidecar's bare_note names the role as the reason.
 #
 # Headless stages are handed to the executor that already reads the table:
 # research runs scripts/codex-worker.sh --read-only (the research route),
@@ -94,11 +99,19 @@
 # Orca returns is recorded in the sidecar of its dispatch (the run dir's
 # dispatch-*.json, matched by dispatch id), so a wait on one ticket that is
 # woken by another's worker_done loses nothing: the batch is also kept in
-# <dispatch dir>/wait.json. A report path the worker gives relative to its
-# worktree is resolved against it; one that is not on disk is exit 6. A wait
-# on a dispatch whose worker_done was already recorded returns at once without
-# asking Orca. On a timeout the caller decides whether to wait again or to
-# judge the worker's liveness.
+# <dispatch dir>/wait.json. --types narrows what wakes the wait, not what the
+# batch holds, and the batch is the Run's whole FIFO: it may carry mail that
+# is no worker_done (another Ticket's worker asking its Spec session, say),
+# which the check took and which is now in no mailbox but this module's. A
+# wait that took any prints each such message on stdout as one line of JSON
+# and exits 8 before reporting anything else, even when this dispatch's own
+# worker_done came in the same batch (it is recorded all the same, and the
+# next wait returns it at once); the caller handles the mail, then waits
+# again. A report path the worker gives relative to its worktree is resolved
+# against it; one that is not on disk is exit 6. A wait on a dispatch whose
+# worker_done was already recorded returns at once without asking Orca. On a
+# timeout the caller decides whether to wait again or to judge the worker's
+# liveness.
 #
 # release, after the Ticket branch is merged: refuses (exit 2) unless the
 # sidecar records a worker_done whose report is on disk and Orca reports the
@@ -131,15 +144,19 @@
 #      the report path); released; a headless executor exited 0
 #   2  release refused: the worker is not settled, or its report is not on disk
 #   5  the wait timed out
-#   6  Orca failed (worktree create, terminal create, worker-start, check,
-#      worker-show, worker-release, worktree rm) or answered with something
-#      unusable (no handle, no dispatch id, a worker_done whose report is not
-#      on disk), or the route's launcher was not found in PATH, or a headless
-#      executor script is missing, or the sidecar could not be written, or a
-#      report inside the child worktree could not be copied out before its
-#      removal
+#   6  a prerequisite is missing (node, the route's launcher, a headless
+#      executor script) or the run directory or the dispatch directory could
+#      not be created; Orca failed (worktree create, terminal create,
+#      worker-start, check, worker-show, worker-release, worktree rm) or
+#      answered with something unusable (no handle, no dispatch id, a
+#      worker_done whose report is not on disk); the sidecar could not be
+#      written; a report inside the child worktree could not be copied out
+#      before its removal
 #   7  the wait returned on another dispatch's worker_done; this worker's is
 #      still to come: wait again
+#   8  the wait took mail of the Run that is no worker_done (stdout: each
+#      message as a line of JSON; the batch is kept in wait.json): handle it,
+#      then wait again
 #   64 bad usage, among it a route that cannot be read and a --run-dir inside
 #      the Spec worktree: nothing starts
 #   A headless dispatch exits with the executor's own exit code (codex-worker.sh
@@ -204,7 +221,7 @@ need_value() { # flag [next]
   fi
 }
 
-command -v node >/dev/null 2>&1 || die 64 'node is required but was not found on PATH'
+command -v node >/dev/null 2>&1 || die 6 'node is required but was not found on PATH'
 
 # --- JSON ------------------------------------------------------------------------
 # The sidecar and Orca's receipts are read and written through node, so quotes,
@@ -478,8 +495,10 @@ cmd_dispatch() {
     fi
   fi
 
-  mkdir -p "$run_dir" || usage_error "could not create the run directory: $run_dir"
-  run_dir=$(cd -P "$run_dir" && pwd) || usage_error "could not resolve the run directory: $run_dir"
+  # A directory that cannot be made is no misuse of the command line: exit 6,
+  # as for a missing launcher, and nothing starts.
+  mkdir -p "$run_dir" || die 6 "could not create the run directory: $run_dir"
+  run_dir=$(cd -P "$run_dir" && pwd) || die 6 "could not resolve the run directory: $run_dir"
 
   # The dispatch's name: its role and, when there is one, its ticket.
   local role_name=$role
@@ -490,7 +509,7 @@ cmd_dispatch() {
   local dispatch_dir=$run_dir/$name sidecar=$run_dir/dispatch-$name.json
   [ ! -e "$sidecar" ] ||
     usage_error "a dispatch named $name already has a sidecar ($sidecar); a re-brief takes --attempt <n> and never overwrites it"
-  mkdir -p "$dispatch_dir" || usage_error "could not create the dispatch directory: $dispatch_dir"
+  mkdir -p "$dispatch_dir" || die 6 "could not create the dispatch directory: $dispatch_dir"
 
   local form=interactive
   [ "$stage" = implementation ] || form=headless
@@ -535,23 +554,30 @@ run_interactive() { # sidecar dispatch_dir brief run_id parent_worktree repo bas
   command -v "$launcher" >/dev/null 2>&1 ||
     die 6 "the implementation route is $ROUTE_PROFILE / $ROUTE_MODEL / $ROUTE_EFFORT, but its launcher '$launcher' was not found in PATH"
 
-  # The lean start (精简启动) is the default: with a rules file, the
-  # implementation stage starts bare; without one it is a normal start, and the
-  # sidecar says why. ISS_DISPATCH_BARE is the opt-out (0, off, no, false).
-  case "$(printf '%s' "${ISS_DISPATCH_BARE:-}" | tr '[:upper:]' '[:lower:]')" in
-    0|off|no|false)
-      bare_note="ISS_DISPATCH_BARE=${ISS_DISPATCH_BARE} turns the lean start off: a normal one"
-      ;;
-    *)
-      if [ -f "$LEAN_RULES" ]; then
-        bare=1
-        bare_note="lean start, --bare with the rules in $LEAN_RULES"
-        lean_args=(--bare --append-system-prompt-file "$LEAN_RULES")
-      else
-        bare_note="the lean rules file was not found ($LEAN_RULES): no lean start, a normal one"
-      fi
-      ;;
-  esac
+  # The lean start (精简启动) is the default for the implement and fix roles:
+  # with a rules file they start bare; without one it is a normal start, and
+  # the sidecar says why. ISS_DISPATCH_BARE is the opt-out (0, off, no,
+  # false). The merge role never starts lean (the header says why), whatever
+  # the switch and the rules file, and its bare_note names the role, not a
+  # missing file or the switch, as the reason.
+  if [ "$role" = merge ]; then
+    bare_note='the merge role starts normally whatever ISS_DISPATCH_BARE and the rules file: it resolves conflicts on the Integration branch, where CLAUDE.md and the hooks must stay loaded'
+  else
+    case "$(printf '%s' "${ISS_DISPATCH_BARE:-}" | tr '[:upper:]' '[:lower:]')" in
+      0|off|no|false)
+        bare_note="ISS_DISPATCH_BARE=${ISS_DISPATCH_BARE} turns the lean start off: a normal one"
+        ;;
+      *)
+        if [ -f "$LEAN_RULES" ]; then
+          bare=1
+          bare_note="lean start, --bare with the rules in $LEAN_RULES"
+          lean_args=(--bare --append-system-prompt-file "$LEAN_RULES")
+        else
+          bare_note="the lean rules file was not found ($LEAN_RULES): no lean start, a normal one"
+        fi
+        ;;
+    esac
+  fi
   [ -z "$mcp_config" ] || lean_args+=(--mcp-config "$mcp_config")
   json_set "$sidecar" "launcher=$launcher" "bare=@json:$(true_false "$bare")" "bare_note=$bare_note" \
     "brief=$brief" "repo=$repo" "parent_worktree=$parent_worktree" "base_branch=$base_branch" ||
@@ -711,18 +737,31 @@ cmd_wait() {
   fi
 
   # One blocking check, consuming: the batch is kept whole in wait.json.
-  local timeout_ms=$((timeout * 1000)) recorded
+  local timeout_ms=$((timeout * 1000)) recorded others
   orca_orchestration_check "$run_id" --take --types worker_done --timeout-ms "$timeout_ms" \
     > "$dispatch_dir/wait.json" 2> "$dispatch_dir/wait.err" ||
     die 6 "orca orchestration check failed for run $run_id: $(cat "$dispatch_dir/wait.err")"
   recorded=$(record_worker_done "$dispatch_dir/wait.json" "$run_dir") ||
     die 6 "orca orchestration check returned JSON that could not be read: $dispatch_dir/wait.json"
-  printf '%s' "$recorded" | while IFS= read -r line; do
+  # --types narrows what wakes the wait, not what the batch holds: mail of
+  # this Run that is no worker_done (another Ticket's worker asking its Spec
+  # session, say) was taken by the same check and is now in no mailbox but
+  # wait.json. It goes to the caller on stdout, one line of JSON each, with
+  # exit 8, before anything else is reported: a worker waiting for an answer
+  # must not wait unseen. The worker_done of this batch is recorded all the
+  # same; the caller handles the mail and waits again.
+  others=$(printf '%s\n' "$recorded" | sed -n 's/^other //p')
+  printf '%s\n' "$recorded" | while IFS= read -r line; do
+    # The empty line of an empty batch (a timeout) is nothing to warn about.
     case "$line" in
-      recorded\ *) ;;
+      ''|recorded\ *|other\ *) ;;
       *) warn "the check took mail this wait was not waiting for: $line (kept in $dispatch_dir/wait.json)" ;;
     esac
   done
+  if [ -n "$others" ]; then
+    printf '%s\n' "$others"
+    die 8 "the wait for dispatch ${dispatch_id} took mail of run ${run_id} that is no worker_done (each message printed on stdout; the batch is kept in ${dispatch_dir}/wait.json): handle it, then wait again"
+  fi
 
   report=$(json_get "$sidecar" worker_done.report_path) || report=
   if [ -n "$report" ]; then
@@ -747,8 +786,9 @@ cmd_wait() {
 
 # Records every worker_done in the taken batch in the sidecar of its dispatch
 # (the run dir's dispatch-*.json whose dispatch_id matches); prints one line
-# per message: "recorded <dispatch id> <sidecar>", "unknown <dispatch id>" or
-# "others <count>" for mail that is no worker_done.
+# per message: "recorded <dispatch id> <sidecar>", "unknown <dispatch id>", or
+# "other <the message as JSON>" for mail that is no worker_done, as Orca gave
+# it.
 record_worker_done() { # wait_json run_dir
   node -e '
     const fs = require("fs"), path = require("path");
@@ -765,7 +805,6 @@ record_worker_done() { # wait_json run_dir
         if (value.dispatch_id) sidecars.push({file, value});
       } catch { /* not JSON: no sidecar of this module; every write here is atomic */ }
     }
-    let others = 0;
     const received = new Date().toISOString();
     for (const message of messages) {
       let payload = message.payload;
@@ -773,7 +812,7 @@ record_worker_done() { # wait_json run_dir
       payload = payload ?? {};
       const type = message.type ?? payload.type;
       const isDone = type === "worker_done" || (!type && payload.dispatchId && payload.outcome);
-      if (!isDone) { others += 1; continue; }
+      if (!isDone) { process.stdout.write(`other ${JSON.stringify(message)}\n`); continue; }
       const dispatchId = String(payload.dispatchId ?? message.dispatchId ?? "");
       const match = sidecars.find((item) => String(item.value.dispatch_id) === dispatchId);
       if (!match) {
@@ -797,7 +836,6 @@ record_worker_done() { # wait_json run_dir
       fs.renameSync(tmp, match.file);
       process.stdout.write(`recorded ${dispatchId} ${match.file}\n`);
     }
-    if (others > 0) process.stdout.write(`others ${others}\n`);
   ' "$@" || return $?
 }
 

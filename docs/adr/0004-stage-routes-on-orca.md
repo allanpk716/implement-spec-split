@@ -31,7 +31,7 @@ supersedes: ADR-0002, ADR-0003
 - **实现和 fix 用 `--bare`**：实测同一极小任务 18.6K → 1.2K input tokens。`--bare` 不加载 CLAUDE.md、技能、插件和 hooks，规则改由 `--append-system-prompt-file` 注入一份精简规则，需要的 MCP 用 `--mcp-config` 加。实现 worker 身上原来靠 hook 的硬拦降为提示词，由合入前的脚本门（新提交、工作区干净、测试通过）和审查兜底。`--bare` 在 TUI + 收编下是否可用是规格的第一个验证项。
 - 每层会话只带上一层的产物：规格 issue → 票的 Brief（含规格开始前一次 headless 探索写下的相关文件和调用关系），不带上一层的过程。
 - 走收编路线时 Orca 的 Dispatch 不记模型（`launch.effective.model` 为 null），模型由派发脚本写进落地报告、停车报告和最终报告，三份报告都打印完整路由表，并读 worker 终端状态行核对实际模型，与路由表不符时警告、不拦。
-- Orca 的 orchestration 标 Experimental，API 两周十余次变更：所有 Orca 调用收敛到一个 `lib-orca.sh`。派发必须显式 `--run`，否则 Orca 按继承的终端环境认定协调者，消息会投到错误的会话（实测踩到）。`lib-orca.sh` 不缓存终端 handle（stablyai/orca#9163，handle 会漂移）、脚本里不用不带 `--peek` 的 `check`（会取走协调会话的消息）、不轮询。
+- Orca 的 orchestration 标 Experimental，API 两周十余次变更：所有 Orca 调用收敛到一个 `lib-orca.sh`。派发必须显式 `--run`，否则 Orca 按继承的终端环境认定协调者，消息会投到错误的会话（实测踩到）。`lib-orca.sh` 不缓存终端 handle（stablyai/orca#9163，handle 会漂移）、脚本里不用不带 `--peek` 的 `check`（会取走协调会话的消息；例外是消费自己 Run 邮件的协调者——design-session 等 handoff、`stage-dispatch.sh wait` 等票的 worker_done——见 `lib-orca.sh` Rule 4）、不轮询。
 - `orca worktree rm` 删父工作区会把子工作区变孤儿：清理顺序必须先票后规格。`new-child` 默认保留工作区，`worker-release` 不删工作区，脚本要显式删除，并带 `--delete-branch`（新版默认留分支）；另有定期清理扫掉无主的遗弃工作区（社区有攒到 173GB 的实例）。
 - 主会话或协调终端关闭不影响下层；新终端 `orca orchestration run-use --id <run>` 接管。keeper.sh 与 Orca 心跳并行一段时间再定去留：判活以 `worker-list` 的 liveness 为第一证据、mtime 为第二证据；「确认失败」与「无法确认」分开，无法确认的不自动重派（Orca 官方不许凭 `unverifiable` 自动恢复）。
 - 自定义 agent 官方已明确不做任意 CLI（stablyai/orca#14952 closed not planned），启动档案是长期方案；PR #47662（基于已安装 agent 的自定义 agent）合入后可把档案迁过去，路由表不动。
