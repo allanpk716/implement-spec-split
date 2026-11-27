@@ -10,10 +10,13 @@
 # or by putting a fake `orca` on PATH the way test-design-session.sh does.
 #
 # Three groups:
-#   worktree       orca_repo_list, orca_worktree_rm
+#   worktree       orca_repo_list, orca_worktree_list, orca_worktree_create,
+#                  orca_worktree_rm
 #   terminal       orca_terminal_list, orca_terminal_by_pane,
-#                  orca_terminal_close, orca_terminal_send
+#                  orca_terminal_create, orca_terminal_close, orca_terminal_send
 #   orchestration  orca_orchestration_send, orca_orchestration_check
+# plus the two top-level Orca commands that belong to no group, orca_status and
+# orca_agent_launch.
 #
 # Four rules, each kept by a signature or a default rather than by the caller:
 #   1. One replacement variable. ISS_ORCA is read by orca_exe alone; a script
@@ -31,6 +34,9 @@
 #
 # `repo list` is a read-only query of Orca's registry, the layer above
 # worktrees, so it sits in the worktree group.
+#
+# A script that runs node and needs Orca from there does not spawn `orca`; it
+# runs the library: `bash -c 'source "$1" && orca_terminal_list' _ <this file>`.
 #
 # A missing required argument is a usage error: the function prints one line
 # to stderr and exits 64 without starting Orca.
@@ -52,10 +58,43 @@ orca_require_value() { # value what caller: exits 64 on an empty value
   }
 }
 
+# --- status and agent ---------------------------------------------------------
+# Top-level Orca commands that belong to none of the three groups.
+
+orca_status() { # prints `status --json`: whether Orca is up
+  orca_run status --json
+}
+
+orca_agent_launch() { # agent worktree_path prompt: starts the agent in an existing worktree
+  orca_require_value "${1:-}" 'an agent' agent_launch
+  orca_require_value "${2:-}" 'a worktree path' agent_launch
+  orca_require_value "${3:-}" 'a prompt' agent_launch
+  orca_run agent launch --agent "$1" --worktree "path:$2" --prompt "$3" --json
+}
+
 # --- worktree -----------------------------------------------------------------
 
 orca_repo_list() { # prints `repo list --json`: the registry Orca keeps
   orca_run repo list --json
+}
+
+orca_worktree_list() { # prints `worktree list --json`
+  orca_run worktree list --json
+}
+
+orca_worktree_create() { # repo_path name branch base_branch issue agent prompt
+  # Creates the named worktree on a new branch off the base branch, files it
+  # under the issue and starts the agent in it with the prompt; prints the
+  # JSON result.
+  orca_require_value "${1:-}" 'a repository path' worktree_create
+  orca_require_value "${2:-}" 'a worktree name' worktree_create
+  orca_require_value "${3:-}" 'a branch' worktree_create
+  orca_require_value "${4:-}" 'a base branch' worktree_create
+  orca_require_value "${5:-}" 'an issue number' worktree_create
+  orca_require_value "${6:-}" 'an agent' worktree_create
+  orca_require_value "${7:-}" 'a prompt' worktree_create
+  orca_run worktree create --repo "path:$1" --name "$2" --branch "$3" \
+    --base-branch "$4" --issue "$5" --no-parent --agent "$6" --prompt "$7" --json
 }
 
 orca_worktree_rm() { # path: removes that worktree, forced, with its branch
@@ -67,6 +106,14 @@ orca_worktree_rm() { # path: removes that worktree, forced, with its branch
 
 orca_terminal_list() { # prints `terminal list --json`
   orca_run terminal list --json
+}
+
+orca_terminal_create() { # worktree_path title command: opens a terminal tab in that worktree
+  # The command is the shell line the tab runs; the JSON result is printed.
+  orca_require_value "${1:-}" 'a worktree path' terminal_create
+  orca_require_value "${2:-}" 'a title' terminal_create
+  orca_require_value "${3:-}" 'a command' terminal_create
+  orca_run terminal create --worktree "path:$1" --title "$2" --command "$3" --json
 }
 
 # Rule 3: the handle is resolved again on every call. This asks Orca for the

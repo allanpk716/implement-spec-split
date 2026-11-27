@@ -385,5 +385,63 @@ expect_exit 0 "repo list: exits 0"
 expect_same "$(printf 'repo\nARG list\nARG --json')" "$(cat "$ORCA_LOG")" \
   "repo list: asks for the registry as JSON"
 
+# --- status: the call launch-wave starts with -----------------------------------
+
+reset_logs
+call "$WORK/status.out" orca_status
+expect_exit 0 "status: exits 0"
+expect_same "$(printf 'status\nARG --json')" "$(cat "$ORCA_LOG")" \
+  "status: asks whether Orca is up, as JSON"
+
+# --- worktree list and create: the calls launch-wave makes ----------------------
+
+reset_logs
+call "$WORK/worktrees.out" orca_worktree_list
+expect_exit 0 "worktree list: exits 0"
+expect_same "$(printf 'worktree\nARG list\nARG --json')" "$(cat "$ORCA_LOG")" \
+  "worktree list: asks for the worktrees as JSON"
+
+reset_logs
+call "$WORK/create.out" orca_worktree_create '/w/repo main' spec-7 spec-7 origin/master 7 claude \
+    '/implement-spec-split 7 --parallel 2'
+expect_exit 0 "worktree create: exits 0"
+expect_same "$(printf 'worktree\nARG create\nARG --repo\nARG path:/w/repo main\nARG --name\nARG spec-7\nARG --branch\nARG spec-7\nARG --base-branch\nARG origin/master\nARG --issue\nARG 7\nARG --no-parent\nARG --agent\nARG claude\nARG --prompt\nARG /implement-spec-split 7 --parallel 2\nARG --json')" \
+  "$(cat "$ORCA_LOG")" \
+  "worktree create: creates the branch off the base and starts the agent in it, as JSON"
+
+reset_logs
+call "$WORK/create-empty.out" orca_worktree_create '/w/repo main' spec-7 spec-7 origin/master 7 claude ''
+expect_exit 64 "worktree create without a prompt exits 64"
+expect_has 'prompt' "worktree create without a prompt says what is missing" "$WORK/create-empty.out.err"
+expect_empty_log "worktree create without a prompt never starts Orca" "$ORCA_LOG"
+
+# --- agent launch and terminal create: how launch-wave resumes a Spec ----------
+
+reset_logs
+call "$WORK/launch.out" orca_agent_launch openclaude '/w/spec-7' '/implement-spec-split 7 --resume'
+expect_exit 0 "agent launch: exits 0"
+expect_same "$(printf 'agent\nARG launch\nARG --agent\nARG openclaude\nARG --worktree\nARG path:/w/spec-7\nARG --prompt\nARG /implement-spec-split 7 --resume\nARG --json')" \
+  "$(cat "$ORCA_LOG")" "agent launch: starts that agent in the existing worktree with the prompt, as JSON"
+
+reset_logs
+call "$WORK/launch-empty.out" orca_agent_launch openclaude '' '/implement-spec-split 7'
+expect_exit 64 "agent launch without a worktree exits 64"
+expect_has 'worktree path' "agent launch without a worktree says what is missing" "$WORK/launch-empty.out.err"
+expect_empty_log "agent launch without a worktree never starts Orca" "$ORCA_LOG"
+
+reset_logs
+call "$WORK/terminal-create.out" orca_terminal_create '/w/repo main' spec-7 \
+    "cd /w/spec-7 && claude /implement-spec-split 7"
+expect_exit 0 "terminal create: exits 0"
+expect_same "$(printf 'terminal\nARG create\nARG --worktree\nARG path:/w/repo main\nARG --title\nARG spec-7\nARG --command\nARG cd /w/spec-7 && claude /implement-spec-split 7\nARG --json')" \
+  "$(cat "$ORCA_LOG")" \
+  "terminal create: opens a titled terminal in that worktree running the command, as JSON"
+
+reset_logs
+call "$WORK/terminal-create-empty.out" orca_terminal_create '/w/repo main' '' 'claude'
+expect_exit 64 "terminal create without a title exits 64"
+expect_has 'title' "terminal create without a title says what is missing" "$WORK/terminal-create-empty.out.err"
+expect_empty_log "terminal create without a title never starts Orca" "$ORCA_LOG"
+
 printf '\n%d passed, %d failed\n' "$PASSED" "$FAILED"
 [ "$FAILED" -eq 0 ]

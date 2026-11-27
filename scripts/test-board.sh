@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Isolated tests for scripts/board.sh.  No invocation here may touch the real
 # HOME or ~/.cache: every run gets a temporary HOME, state directory and board.
+# orca is a fake outside PATH, named by ISS_ORCA (the one Orca replacement
+# variable, read by scripts/lib-orca.sh); the `orca` on the tests' PATH refuses
+# every call.
 
 set -u
 
@@ -11,14 +14,16 @@ HOME_DIR=$WORK/home
 STATE=$WORK/state
 BOARD=$WORK/board
 BIN=$WORK/bin
+ORCA_BIN=$WORK/orca-bin
 GRAPHS=$WORK/graphs
 REGISTRY=$WORK/registry.json
 ORCA_LOG=$WORK/orca.log
+ORCA_GUARD_LOG=$WORK/orca-guard.log
 PIPELINE_LOG=$WORK/pipeline.log
 PASSED=0
 FAILED=0
 RUN_EXIT=
-export REGISTRY ORCA_LOG PIPELINE_LOG GRAPHS
+export REGISTRY ORCA_LOG ORCA_GUARD_LOG PIPELINE_LOG GRAPHS
 
 cleanup() {
   [ -z "${BOARD_TEST_KEEP:-}" ] || return 0
@@ -101,12 +106,12 @@ run_board() {
   : > "$output.err"
   env HOME="$HOME_DIR" ISS_STATE_DIR="$STATE" BOARD_DIR="$BOARD" \
     BOARD_NOW="$NOW_ISO" BOARD_PIPELINE_STATUS="$BIN/fake-pipeline" \
-    BOARD_CONCURRENCY=2 \
+    BOARD_CONCURRENCY=2 ISS_ORCA="$ORCA_BIN/orca" \
     PATH="$BIN:$PATH" bash "$SCRIPT" "$@" > "$output" 2> "$output.err"
   RUN_EXIT=$?
 }
 
-mkdir -p "$HOME_DIR" "$STATE/runs" "$BOARD" "$BIN" "$GRAPHS" || exit 125
+mkdir -p "$HOME_DIR" "$STATE/runs" "$BOARD" "$BIN" "$ORCA_BIN" "$GRAPHS" || exit 125
 
 # A fixed epoch keeps cache ages deterministic; run-directory names are in
 # local time, so derive them from the same epoch with Node rather than duplicating
@@ -229,7 +234,9 @@ const one = p => ({path: p, gitRemoteIdentity: {canonicalKey: `github.com/owner/
 fs.writeFileSync(out, JSON.stringify({result: {repos: paths.map(one).concat([{path: '/tmp/non-github', gitRemoteIdentity: {canonicalKey: 'gitlab.com/owner/other'}}])}}, null, 2) + '\n');
 NODE
 
-cat > "$BIN/orca" <<EOF
+# The fake orca lives outside PATH on purpose: board.sh must reach Orca only
+# through ISS_ORCA, never through an `orca` that happens to be on PATH.
+cat > "$ORCA_BIN/orca" <<EOF
 #!/usr/bin/env bash
 set -u
 printf '%s\\n' "\$(pwd) \$*" >> "$ORCA_LOG"
@@ -240,7 +247,19 @@ if [ "\${BOARD_ORCA_INVALID:-0}" = 1 ]; then
 fi
 cat "$REGISTRY"
 EOF
+chmod +x "$ORCA_BIN/orca"
+
+# Guard rail: this machine has a real `orca` on PATH. The one on the tests' PATH
+# refuses every call, so a board.sh that spawns orca itself fails here instead
+# of quietly reading the real Orca.
+cat > "$BIN/orca" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$ORCA_GUARD_LOG"
+printf 'test-board: orca on PATH was called instead of ISS_ORCA\n' >&2
+exit 99
+EOF
 chmod +x "$BIN/orca"
+: > "$ORCA_GUARD_LOG"
 
 cat > "$BIN/fake-pipeline" <<'EOF'
 #!/usr/bin/env bash
@@ -330,6 +349,12 @@ expect_exit 0 "snapshot succeeds"
 [ -f "$BOARD/snapshot.json" ] && ok "machine snapshot written" || bad "machine snapshot written" "missing snapshot"
 
 check "github registry cache written" "$BOARD/registry.json" 'j.repos.some(r => r.repo === "owner/alpha")' true
+# Orca is asked through ISS_ORCA for the registry and for nothing else.
+if [ -s "$ORCA_LOG" ] && ! grep -v ' repo list --json$' "$ORCA_LOG" | grep -q .; then
+  ok "the program ISS_ORCA names is asked for repo list --json only"
+else
+  bad "the program ISS_ORCA names is asked for repo list --json only" "$(cat "$ORCA_LOG")"
+fi
 if git -C "$ALPHA" show-ref --verify --quiet refs/heads/spec-102; then
   bad "reserved fixture has no integration branch" "branch unexpectedly exists"
 else
@@ -509,7 +534,7 @@ expect_has '!' "single repo marks anomaly" "$WORK/repo-owner.out"
 (
   env HOME="$HOME_DIR" ISS_STATE_DIR="$STATE" BOARD_DIR="$BOARD" \
     BOARD_NOW="$NOW_ISO" BOARD_PIPELINE_STATUS="$BIN/fake-pipeline" \
-    BOARD_CONCURRENCY=2 PATH="$BIN:$PATH" \
+    BOARD_CONCURRENCY=2 ISS_ORCA="$ORCA_BIN/orca" PATH="$BIN:$PATH" \
     bash "$SCRIPT" owner/alpha 2> "$WORK/epipe.err" | head -n 1 > "$WORK/epipe.out"
   printf '%s\n' "${PIPESTATUS[0]}" > "$WORK/epipe.rc"
 )
@@ -600,7 +625,7 @@ RB_BOARD=$RB RB_SNAP=$RB_SNAP node -e '
 render_board() {
   output=$1; shift
   env HOME="$HOME_DIR" ISS_STATE_DIR="$STATE" BOARD_DIR="$RB" BOARD_NOW="$RB_NOW" TZ=UTC \
-    PATH="$BIN:$PATH" bash "$SCRIPT" "$@" > "$output" 2> "$output.err"
+    ISS_ORCA="$ORCA_BIN/orca" PATH="$BIN:$PATH" bash "$SCRIPT" "$@" > "$output" 2> "$output.err"
   RUN_EXIT=$?
 }
 render_board "$WORK/render.out" render
@@ -785,6 +810,13 @@ expect_exit 1 "--yes without prune is rejected"
 run_board "$WORK/help.out" --help
 expect_exit 0 "help succeeds"
 expect_has 'Usage: board.sh' "help shows usage" "$WORK/help.out"
+
+# Every run above put the refusing `orca` on PATH; none may have reached it.
+if [ -s "$ORCA_GUARD_LOG" ]; then
+  bad "no run calls the orca on PATH instead of ISS_ORCA" "$(cat "$ORCA_GUARD_LOG")"
+else
+  ok "no run calls the orca on PATH instead of ISS_ORCA"
+fi
 
 kill "$LIVE_PID" 2>/dev/null || true
 wait "$LIVE_PID" 2>/dev/null || true
