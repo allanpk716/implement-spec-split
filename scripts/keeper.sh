@@ -13,9 +13,15 @@
 #      its claim released and the Spec resumed; a worker Orca cannot vouch
 #      for (unverifiable, or none listed in the Spec worktree) is reported
 #      to a human once per Spec and evidence, and left alone: Orca forbids
-#      a stop, a retry or a release on anything but an exited worker.
+#      a stop, a retry or a release on anything but an exited worker;
+#   4. once a round, after the repositories, scripts/sweep-worktrees.sh sweeps
+#      the abandoned Spec and Ticket worktrees of the machine (规格 #26), in
+#      keeper's own mode: --dry-run passes --dry-run on, --repo is passed on,
+#      every removal (or would-be removal) and failure is logged, and a sweep
+#      that fails is reported and never fatal.
 #
-# It never writes to GitHub, pushes, deletes branches or worktrees, or touches a
+# It never writes to GitHub or pushes, never deletes a branch or worktree of a
+# Spec itself (the sweep does, by its own rules), and never touches a
 # repository whose launch state has auto_land: false.
 #
 # Usage:
@@ -38,7 +44,7 @@
 #                        KEEPER_NOTIFY_TITLE and KEEPER_NOTIFY_MESSAGE
 #   KEEPER_LOG           action log (default ~/ops/var/log/spec-keeper.actions.log)
 #   KEEPER_PAUSED        pause flag (default <state dir>/paused)
-#   KEEPER_LOCK, KEEPER_CLAIM, KEEPER_LAUNCH_WAVE, KEEPER_GH
+#   KEEPER_LOCK, KEEPER_CLAIM, KEEPER_LAUNCH_WAVE, KEEPER_GH, KEEPER_SWEEP
 #                        overrides for the scripts and CLIs, used by the tests
 #   ISS_ORCA             the Orca executable (default `orca`), read by
 #                        scripts/lib-orca.sh; every Orca call goes through it
@@ -59,6 +65,7 @@ GIT=${KEEPER_GIT:-git}
 CLAIM=${KEEPER_CLAIM:-$SKILL_ROOT/scripts/claim.sh}
 LAUNCH_WAVE=${KEEPER_LAUNCH_WAVE:-$SKILL_ROOT/find-next/scripts/launch-wave.sh}
 LOCK=${KEEPER_LOCK:-$SKILL_ROOT/scripts/lock.sh}
+SWEEP=${KEEPER_SWEEP:-$SKILL_ROOT/scripts/sweep-worktrees.sh}
 
 usage() {
   cat <<EOF
@@ -66,8 +73,9 @@ usage: $SCRIPT_NAME [--once] [--dry-run] [--repo <owner/name>] [--state <file>]
 
 Runs one keeper round: resumes quota/transient parking and dead sessions when
 their recoverable time has passed, asks Orca whether a silent session is still
-alive and restarts it only when Orca says it exited, and notifies a human about
-parking that needs a decision and about sessions Orca cannot vouch for. Reads
+alive and restarts it only when Orca says it exited, notifies a human about
+parking that needs a decision and about sessions Orca cannot vouch for, and
+sweeps abandoned Spec and Ticket worktrees (scripts/sweep-worktrees.sh). Reads
 GitHub, claims, run directories, session transcripts and Orca; with --dry-run it
 writes nothing.
 
@@ -80,7 +88,8 @@ writes nothing.
 
 Environment: KEEPER_STALL_MIN (45), KEEPER_MAX_RESUMES (3), KEEPER_WORKER_PAGES
 (10), KEEPER_NOTIFY_CMD, KEEPER_LOG, KEEPER_PAUSED, KEEPER_LOCK, KEEPER_CLAIM,
-KEEPER_LAUNCH_WAVE, KEEPER_GH, ISS_ORCA (the Orca executable, see lib-orca.sh).
+KEEPER_LAUNCH_WAVE, KEEPER_GH, KEEPER_SWEEP, ISS_ORCA (the Orca executable, see
+lib-orca.sh).
 EOF
 }
 
@@ -189,7 +198,7 @@ log_line() { # repo spec action reason
   line=$(printf '%s\t%s\t%s\t%s\t%s' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$repo" "$spec" "$action" "$reason")
   printf '%s\n' "$line"
   case "$action" in
-    RESUME|CLOSE_TERMINAL|RELEASE_CLAIM|NOTIFY|WOULD_*)
+    RESUME|CLOSE_TERMINAL|RELEASE_CLAIM|REMOVE_WORKTREE|NOTIFY|WOULD_*)
       [ -n "${WORK:-}" ] && printf 'x\n' >>"$WORK/actions" 2>/dev/null
       ;;
   esac
@@ -1000,7 +1009,44 @@ run_round() {
     fi
     process_repo "$repo" "$path" "$flash"
   done <"$WORK/repos.txt"
+  sweep_round
   log_line - - ROUND "end actions=$(wc -l <"$WORK/actions" 2>/dev/null | tr -d ' ') seconds=$(( $(date +%s) - started ))"
+}
+
+# The sweep of abandoned worktrees (规格 #26, US17): once a round, after the
+# repositories, in keeper's own mode (--dry-run passes --dry-run on, --repo is
+# passed on). Every line sweep-worktrees.sh prints is logged except the kept
+# worktrees, which only count in its summary: a removal (or, in --dry-run, what
+# would go) is an action, a failure an error. The sweep reads the same claim.sh,
+# Launch state directory and run directories keeper does. A sweep that fails is
+# reported and never fatal: the round's own work is done by then.
+sweep_round() {
+  local out=$WORK/sweep.out err=$WORK/sweep.err status=0
+  local s_repo s_action s_path s_reason
+  local args=()
+  if [ ! -f "$SWEEP" ]; then
+    log_line - - SKIP "sweep-worktrees.sh not found: $SWEEP"
+    return 0
+  fi
+  [ "$DRY" -eq 1 ] && args+=(--dry-run)
+  [ -n "$ONLY_REPO" ] && args+=(--repo "$ONLY_REPO")
+  SWEEP_CLAIM="$CLAIM" SWEEP_LAUNCH_STATE_DIR="$LAUNCH_STATE_DIR" SWEEP_RUNS_DIR="$RUNS_ROOT" \
+    "$SWEEP" ${args[@]+"${args[@]}"} >"$out" 2>"$err" || status=$?
+  # The sweep's lines are tab-separated; read folds runs of tabs, so the four
+  # fields are re-joined with the unit separator first.
+  while IFS=$'\x1f' read -r s_repo s_action s_path s_reason; do
+    case "$s_action" in
+      summary) log_line "${s_repo:--}" - SWEEP "${s_reason:-}" ;;
+      would-remove) log_line "${s_repo:--}" - WOULD_REMOVE_WORKTREE "${s_path}: ${s_reason}" ;;
+      removed) log_line "${s_repo:--}" - REMOVE_WORKTREE "${s_path}: ${s_reason}" ;;
+      failed) log_line "${s_repo:--}" - ERROR "sweep: ${s_path}: ${s_reason}" ;;
+      skip) log_line "${s_repo:--}" - SKIP "sweep: ${s_reason}" ;;
+    esac
+  done < <(awk -F'\t' '{ print $1 "\x1f" $2 "\x1f" $3 "\x1f" $4 }' "$out" 2>/dev/null)
+  if [ "$status" -ne 0 ]; then
+    log_line - - ERROR "sweep-worktrees.sh 退出码 ${status}：$(head -n 1 "$err" 2>/dev/null)"
+  fi
+  return 0
 }
 
 # --- main --------------------------------------------------------------------

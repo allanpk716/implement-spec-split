@@ -143,6 +143,16 @@ if [ "$command" = terminal ] && [ "${1:-}" = list ]; then
     exit 0
   fi
 fi
+if [ "$command" = terminal ] && [ "${1:-}" = show ]; then
+  if [ "${ORCA_SHOW_FAIL:-0}" = 1 ]; then
+    printf '%s\n' 'orca offline' >&2
+    exit 1
+  fi
+  if [ -n "${ORCA_SHOW:-}" ]; then
+    cat "$ORCA_SHOW"
+    exit 0
+  fi
+fi
 exit 0
 EOF
 chmod +x "$BIN/orca"
@@ -412,6 +422,59 @@ call "$WORK/pane-orca-down.out" ORCA_LIST_FAIL=1 \
 expect_exit 3 "by_pane: a failing orca exits 3"
 expect_has 'orca offline' "by_pane: passes Orca's stderr through" "$WORK/pane-orca-down.out.err"
 expect_same '' "$(cat "$WORK/pane-orca-down.out")" "by_pane: prints nothing when Orca fails"
+
+# --- terminal by handle: the lookup of an adopted terminal (规格 #26) ----------
+# A session Orca dispatched or adopted may carry no ORCA_TAB_ID/ORCA_AGENT_PANE,
+# only the handle every Orca terminal inherits; `terminal show --terminal` is
+# how that handle becomes a worktree path. Same receipt as by_pane, same codes.
+
+write_show() { # file handle worktreePath
+  node -e '
+    const fs = require("fs");
+    const [file, handle, worktreePath] = process.argv.slice(1);
+    fs.writeFileSync(file, JSON.stringify({ok: true, result: {terminal: {
+      handle, tabId: "tab-1", leafId: "leaf-1", worktreePath, title: "/repo 7"}}}));
+  ' "$@"
+}
+
+reset_logs
+write_show "$WORK/show-self.json" term_self '/w/repo'
+call "$WORK/by-handle.out" ORCA_SHOW="$WORK/show-self.json" orca_terminal_by_handle term_self
+expect_exit 0 "by_handle: exits 0"
+expect_same "$(printf 'terminal\nARG show\nARG --terminal\nARG term_self\nARG --json')" "$(cat "$ORCA_LOG")" \
+  "by_handle: asks Orca about that one handle, as JSON"
+expect_same "$(printf 'term_self\t/w/repo')" "$(cat "$WORK/by-handle.out")" \
+  "by_handle: prints the handle and the worktree path of that terminal"
+
+reset_logs
+printf '%s\n' '{"ok":false,"error":{"code":"not_found","message":"no such terminal"}}' > "$WORK/show-missing.json"
+call "$WORK/by-handle-missing.out" ORCA_SHOW="$WORK/show-missing.json" orca_terminal_by_handle term_gone
+expect_exit 1 "by_handle: a terminal Orca does not have exits 1"
+expect_same '' "$(cat "$WORK/by-handle-missing.out")" "by_handle: prints nothing for a terminal Orca does not have"
+
+reset_logs
+printf '%s\n' '{"ok":true,"result":{"terminal":{"handle":"term_x","tabId":"tab-1"}}}' > "$WORK/show-nopath.json"
+call "$WORK/by-handle-nopath.out" ORCA_SHOW="$WORK/show-nopath.json" orca_terminal_by_handle term_x
+expect_exit 0 "by_handle: a terminal without a worktree path still exits 0"
+expect_same "$(printf 'term_x\t')" "$(cat "$WORK/by-handle-nopath.out")" \
+  "by_handle: prints an empty path when Orca gives none"
+
+reset_logs
+printf '%s\n' 'not json' > "$WORK/show-broken.json"
+call "$WORK/by-handle-broken.out" ORCA_SHOW="$WORK/show-broken.json" orca_terminal_by_handle term_self
+expect_exit 2 "by_handle: output that is not JSON exits 2"
+
+reset_logs
+call "$WORK/by-handle-down.out" ORCA_SHOW_FAIL=1 orca_terminal_by_handle term_self
+expect_exit 3 "by_handle: a failing orca exits 3"
+expect_has 'orca offline' "by_handle: passes Orca's stderr through" "$WORK/by-handle-down.out.err"
+expect_same '' "$(cat "$WORK/by-handle-down.out")" "by_handle: prints nothing when Orca fails"
+
+reset_logs
+call "$WORK/by-handle-empty.out" orca_terminal_by_handle ''
+expect_exit 64 "by_handle without a handle exits 64"
+expect_has 'handle' "by_handle without a handle says what is missing" "$WORK/by-handle-empty.out.err"
+expect_empty_log "by_handle without a handle never starts Orca" "$ORCA_LOG"
 
 # --- terminal and worktree: the calls close-self and keeper make ---------------
 
