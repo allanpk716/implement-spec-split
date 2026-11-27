@@ -1,11 +1,5 @@
 #!/usr/bin/env bash
 # List unfinished work in the wayfinder -> to-spec -> to-tickets -> implement pipeline.
-#
-# --order plans the next wave. --apart A:B keeps two Specs out of the same wave,
-# and keeps the idle side out of the new wave while the other is in flight
-# (running, or interrupted and resumed first): a Spec resumed first runs beside
-# the new wave, so "not in the same wave" alone would not keep the pair apart.
-# --next-wave reuses the pairs recorded in the launch state through this order.
 
 set -u
 

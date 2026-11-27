@@ -1499,9 +1499,10 @@ RUN_EXIT=$?
 expect_exit 0 "graph marks human-only specs and human tickets"
 
 # A `shared-counter` execution ticket bumps a shared counter (GLOSSARY.md).
-# The graph carries the label as a ticket-level flag so that frontier.sh and
-# the board read the same judgement, on every path that builds ticket records:
-# an open Spec, a landed Spec, a shelved-only Spec and a legacy parent.
+# The graph carries the label as a ticket-level flag so that frontier.sh reads
+# the same judgement on every path that builds ticket records: an open Spec, a
+# landed Spec, a shelved-only Spec and a legacy parent. The board renders only
+# `human` and `shelved`, not this flag.
 COUNTER_FIXTURE=$WORK/counter-fixture
 mkdir -p "$COUNTER_FIXTURE" || exit 1
 
