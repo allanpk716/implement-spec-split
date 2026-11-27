@@ -79,7 +79,7 @@ ln -s ~/.claude/skills/implement-spec-split/judgment-model ~/.claude/skills/judg
 
 `/judgment-model` shows the global judgment-model switch. It has two roles, `grill` (Design session discussions) and `review` (every Opus review), each on `opus` or `glm-5.4`: `/judgment-model grill=opus review=glm-5.4` sets both in one command, a time such as `到 <time>` or `<duration>` makes the switched roles return to opus by themselves, and `/judgment-model opus` switches both back. The wrapper only runs `scripts/judgment-model.sh` and relays its two status lines.
 
-`/grill-feature <idea>` opens a Design session for a small feature; `/grill-map <map or idea>` does the same for a large-module wayfinder map. Each wrapper blocks until `scripts/design-session.sh` receives `handoff.md`.
+`/grill-feature <idea>` opens a Design session for a small feature; `/grill-map <map or idea>` does the same for a large-module wayfinder map. Each wrapper blocks until `scripts/design-session.sh` receives `handoff.md`, then hands the session over to find-next's 推进模式 (`/grill-map` does not after an early 「先到这」 handoff, which `handoff.md` marks on its first line).
 Run `scripts/grill-status.sh` from a managed repository (or pass its directory) to list each Design session topic with spec and ticket progress; it is read-only and does not spend tokens. `scripts/completion-report.sh` turns the same design-session records plus git/GitHub state into a Chinese completion conclusion — current topic progress, repository-wide status, a release recommendation with a suggested version (it never tags or pushes), tickets a release would unfreeze, and interrupted grills.
 
 ## Flash mode

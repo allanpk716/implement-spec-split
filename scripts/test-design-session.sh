@@ -188,7 +188,11 @@ case "\$command" in
           printf '%s\\n' "{\"ok\":true,\"result\":{\"messages\":[{\"id\":\"msg-1\",\"payload\":{\"reportPath\":\"\$REPORT_PATH\"}}]}}"
           exit 0
         fi
-        printf 'Spec #15, tickets #18.\\n' > "\$REPORT_PATH"
+        if [ -n "\${DESIGN_TEST_HANDOFF_FILE:-}" ]; then
+          cp "\$DESIGN_TEST_HANDOFF_FILE" "\$REPORT_PATH"
+        else
+          printf 'Spec #15, tickets #18.\\n' > "\$REPORT_PATH"
+        fi
         printf '%s\\n' "\$REPORT_PATH" > "\$REPORT_LOG"
         printf '%s\\n' "{\"ok\":true,\"result\":{\"messages\":[{\"id\":\"msg-1\",\"payload\":{\"reportPath\":\"\$REPORT_PATH\"}}]}}"
         ;;
@@ -293,6 +297,7 @@ run_design_session() {
   DESIGN_TEST_UNRELATED_FIRST=${DESIGN_TEST_UNRELATED_FIRST:-0} \
   DESIGN_TEST_WRONG_REPORT_THEN_TIMEOUT=${DESIGN_TEST_WRONG_REPORT_THEN_TIMEOUT:-0} \
   DESIGN_TEST_REPORT_PATH=${DESIGN_TEST_REPORT_PATH:-} \
+  DESIGN_TEST_HANDOFF_FILE=${DESIGN_TEST_HANDOFF_FILE:-} \
   ISS_DESIGN_CLOSE_DELAY=0 \
   ORCA_TERMINAL_HANDLE=term_orchestrator \
   ISS_DESIGN_KEEP_SESSION=${ISS_DESIGN_KEEP_SESSION:-} \
@@ -562,10 +567,78 @@ fi
 expect_file_has 'Refactor authentication module' 'map prompt carries the user topic' "$PROMPT_LOG"
 expect_file_has '先到这' 'map prompt allows an early handoff' "$PROMPT_LOG"
 expect_file_has '地图状态和下一步' 'early handoff describes map state' "$PROMPT_LOG"
+expect_file_has '首行必须原样写「提前交接：先到这」' \
+  'map prompt makes an early handoff open with the marker' "$PROMPT_LOG"
 if grep -Fq 'mattpocock-skills:grill-with-docs' "$PROMPT_LOG"; then
   record FAIL 'map prompt does not use the feature skill'
 else
   record PASS 'map prompt does not use the feature skill'
+fi
+if grep -Fq '提前交接' "$RUN_STDERR"; then
+  record FAIL 'a complete map handoff is not reported as early' \
+    "stderr=$(cat "$RUN_STDERR")"
+else
+  record PASS 'a complete map handoff is not reported as early'
+fi
+
+# An early map handoff (the user said 先到这) opens with a fixed marker line;
+# the wrapper reports it on stderr so /grill-map can leave find-next alone.
+EARLY_HANDOFF_FILE=$WORK/early-handoff.md
+printf '%s\n' '提前交接：先到这' '地图状态：地图 #12 的前沿还剩 3 张决策票。' \
+  '下一步：继续 /grill-map 12。' > "$EARLY_HANDOFF_FILE"
+DESIGN_TEST_HANDOFF_FILE=$EARLY_HANDOFF_FILE
+run_design_session "$WORK/map-early.out" map 'Early map' --timeout 1
+expect_exit 0 'early map handoff succeeds'
+if [ "$(cat "$WORK/map-early.out")" = "$(cat "$REPORT_LOG")" ]; then
+  record PASS 'early map handoff still prints the handoff path'
+else
+  record FAIL 'early map handoff still prints the handoff path' \
+    "stdout=$(cat "$WORK/map-early.out")"
+fi
+expect_file_has 'design-session: 提前交接：handoff.md 首行是「提前交接：先到这」' \
+  'early map handoff is reported on stderr' "$RUN_STDERR"
+unset DESIGN_TEST_HANDOFF_FILE
+
+# A heading marker, a half-width colon or a closing period must not hide the
+# marker: a missed early handoff would start find-next against the user's wish.
+DECORATED_HANDOFF_FILE=$WORK/decorated-handoff.md
+printf '%s\n' '### 提前交接:先到这。' '地图状态：刚画完 Destination。' \
+  '下一步：继续讨论 Map frontier。' > "$DECORATED_HANDOFF_FILE"
+DESIGN_TEST_HANDOFF_FILE=$DECORATED_HANDOFF_FILE
+run_design_session "$WORK/map-decorated.out" map 'Decorated early map' --timeout 1
+expect_exit 0 'decorated early map handoff succeeds'
+expect_file_has 'design-session: 提前交接：' \
+  'a decorated marker line still counts as an early handoff' "$RUN_STDERR"
+unset DESIGN_TEST_HANDOFF_FILE
+
+# Only the first line counts: a marker further down leaves the call to the
+# Orchestrator, which then has to say it cannot tell.
+SECOND_LINE_FILE=$WORK/second-line-handoff.md
+printf '%s\n' '规格：#15' '提前交接：先到这' > "$SECOND_LINE_FILE"
+DESIGN_TEST_HANDOFF_FILE=$SECOND_LINE_FILE
+run_design_session "$WORK/map-second-line.out" map 'Second line map' --timeout 1
+expect_exit 0 'a handoff with the marker on its second line succeeds'
+if grep -Fq '提前交接' "$RUN_STDERR"; then
+  record FAIL 'the marker counts only on the first line' \
+    "stderr=$(cat "$RUN_STDERR")"
+else
+  record PASS 'the marker counts only on the first line'
+fi
+unset DESIGN_TEST_HANDOFF_FILE
+
+# --attach reads a handoff that was already delivered; it reports the same.
+ATTACH_EARLY_RUN=$WORK/attach-early-run
+make_attach_run "$ATTACH_EARLY_RUN"
+cp "$EARLY_HANDOFF_FILE" "$ATTACH_EARLY_RUN/handoff.md"
+rm -f "$CHECK_ATTEMPTS"
+run_design_session "$WORK/attach-early.out" --attach "$ATTACH_EARLY_RUN" --timeout 1
+expect_exit 0 'attaching to an early handoff succeeds'
+expect_file_has 'design-session: 提前交接：' \
+  'attaching reports the early handoff too' "$RUN_STDERR"
+if [ -e "$CHECK_ATTEMPTS" ]; then
+  record FAIL 'attaching to an early handoff consumes no message'
+else
+  record PASS 'attaching to an early handoff consumes no message'
 fi
 
 : > "$ORCA_LOG"
@@ -864,6 +937,15 @@ expect_file_has 'completion notification' 'feature skill waits for completion no
 expect_file_has 'handoff.md' 'feature skill returns through the handoff' "$FEATURE_SKILL"
 expect_file_has '提醒：本仓库还有' \
   'feature skill relays pending session reminders' "$FEATURE_SKILL"
+expect_file_has 'invoke the `find-next` skill' 'feature skill hands over to find-next' "$FEATURE_SKILL"
+expect_file_has '推进模式' 'feature skill hands over in find-next advance mode' "$FEATURE_SKILL"
+expect_file_has 'find-next-supervise' 'feature skill keeps the supervise lock rule' "$FEATURE_SKILL"
+if grep -Fq 'Orchestrator todo items in this session' "$FEATURE_SKILL" ||
+   grep -Fq 'launch-wave.sh --repo' "$FEATURE_SKILL"; then
+  record FAIL 'feature skill no longer runs the handoff todos or launch-wave itself'
+else
+  record PASS 'feature skill no longer runs the handoff todos or launch-wave itself'
+fi
 expect_file_has 'name: grill-map' 'map skill has its name' "$MAP_SKILL"
 expect_file_has '大模块' 'map description mentions large modules' "$MAP_SKILL"
 expect_file_has 'wayfinder' 'map description carries wayfinder trigger' "$MAP_SKILL"
@@ -879,12 +961,30 @@ expect_file_has 'completion notification' 'map skill waits for completion notifi
 expect_file_has 'handoff.md' 'map skill returns through the handoff' "$MAP_SKILL"
 expect_file_has '提醒：本仓库还有' \
   'map skill relays pending session reminders' "$MAP_SKILL"
+expect_file_has 'invoke the `find-next` skill' 'map skill hands over to find-next' "$MAP_SKILL"
+expect_file_has '推进模式' 'map skill hands over in find-next advance mode' "$MAP_SKILL"
+expect_file_has 'find-next-supervise' 'map skill keeps the supervise lock rule' "$MAP_SKILL"
+if grep -Fq 'Orchestrator todo items in this session' "$MAP_SKILL" ||
+   grep -Fq 'launch-wave.sh --repo' "$MAP_SKILL"; then
+  record FAIL 'map skill no longer runs the handoff todos or launch-wave itself'
+else
+  record PASS 'map skill no longer runs the handoff todos or launch-wave itself'
+fi
+expect_file_has '提前交接' 'map skill recognises the reported early handoff' "$MAP_SKILL"
+expect_file_has 'Do not hand off to find-next' \
+  'map skill does not hand off after an early handoff' "$MAP_SKILL"
+expect_file_has 'map state and next step' \
+  'map skill relays map state and next step on an early handoff' "$MAP_SKILL"
+expect_file_has 'you cannot tell' \
+  'map skill treats an undecidable handoff as early' "$MAP_SKILL"
 expect_file_has 'grill-feature' 'README documents the feature skill symlink' "$ROOT/README.md"
 expect_file_has 'grill-map' 'README documents the map skill symlink' "$ROOT/README.md"
 expect_file_has 'grill-feature' 'setup documents the feature skill symlink' "$ROOT/docs/setup.md"
 expect_file_has 'grill-map' 'setup documents the map skill symlink' "$ROOT/docs/setup.md"
 expect_file_has 'bash scripts/test-design-session.sh' 'MAINTAINING registers the new test' "$ROOT/MAINTAINING.md"
 expect_file_has 'bash scripts/test-judgment-model.sh' 'MAINTAINING registers the switch test' "$ROOT/MAINTAINING.md"
+expect_file_has 'grill-feature / grill-map 收到 handoff 后自动接 find-next 推进模式' \
+  'MAINTAINING records the find-next hand-over decision' "$ROOT/MAINTAINING.md"
 expect_file_has 'judgment-model.sh' 'README documents the judgment model switch' "$ROOT/README.md"
 expect_file_has 'opens a Design session' 'README uses the Design session term' "$ROOT/README.md"
 if grep -RInE 'official-Opus session|Opus session' \

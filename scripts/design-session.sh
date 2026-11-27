@@ -19,7 +19,9 @@
 # The run directory is created under DESIGN_SESSION_ROOT (default:
 # ~/.cache/implement-spec-split/design) as <repo>-<YYYYmmdd-HHMM>-<kind>.
 # ISS_ORCA can name another Orca executable. stdout is the handoff.md path on
-# success; diagnostics go to stderr.
+# success; diagnostics go to stderr. An early map handoff (the user said 先到这)
+# opens handoff.md with the line "提前交接：先到这" and is reported on stderr as
+# "design-session: 提前交接：…".
 #
 # Exit codes:
 #   0  handoff received and its report exists
@@ -38,7 +40,8 @@ Usage: design-session.sh feature|map (<topic> | --topic-file <path>)
        design-session.sh --attach <run-dir> [--timeout <seconds>]
 
 feature calls mattpocock-skills:grill-with-docs.
-map calls mattpocock-skills:wayfinder and accepts an early "先到这" handoff.
+map calls mattpocock-skills:wayfinder and accepts an early "先到这" handoff
+     (handoff.md opens with "提前交接：先到这", reported on stderr).
 --attach resumes waiting for a run created by a previous invocation.
 --timeout is in seconds (default 7200).
 USAGE
@@ -160,6 +163,9 @@ case "$JUDGMENT_MODEL" in
   *) JUDGMENT_MODEL=opus ;;
 esac
 GLM_LAUNCHER=${ISS_GLM_LAUNCHER:-claude-glm}
+# The map prompt asks an early handoff (the user said 先到这) to open with this
+# line; the Orchestrator leaves find-next alone when it is reported on stderr.
+EARLY_HANDOFF_MARKER='提前交接：先到这'
 
 run_id_from_json() {
   node -e '
@@ -296,7 +302,7 @@ if [ "$MODE" = launch ]; then
     map)
       UPSTREAM=mattpocock-skills:wayfinder
       KIND_INSTRUCTIONS='先用上游 wayfinder 技能推进这张大模块地图，再继续下面的交接约定。'
-      EARLY_HANDOFF='用户说“先到这”时可以提前交接；handoff.md 必须写清地图状态和下一步。'
+      EARLY_HANDOFF="用户说“先到这”时可以提前交接：handoff.md 首行必须原样写「${EARLY_HANDOFF_MARKER}」（主会话据此不接 find-next），其余行写清地图状态和下一步。"
       ;;
   esac
 
@@ -403,11 +409,28 @@ matching_report_path() {
   ' "$2"
 }
 
+# Whether handoff.md opens with the marker. A Markdown heading or bullet
+# prefix, a closing punctuation and a half-width colon do not hide it; the
+# marker on any later line does not count.
+is_early_handoff() {
+  node -e '
+    const fs = require("fs");
+    const first = fs.readFileSync(process.argv[1], "utf8").split(/\r?\n/, 1)[0];
+    const line = first.replace(/^\s*(?:#+|[-*])\s*/, "")
+      .replace(/[\s。.！!]*$/, "")
+      .replace(":", "：");
+    process.exit(line === process.argv[2] ? 0 : 1);
+  ' "$1" "$EARLY_HANDOFF_MARKER" 2>/dev/null
+}
+
 accept_handoff() {
   handoff=$1
   [ -f "$handoff" ] ||
     die 6 "handoff report is missing: $handoff"
   printf '%s\n' "$handoff"
+  if is_early_handoff "$handoff"; then
+    printf 'design-session: 提前交接：handoff.md 首行是「%s」\n' "$EARLY_HANDOFF_MARKER" >&2
+  fi
   cleanup_wait
   # Bring the user back to the Orchestrator terminal that started this wait.
   if [ -n "${ORCA_TERMINAL_HANDLE:-}" ]; then
