@@ -13,8 +13,10 @@
 #   worktree       orca_repo_list, orca_worktree_list, orca_worktree_create,
 #                  orca_worktree_rm
 #   terminal       orca_terminal_list, orca_terminal_by_pane,
-#                  orca_terminal_create, orca_terminal_close, orca_terminal_send
-#   orchestration  orca_orchestration_send, orca_orchestration_check
+#                  orca_terminal_create, orca_terminal_switch, orca_terminal_wait,
+#                  orca_terminal_close, orca_terminal_send
+#   orchestration  orca_orchestration_run_create, orca_orchestration_send,
+#                  orca_orchestration_worker_start, orca_orchestration_check
 # plus the two top-level Orca commands that belong to no group, orca_status and
 # orca_agent_launch.
 #
@@ -108,12 +110,50 @@ orca_terminal_list() { # prints `terminal list --json`
   orca_run terminal list --json
 }
 
-orca_terminal_create() { # worktree_path title command: opens a terminal tab in that worktree
+orca_terminal_create() { # worktree_path title command [--focus]: opens a terminal tab in that worktree
   # The command is the shell line the tab runs; the JSON result is printed.
-  orca_require_value "${1:-}" 'a worktree path' terminal_create
-  orca_require_value "${2:-}" 'a title' terminal_create
-  orca_require_value "${3:-}" 'a command' terminal_create
-  orca_run terminal create --worktree "path:$1" --title "$2" --command "$3" --json
+  # --focus switches to the new tab; without it Orca opens it in the background.
+  local worktree=${1:-} title=${2:-} command=${3:-}
+  orca_require_value "${worktree:-}" 'a worktree path' terminal_create
+  orca_require_value "${title:-}" 'a title' terminal_create
+  orca_require_value "${command:-}" 'a command' terminal_create
+  local args=(terminal create --worktree "path:$worktree" --title "$title" --command "$command")
+  shift 3
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --focus) args+=(--focus); shift ;;
+      *)
+        printf 'lib-orca: terminal_create: unknown argument [%s] (the one option is --focus)\n' "$1" >&2
+        exit 64
+        ;;
+    esac
+  done
+  orca_run "${args[@]}" --json
+}
+
+orca_terminal_switch() { # handle: brings that terminal's tab to the front
+  orca_require_value "${1:-}" 'a terminal handle' terminal_switch
+  orca_run terminal switch --terminal "$1"
+}
+
+# One blocking wait, as with an orchestration check: the library never polls.
+# The condition is exit or tui-idle, and the wait always carries a timeout,
+# since one without it could block forever.
+orca_terminal_wait() { # handle exit|tui-idle timeout_ms: waits once for the condition
+  orca_require_value "${1:-}" 'a terminal handle' terminal_wait
+  case "${2:-}" in
+    exit|tui-idle) ;;
+    *)
+      printf 'lib-orca: terminal_wait: the condition is exit or tui-idle, got [%s]\n' "${2:-}" >&2
+      exit 64
+      ;;
+  esac
+  if [ $# -lt 3 ] || ! [[ "$3" =~ ^[1-9][0-9]*$ ]]; then
+    printf 'lib-orca: terminal_wait: --timeout-ms needs a positive integer of milliseconds, got [%s]\n' \
+      "${3:-}" >&2
+    exit 64
+  fi
+  orca_run terminal wait --terminal "$1" --for "$2" --timeout-ms "$3" --json
 }
 
 # Rule 3: the handle is resolved again on every call. This asks Orca for the
@@ -166,6 +206,11 @@ orca_require_run() { # run_id caller: exits 64 unless run_id can name a Run
   esac
 }
 
+orca_orchestration_run_create() { # objective: creates and binds a Run; prints the JSON result
+  orca_require_value "${1:-}" 'an objective' run_create
+  orca_run orchestration run-create --objective "$1" --json
+}
+
 orca_orchestration_send() { # run_id <orca send arguments...>
   local run=${1:-} argument
   orca_require_run "$run" orchestration_send
@@ -211,5 +256,66 @@ orca_orchestration_check() { # run_id [--take] [--timeout-ms <positive integer>]
   local args=(orchestration check --run "$run" --json)
   [ "$take" -eq 1 ] || args+=(--peek)
   [ -n "$timeout_ms" ] && args+=(--wait --timeout-ms "$timeout_ms")
+  orca_run "${args[@]}"
+}
+
+# A dispatch in the one form this repository uses: a terminal the caller opened
+# is adopted as the worker of a Task in the Run. The launcher is already running
+# in that terminal with its model and effort on the command line (Orca records
+# neither for an adopted terminal), so --model, --effort and --agent have no
+# place here; the spec is a file, whose quotes and backticks need no escaping.
+# --timeout-ms bounds the wait for the worker to take the spec.
+orca_orchestration_worker_start() { # run_id --terminal <handle> --spec-file <path> [--timeout-ms <positive integer>]
+  local run=${1:-} handle= spec= timeout_ms=
+  orca_require_run "$run" worker_start
+  shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --run)
+        printf 'lib-orca: worker_start: pass the Run id once, as the first argument\n' >&2
+        exit 64
+        ;;
+      --terminal)
+        if [ $# -lt 2 ] || [ -z "$2" ] || [[ "$2" == -* ]]; then
+          printf 'lib-orca: worker_start: --terminal needs a terminal handle, got [%s]\n' "${2:-}" >&2
+          exit 64
+        fi
+        handle=$2
+        shift 2
+        ;;
+      --spec-file)
+        if [ $# -lt 2 ] || [ -z "$2" ] || [[ "$2" == -* ]]; then
+          printf 'lib-orca: worker_start: --spec-file needs a file path, got [%s]\n' "${2:-}" >&2
+          exit 64
+        fi
+        spec=$2
+        shift 2
+        ;;
+      --timeout-ms)
+        if [ $# -lt 2 ] || ! [[ "$2" =~ ^[1-9][0-9]*$ ]]; then
+          printf 'lib-orca: worker_start: --timeout-ms needs a positive integer of milliseconds, got [%s]\n' \
+            "${2:-}" >&2
+          exit 64
+        fi
+        timeout_ms=$2
+        shift 2
+        ;;
+      *)
+        printf 'lib-orca: worker_start: unknown argument [%s] (a worker starts by adopting a terminal: --terminal <handle> --spec-file <path> [--timeout-ms <n>])\n' \
+          "$1" >&2
+        exit 64
+        ;;
+    esac
+  done
+  [ -n "$handle" ] || {
+    printf 'lib-orca: worker_start: --terminal <handle> is required: a worker starts by adopting a terminal the caller opened\n' >&2
+    exit 64
+  }
+  [ -n "$spec" ] || {
+    printf 'lib-orca: worker_start: --spec-file <path> is required: the spec is read from a file\n' >&2
+    exit 64
+  }
+  local args=(orchestration worker-start --run "$run" --terminal "$handle" --spec-file "$spec" --json)
+  [ -z "$timeout_ms" ] || args+=(--timeout-ms "$timeout_ms")
   orca_run "${args[@]}"
 }
