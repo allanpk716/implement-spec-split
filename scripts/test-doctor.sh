@@ -53,7 +53,7 @@ EOF
   printf '%s\n' 'base_url = "https://api.example.invalid/v1"' >> "$CASE_CODEX/config.toml"
   printf '%s\n' 'wire_api = "responses"' >> "$CASE_CODEX/config.toml"
   printf '<!-- opus-codex-division: v1 -->\n' > "$CASE_CLAUDE/CLAUDE.md"
-  hook_settings "$ROOT/hooks/delegate-guard.js" 'Edit|Write|NotebookEdit' > "$CASE_CLAUDE/settings.json"
+  hook_settings "$ROOT/hooks/delegate-guard.js" 'Edit|Write|NotebookEdit|Bash' > "$CASE_CLAUDE/settings.json"
 }
 
 hook_settings() {
@@ -106,6 +106,14 @@ process.exit(out.checks.some(c => c.level === process.env.LEVEL && c.message.inc
 NODE
 }
 
+expect_hint() {
+  local level=$1 text=$2 name=$3
+  OUT_FILE=$CASE_DIR/doctor.out LEVEL=$level TEXT=$text node - <<'NODE' && record PASS "$name" || record FAIL "$name" "missing [$level] hint $text"
+const out = JSON.parse(require('fs').readFileSync(process.env.OUT_FILE, 'utf8'));
+process.exit(out.checks.some(c => c.level === process.env.LEVEL && (c.hint || '').includes(process.env.TEXT)) ? 0 : 1);
+NODE
+}
+
 expect_none() {
   local level=$1 name=$2
   OUT_FILE=$CASE_DIR/doctor.out LEVEL=$level node - <<'NODE' && record PASS "$name" || record FAIL "$name" "unexpected [$level]"
@@ -146,6 +154,8 @@ new_case
 run_doctor --json
 expect_exit 0 "full configuration has no FAIL exit"
 expect_none FAIL "full configuration has no FAIL"
+expect_has PASS "覆盖 Edit 和 Write" "full configuration matcher covers Edit and Write"
+expect_has PASS "覆盖 Bash" "full configuration matcher covers Bash"
 expect_has PASS "delegate-guard 冒烟测试" "full configuration smoke hook"
 
 # 2. Stage 3 entirely absent.
@@ -182,6 +192,22 @@ new_case
 hook_settings "$ROOT/hooks/delegate-guard.js" 'Edit|Write|NotebookEdit' /opt/homebrew/bin/node > "$CASE_CLAUDE/settings.json"
 run_doctor --json
 expect_has PASS "delegate-guard.js 存在" "absolute node path in hook command is parsed"
+
+# 5c. Matcher covers Edit and Write but not Bash (local install drift).
+new_case
+hook_settings "$ROOT/hooks/delegate-guard.js" 'Edit|Write|NotebookEdit' > "$CASE_CLAUDE/settings.json"
+SETTINGS_BEFORE=$(cat "$CASE_CLAUDE/settings.json")
+run_doctor --json
+expect_exit 1 "matcher without Bash exits 1"
+expect_has PASS "覆盖 Edit 和 Write" "matcher without Bash still passes the Edit and Write check"
+expect_has FAIL "未覆盖 Bash" "matcher without Bash reports FAIL"
+expect_hint FAIL "hooks/README.md" "matcher without Bash hints at hooks/README.md"
+expect_hint FAIL "docs/setup.md" "matcher without Bash hints at docs/setup.md"
+if [ "$(cat "$CASE_CLAUDE/settings.json")" = "$SETTINGS_BEFORE" ]; then
+  record PASS "doctor leaves settings.json unchanged"
+else
+  record FAIL "doctor leaves settings.json unchanged" "settings.json was modified"
+fi
 
 # 6. Installed rule version is v0.
 new_case

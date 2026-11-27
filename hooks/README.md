@@ -27,7 +27,7 @@
 
 若 `settings.json` 已有 `hooks.PreToolUse`，把上面的 matcher 配置合并到现有数组中即可。
 
-matcher 必须包含 `Bash`，flash 模式才能识别 `sed -i`、heredoc、`>` / `>>` 重定向和 `tee` 这类源码写入。未设置 `FLASH_ORCHESTRATOR` 时，hook 收到 Bash 输入会直接放行，普通会话行为不变。
+matcher 必须包含 `Bash`，flash 模式才能识别 `sed -i`、heredoc、`>` / `>>` 重定向和 `tee` 这类源码写入。未设置 `FLASH_ORCHESTRATOR` 时，hook 收到 Bash 输入会直接放行，普通会话行为不变。`scripts/doctor.sh` 会检测这一项：matcher 缺 `Bash` 时在阶段 3 报 FAIL 并给出修正提示；它只检测，不改 `settings.json`。
 
 ## 裸调 codex exec 拦截
 
