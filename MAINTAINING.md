@@ -252,6 +252,9 @@
     - wayfinder 是上游技能，认领只写 Assignee、不记 pid，本仓库改不了，所以 `pipeline-status.sh --all` 新增 `orphanClaims`：认领不到 3 天、但 `orca terminal list --json` 里本仓库 worktree 下没有标题或屏幕预览提到 `#N` 的活 agent 终端的票，单列「认领但没有活会话」，推进模式那一轮问是否取消认领。判断是启发式（会话标题或屏幕没提到票号会误报），所以只提问、不自动取消；Orca 不可用时不判断，退回 3 天规则。
     - 已知限制：owner pid 由 `lib-owner.sh` 沿父进程找名为 `claude` 的进程；flash 模式等非 `claude` 进程名的编排会话找不到，会退回到当次命令的父 shell，锁和 `run-state` 的判活会立即失效（不会误拦，但也拦不住并发）。
 19. **2026-11-24：Design session 首行用斜杠命令加载上游技能。** 起因：proxy-hub 的 `/grill-map` Design session 讨论完话题后停下，让用户手敲 `/mattpocock-skills:wayfinder`，因为上游 wayfinder 设了 `disable-model-invocation`，Skill 工具调不起来；grill-with-docs 同样设了这个标记。决定：`design-session.sh` 的启动 prompt 首行写 `/$UPSTREAM`，`orca agent launch --prompt` 送进去的是用户输入，斜杠命令能加载这类技能，后面的话题和交接约定成为技能参数（和 launch-wave 发 `/implement-spec-split <n>` 同一机制）。Git Bash 会把开头的 `/` 改写成路径，所以同样设 `MSYS2_ARG_CONV_EXCL` 豁免 `/mattpocock-skills`。
+20. **2026-11-27：`S<k>=spec:<n>` 支持没有「实现票：」行的已有规格。** 起因：Design session 只发规格不拆票时（#25、#26），`make-batch-briefs.sh` 遇到正文没有「实现票：」行的规格直接 `die`（#27），而扫描器和 SKILL.md 都把「没有子票的规格」算「有规格、未拆票」，文档承诺覆盖、脚本却不支持。决定：
+    - 没有「实现票：」行时再解析正文的「地图：#N」/「来源地图：#N」行（正则与 `pipeline-status.sh` 的 `bodyMapReferences` 一致），解析到就把那张地图当本组的地图（取标题、走既有地图校验，Brief 保留 `地图 #N「标题」` 和 `gh issue view N` 指引）；两行都没有才是手写规格：不取地图，并在 stderr 提示一行，不硬停（第 29 条：停车只留给真要人决定的事）。子票数不为 0 的仍拒绝。
+    - Brief 里随规格形态变化的三句（身份句、实现票行、地图行）由脚本整句注入（`@@SPEC_ORIGIN@@`、`@@TICKETS_LINE@@`、`@@MAP_LINE@@`），不让模板用空变量拼句：第一版让模板同时兼顾两种形态，手写规格渲染出「它覆盖的地图实现票 已在…列出」这种假句，审查打回。
 
 ## 评估过、没有采纳的方案
 
@@ -285,7 +288,7 @@
 ## 自测
 
 - **批量发布**：`bash find-next/scripts/test-publish-batch.sh`。用假 `gh` 测校验、试运行、发布顺序、占位符回填、未决、交接留言、只拆票的已有规格组、发布后调用开发顺序脚本、发布后核对、`--only` 与中途失败后重跑，不访问网络。
-- **批量 Brief 生成**：`bash find-next/scripts/test-make-batch-briefs.sh`。用假 `gh` 测变量替换、上游技能版本选择与参数校验。
+- **批量 Brief 生成**：`bash find-next/scripts/test-make-batch-briefs.sh`。用假 `gh` 测变量替换、上游技能版本选择与参数校验，只拆票的已有规格三种形态（有「实现票：」行、只有「地图：」行、两行都没有的手写规格，含 stderr 提示与子票不为 0 仍拒绝）。
 - **流水线状态**：`bash scripts/test-pipeline-status.sh`。它用假 `gh` 和临时 git 仓库测独立规格、单票规格、原版父规格、旧父 issue 形状、缺规格分组、探索中的地图、分支接手、已合入的遗留分支、外部阻塞、`--order` 开发顺序（状态、排序、波次、`--apart`、循环依赖）、`ready-for-human` 执行票（`(人工)` 后缀、只剩人工票的规格不进「可以实现」/`--order`/波次、`--all` 提示「人工票待做」、`--graph` 的 `human`/`human_only`/`status: human`）和 gh 失败，不访问网络。
 - **前沿计算**：`bash scripts/test-frontier.sh`。用假 `gh` 和临时夹具跑真实 `pipeline-status.sh --graph`，测未阻塞票、只有已关闭阻塞的票、被挡票及其阻塞票、`ready-for-human` 票、搁置票的分节输出，前沿行在前且升序，未知规格、pipeline-status 失败、`blocked_by` 查询失败都 fail closed（stdout 为空），以及参数错误，不访问网络。
 - **unattended-stop-guard**：`node hooks/test-unattended-stop-guard.js`。临时 transcript + 临时 `ISS_STATE_DIR`/`TMPDIR`：非无人值守放行、done/waiting/parked 未自关 block、已自关放行、问句 block、非问句放行、找不到 `run.json` 只跑规则 B、`stop_hook_active` 循环上限、逃生口、坏 transcript fail open、6MB transcript 2 秒内判定，不访问网络。

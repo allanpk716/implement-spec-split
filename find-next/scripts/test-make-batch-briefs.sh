@@ -149,6 +149,24 @@ const issues = new Map([
     state: 'open',
     body: '实现票：#65\n地图：#22\n',
   }],
+  [228, {
+    number: 228,
+    title: 'Hand-written spec',
+    state: 'open',
+    body: '## Problem Statement\n\nNo map, no implementation ticket.\n',
+  }],
+  [229, {
+    number: 229,
+    title: 'Hand-written spec with children',
+    state: 'open',
+    body: '## Problem Statement\n\nNo map, but already has children.\n',
+  }],
+  [230, {
+    number: 230,
+    title: 'Map-linked spec',
+    state: 'open',
+    body: '## Problem Statement\n\n地图：#22\n',
+  }],
 ]);
 fs.appendFileSync(logFile, `${JSON.stringify({args})}\n`);
 if (args[0] === 'repo' && args[1] === 'view') {
@@ -156,7 +174,7 @@ if (args[0] === 'repo' && args[1] === 'view') {
   process.exit(0);
 }
 if (args[0] === 'api' && args[1].endsWith('/sub_issues')) {
-  process.stdout.write(args[1].startsWith('repos/test/repo/issues/225/') ? '1\n' : '0\n');
+  process.stdout.write(/^repos\/test\/repo\/issues\/(225|229)\//.test(args[1]) ? '1\n' : '0\n');
   process.exit(0);
 }
 if (args[0] !== 'issue' || args[1] !== 'view') {
@@ -240,6 +258,10 @@ expect_has '规格 #224「Existing spec twenty-four」已经写好' \
   'existing spec identity is substituted' "$EXISTING_SPEC/S2/brief.md"
 expect_has '#65「Existing spec implementation」' \
   'existing spec implementation tickets are substituted' "$EXISTING_SPEC/S2/brief.md"
+expect_has '它覆盖地图 #22「Map twenty-two」下的实现票 #65「Existing spec implementation」。' \
+  'existing spec origin names its map and implementation ticket' "$EXISTING_SPEC/S2/brief.md"
+expect_has '必要时读地图 #22「Map twenty-two」（`gh issue view 22 --comments`）' \
+  'existing spec map guidance is kept' "$EXISTING_SPEC/S2/brief.md"
 expect_has '"existing_spec": 224' \
   'existing-spec manifest format is documented' "$EXISTING_SPEC/S2/brief.md"
 expect_has '- S2：已有规格 #224 Existing spec twenty-four（只拆票）' \
@@ -298,6 +320,53 @@ expect_exit 1 'existing issue without Problem Statement is rejected'
 expect_has 'existing spec #227 has no ## Problem Statement section' \
   'missing-heading error is explained' "$WORK/no-spec-heading.out.err"
 expect_no_directory "$NO_HEADING" 'missing-heading failure writes no files'
+
+HAND_WRITTEN=$WORK/hand-written-spec
+run_brief "$WORK/hand-written-spec.out" --example 205 "$HAND_WRITTEN" \
+  S1=62,63 S2=spec:228
+expect_exit 0 'existing spec without 实现票 line generates'
+expect_first_line '# 任务：为已有规格 #228 起草执行票（只写草稿，不发布）' \
+  'hand-written spec uses the existing-spec template' "$HAND_WRITTEN/S2/brief.md"
+expect_has '规格 #228「Hand-written spec」' \
+  'hand-written spec identity is substituted' "$HAND_WRITTEN/S2/brief.md"
+expect_has '它没有地图实现票（没挂地图的手写规格），只读规格正文与相关代码。' \
+  'hand-written spec origin is stated' "$HAND_WRITTEN/S2/brief.md"
+expect_has '这份规格没有「实现票：」行，也没有「地图：」/「来源地图：」行，没有地图实现票可读；拆票只以规格正文为依据，不要去找实现票。' \
+  'hand-written spec has no implementation ticket to read' "$HAND_WRITTEN/S2/brief.md"
+expect_has '没有地图可读；相关代码按需读，只为了确认拆分边界、测试切入点、已有可复用模块和命名习惯。' \
+  'hand-written spec has no map to read' "$HAND_WRITTEN/S2/brief.md"
+expect_has 'hand-written spec without a map' \
+  'hand-written spec notice is printed to stderr' "$WORK/hand-written-spec.out.err"
+expect_without 'undefined' 'hand-written spec brief has no undefined map title' \
+  "$HAND_WRITTEN/S2/brief.md"
+expect_without '「Map twenty-two」' 'hand-written spec brief names no map' \
+  "$HAND_WRITTEN/S2/brief.md"
+expect_pattern_without '@@[A-Z_]+@@' 'hand-written spec brief has no variable left' \
+  "$HAND_WRITTEN/S2/brief.md"
+expect_has '- S2：已有规格 #228 Hand-written spec（只拆票）' \
+  'hand-written spec appears in every groups list' "$HAND_WRITTEN/S1/brief.md"
+
+HAND_WRITTEN_CHILDREN=$WORK/hand-written-spec-children
+run_brief "$WORK/hand-written-spec-children.out" --example 205 "$HAND_WRITTEN_CHILDREN" \
+  S1=spec:229
+expect_exit 1 'hand-written spec with children is rejected'
+expect_has 'existing spec #229 already has sub-issues' \
+  'hand-written children error is explained' "$WORK/hand-written-spec-children.out.err"
+expect_no_directory "$HAND_WRITTEN_CHILDREN" 'hand-written children failure writes no files'
+
+MAP_LINKED=$WORK/map-linked-spec
+run_brief "$WORK/map-linked-spec.out" --example 205 "$MAP_LINKED" S1=spec:230
+expect_exit 0 'existing spec with only a 地图： line generates'
+expect_has '它不挂在任何地图实现票下，正文用「地图：」/「来源地图：」行指回地图 #22「Map twenty-two」。' \
+  'map-linked spec origin names its map' "$MAP_LINKED/S1/brief.md"
+expect_has '这份规格没有「实现票：」行，没有地图实现票可读；拆票只以规格正文和下面的地图为依据，不要去找实现票。' \
+  'map-linked spec has no implementation ticket to read' "$MAP_LINKED/S1/brief.md"
+expect_has '必要时读地图 #22「Map twenty-two」（`gh issue view 22 --comments`）' \
+  'map-linked spec keeps the map guidance' "$MAP_LINKED/S1/brief.md"
+expect_without 'hand-written spec without a map' \
+  'map-linked spec is not reported as hand-written' "$WORK/map-linked-spec.out.err"
+expect_pattern_without '@@[A-Z_]+@@' 'map-linked spec brief has no variable left' \
+  "$MAP_LINKED/S1/brief.md"
 
 MISMATCH=$WORK/mismatch
 run_brief "$WORK/mismatch.out" --example 205 "$MISMATCH" S1=62,64

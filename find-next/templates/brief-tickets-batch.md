@@ -7,7 +7,7 @@ find-next --batch 起草 Brief 模板：一份已有规格 → 只起草它的�
 
 ## 目标
 
-仓库 `@@REPO_PATH@@`（GitHub `@@REPO@@`）里的规格 #@@SPEC_NUM@@「@@SPEC_TITLE@@」已经写好，但还没有拆执行票。它覆盖地图 #@@MAP@@「@@MAP_TITLE@@」下的实现票 @@TICKETS@@。你要把这份规格拆成：
+仓库 `@@REPO_PATH@@`（GitHub `@@REPO@@`）里的规格 #@@SPEC_NUM@@「@@SPEC_TITLE@@」已经写好，但还没有拆执行票。@@SPEC_ORIGIN@@你要把这份规格拆成：
 
 1. 执行票正文 `@@GROUP_DIR@@/tickets/T1.md`、`T2.md`…；
 2. 清单文件 `@@GROUP_DIR@@/manifest.json`，格式见下文。
@@ -18,9 +18,9 @@ find-next --batch 起草 Brief 模板：一份已有规格 → 只起草它的�
 
 - 上游技能的规则和模板（以它为准，下文只写本仓库的补充）：`@@TO_TICKETS@@`（竖切规则、阻塞边、issue 模板）。它里面「问用户」的步骤你不做：要问的内容写进清单的 `seams` 和 `unresolved`，由调用方统一问。
 - 目标仓库的 `CLAUDE.md`（写作规范）、`CONTEXT.md`（领域词）、`docs/adr/`、`docs/agents/issue-tracker.md`（规格与地图实现票的关联写法）。
-- 已有规格：`gh issue view @@SPEC_NUM@@ --comments`，逐节读。它的「实现票：」行指向 @@TICKET_NUMS@@；规格里的实现决定、Out of Scope 和测试切入点是拆票的主要依据。
-- 实现票本身：`gh issue view <n> --comments`（逐张读 @@TICKET_NUMS@@），确认规格没有漏掉它们正文里的验收要求。实现票指向的已关闭决策票，若规格没有吸收结论，按未决处理，不要自行补规格。
-- 必要时读地图 #@@MAP@@（`gh issue view @@MAP@@ --comments`）和相关代码，只为了确认拆分边界、测试切入点、已有可复用模块和命名习惯。
+- 已有规格：`gh issue view @@SPEC_NUM@@ --comments`，逐节读。规格里的实现决定、Out of Scope 和测试切入点是拆票的主要依据。
+@@TICKETS_LINE@@
+@@MAP_LINE@@
 @@EXAMPLE_GUIDANCE@@
 
 ## 同批的其他组（用来写跨规格的阻塞）
@@ -41,7 +41,7 @@ find-next --batch 起草 Brief 模板：一份已有规格 → 只起草它的�
 
 - 执行票按 to-tickets 的 issue 模板写。`## Parent` 下一行写 `#{{@@KEY@@}}`，发布时会替换成 #@@SPEC_NUM@@；正文里提到本组别的执行票写 `#{{T<n>}}`（如 `#{{T2}}`），提到别组规格写 `#{{S<n>}}`（同批其他组的 key）。只有 `{{S<n>}}`、`{{T<n>}}`、`{{S<n>/T<n>}}`、`{{#<n>}}` 四种算占位符，其他花括号文本（例如产品自身的模板语法）原样保留。阻塞关系写进清单的 `blocked_by`，执行票正文里的 `## Blocked by` 一节照样写（用同样的占位符）。
 - 拆分必须落在规格 #@@SPEC_NUM@@ 已写明的范围内。不要重写规格，也不要生成 `spec.md`；规格缺的信息按「未决的两种处理」上报。
-- 每张执行票的验收标准要注明来自规格哪一节或实现票哪一段（如 `（规格 #@@SPEC_NUM@@ User Stories）`、`（实现票 #62 正文）`）。
+- 每张执行票的验收标准要注明来自规格哪一节（如 `（规格 #@@SPEC_NUM@@ User Stories）`）；规格之外还读了地图或实现票的，也可以注明来自它们的哪一段（如 `（地图 Notes）`、`（实现票正文）`）。
 - 执行票要用到 ssh-manager MCP、真机或远程服务器的（不能交给 codex worker 做的），在正文里写明「本票由 Opus 执行」。
 - 用中文，遵守目标仓库的写作规范。
 
