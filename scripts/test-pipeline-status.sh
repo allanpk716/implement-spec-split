@@ -1100,6 +1100,21 @@ expect_exit 0 "order mode without apart succeeds"
 expect_has ' 1. #300 Hub root → /implement-spec-split 300 --impl codex' 'default command suffix is appended' "$WORK/order-no-apart.out"
 expect_without ' 2. #390 ' 'tie-break spec follows equal-score lower specs' "$WORK/order-no-apart.out"
 
+# An --apart pair whose other side is in flight (running, or interrupted and
+# resumed first) holds its idle side out of the new wave: a running or resumed
+# Spec runs beside the new wave, so "not in the same wave" alone would not keep
+# the two apart. #370 is running and #380 is to be resumed first in this fixture.
+run_order "$WORK/order-apart-control.out" --parallel 8 --cmd-suffix ''
+expect_has ' 4. #390 Tie-break spec → /implement-spec-split 390' \
+  'without a pair the tie-break spec fits wave 1 at parallel eight' "$WORK/order-apart-control.out"
+
+run_order "$WORK/order-apart-inflight.out" --parallel 8 --apart 370:390 --cmd-suffix ''
+expect_exit 0 "order mode with an in-flight apart pair succeeds"
+expect_without '#390 Tie-break spec →' \
+  'apart pair with a running spec keeps the other side out of wave 1' "$WORK/order-apart-inflight.out"
+expect_has ' 7. #390 Tie-break spec' 'spec held by a running apart side is listed under 之后' \
+  "$WORK/order-apart-inflight.out"
+
 run_workers_order "$WORK/order-workers-4.out" --parallel 2 --workers 4
 expect_exit 0 "worker-aware order succeeds"
 expect_has '开发顺序（同时 2 份，共 4 个 worker）' \

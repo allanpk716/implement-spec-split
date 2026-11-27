@@ -1525,13 +1525,24 @@ if (mode === 'order') {
     .filter((number) => states.get(number) === 'running')
     .sort((a, b) => a - b);
   const capacity = Math.max(0, parallel - running.length - interrupted.length);
+  // A running Spec and one resumed first both run beside the new wave, so an
+  // --apart pair naming either holds its other side out of that wave too.
+  const inFlight = new Set([...running, ...interrupted]);
+  function inFlightApartFrom(number) {
+    const held = [];
+    for (const [left, right] of apartPairs) {
+      if (left === number && right !== number && inFlight.has(right)) held.push(right);
+      if (right === number && left !== number && inFlight.has(left)) held.push(left);
+    }
+    return [...new Set(held)].sort((a, b) => a - b);
+  }
   const wave = [];
   const waveSet = new Set();
   for (const number of orderedNumbers) {
     if (wave.length >= capacity) break;
     const record = records.get(number);
     if (record.complete) continue;
-    const conflicts = apartPairs.some(([left, right]) => (
+    const conflicts = inFlightApartFrom(number).length > 0 || apartPairs.some(([left, right]) => (
       (left === number && waveSet.has(right)) ||
       (right === number && waveSet.has(left))
     ));
