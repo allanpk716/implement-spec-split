@@ -1112,8 +1112,52 @@ run_order "$WORK/order-apart-inflight.out" --parallel 8 --apart 370:390 --cmd-su
 expect_exit 0 "order mode with an in-flight apart pair succeeds"
 expect_without '#390 Tie-break spec →' \
   'apart pair with a running spec keeps the other side out of wave 1' "$WORK/order-apart-inflight.out"
-expect_has ' 7. #390 Tie-break spec' 'spec held by a running apart side is listed under 之后' \
-  "$WORK/order-apart-inflight.out"
+expect_has ' 7. #390 Tie-break spec（避开 #370）' \
+  'spec held by a running apart side is listed under 之后 naming it' "$WORK/order-apart-inflight.out"
+
+run_order "$WORK/order-apart-inflight-reversed.out" --parallel 8 --apart 390:370 --cmd-suffix ''
+expect_without '#390 Tie-break spec →' \
+  'a reversed apart pair keeps the idle side out of wave 1 too' "$WORK/order-apart-inflight-reversed.out"
+expect_has ' 7. #390 Tie-break spec（避开 #370）' \
+  'a reversed apart pair annotates the same running spec' "$WORK/order-apart-inflight-reversed.out"
+
+run_order "$WORK/order-apart-resume.out" --parallel 8 --apart 380:390 --cmd-suffix ''
+expect_without '#390 Tie-break spec →' \
+  'apart pair with a spec resumed first keeps the other side out of wave 1' "$WORK/order-apart-resume.out"
+expect_has ' 7. #390 Tie-break spec（避开 #380）' \
+  'spec held by a resumed-first apart side names that spec' "$WORK/order-apart-resume.out"
+
+run_order "$WORK/order-apart-both.out" --parallel 8 --apart 380:390 --apart 370:390 --cmd-suffix ''
+expect_has ' 7. #390 Tie-break spec（避开 #370 #380）' \
+  'spec held by a running and a resumed-first side names both ascending' "$WORK/order-apart-both.out"
+
+run_order "$WORK/order-apart-inflight-annotated.out" --parallel 5 --apart 370:330 --cmd-suffix ''
+expect_has ' 3. #390 Tie-break spec → /implement-spec-split 390' \
+  'the next candidate fills the slot a held spec leaves in wave 1' "$WORK/order-apart-inflight-annotated.out"
+expect_has ' 6. #330 Partial dependency（等 #380；另需 #399；避开 #370）' \
+  'the apart note follows the dependency notes of a held spec' "$WORK/order-apart-inflight-annotated.out"
+
+cat > "$WORK/order-apart-inflight-5.expected" <<'EOF'
+开发顺序（同时 5 份）
+先恢复：#380
+进行中：#370（spec-370）
+第 1 波：
+ 1. #300 Hub root → /implement-spec-split 300
+ 2. #420 Spec-owned blocker root → /implement-spec-split 420
+ 3. #330 Partial dependency → /implement-spec-split 330（部分等 #380；另需 #399）
+之后：
+ 4. #310 Downstream one（等 #300）
+ 5. #320 Downstream two（等 #300）
+ 6. #340 Complete dependency（等 #370）
+ 7. #390 Tie-break spec（避开 #370）
+ 8. #410 Blocked by needs tickets（等 #400）
+ 9. #430 Blocked by spec issue（等 #420）
+ 10. #440 Blocked by implementation ref（等 #420）
+循环依赖：#350 #360，需要人工决定
+EOF
+run_order "$WORK/order-apart-inflight-5.out" --parallel 5 --apart 370:390 --cmd-suffix ''
+expect_equal "$WORK/order-apart-inflight-5.out" "$WORK/order-apart-inflight-5.expected" \
+  'apart pair with a running spec changes only the held spec note'
 
 run_workers_order "$WORK/order-workers-4.out" --parallel 2 --workers 4
 expect_exit 0 "worker-aware order succeeds"

@@ -1564,12 +1564,14 @@ if (mode === 'order') {
       .map((value) => `#${value}`);
     const extras = [...record.extraBlockers].sort((a, b) => a - b)
       .map((value) => `#${value}`);
+    const heldFrom = inFlightApartFrom(number).map((value) => `#${value}`);
     const parts = [];
     if (dependencies.length > 0) {
       const prefix = firstWave && record.partial ? '部分等' : '等';
       parts.push(`${prefix} ${dependencies.join(' ')}`);
     }
     if (extras.length > 0) parts.push(`另需 ${extras.join(' ')}`);
+    if (heldFrom.length > 0) parts.push(`避开 ${heldFrom.join(' ')}`);
     return parts.length > 0 ? `（${parts.join('；')}）` : '';
   }
 
