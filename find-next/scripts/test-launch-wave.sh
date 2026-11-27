@@ -707,7 +707,7 @@ run_launch() {
 # Every --apply creates the wave's Run before it dispatches anything; the
 # Orca log of a new Spec then continues with the child worktree's creation.
 RUN_CREATE_LOG=$(printf 'orca\norchestration\nrun-create\n--objective\nSpec sessions of the development wave for test/repo\n--json')
-CREATE_237_LOG=$(printf 'orca\nworktree\ncreate\n--repo\npath:%s\n--parent-worktree\npath:%s\n--name\nspec-237\n--branch\nspec-237\n--base-branch\norigin/master\n--issue\n237\n--json' "$MAIN_WORKTREE_PATH" "$MAIN_WORKTREE_PATH")
+CREATE_237_LOG=$(printf 'orca\nworktree\ncreate\n--repo\npath:%s\n--name\nspec-237\n--branch\nspec-237\n--base-branch\norigin/master\n--issue\n237\n--parent-worktree\npath:%s\n--json' "$MAIN_WORKTREE_PATH" "$MAIN_WORKTREE_PATH")
 RUN_AND_CREATE_LOG=$(printf '%s\n%s' "$RUN_CREATE_LOG" "$CREATE_237_LOG")
 CREATED_237=$REPO/created/spec-237
 

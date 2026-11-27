@@ -907,8 +907,8 @@ dispatch_spec() { # kind spec command worktree
       write_result "$spec" skipped "#$spec 领取失败：$(reserve_failed_reason "$reserve_output" "$err_file" "$reserve_status")"
       return
     fi
-    if ! orca_worktree_create_child "$MAIN_WORKTREE" "$MAIN_WORKTREE" "spec-$spec" "spec-$spec" \
-         "origin/$MAIN_BRANCH" "$spec" < /dev/null > "$create_out" 2> "$err_file"; then
+    if ! orca_worktree_create_child "$MAIN_WORKTREE" "spec-$spec" "spec-$spec" "origin/$MAIN_BRANCH" \
+         "$spec" "$MAIN_WORKTREE" < /dev/null > "$create_out" 2> "$err_file"; then
       err=$(first_error_line "$err_file" "$create_out")
       abandon_launch "$spec" wave ''
       write_result "$spec" failed "#$spec 启动失败：$(one_line "$err")"
