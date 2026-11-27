@@ -570,5 +570,80 @@ call "$WORK/wait-timeout-none.out" orca_terminal_wait term_glm exit
 expect_exit 64 "terminal wait without a timeout exits 64: a wait always carries one"
 expect_empty_log "terminal wait without a timeout never starts Orca" "$ORCA_LOG"
 
+# --- orchestration check --types: the wake condition of one blocking wait -----
+# stage-dispatch.sh waits for a worker_done alone; --types narrows what wakes
+# the wait and changes nothing else about the call.
+
+reset_logs
+call "$WORK/check-types.out" orca_orchestration_check run_abc --take --types worker_done --timeout-ms 1500
+expect_exit 0 "check --types: exits 0"
+expect_same "$(printf 'orchestration\nARG check\nARG --run\nARG run_abc\nARG --json\nARG --types\nARG worker_done\nARG --wait\nARG --timeout-ms\nARG 1500')" \
+  "$(cat "$ORCA_LOG")" "check --types: names the types it wakes on, in one blocking call that takes"
+
+reset_logs
+call "$WORK/check-types-peek.out" orca_orchestration_check run_abc --types worker_done
+expect_exit 0 "check --types without a wait: exits 0"
+expect_same "$(printf 'orchestration\nARG check\nARG --run\nARG run_abc\nARG --json\nARG --types\nARG worker_done\nARG --peek')" \
+  "$(cat "$ORCA_LOG")" "check --types without a wait: still peeks"
+
+reset_logs
+call "$WORK/check-types-empty.out" orca_orchestration_check run_abc --types ''
+expect_exit 64 "check --types without a value exits 64"
+expect_has 'types' "check --types without a value says what is missing" "$WORK/check-types-empty.out.err"
+expect_empty_log "check --types without a value never starts Orca" "$ORCA_LOG"
+
+reset_logs
+call "$WORK/check-types-option.out" orca_orchestration_check run_abc --types --take
+expect_exit 64 "check --types followed by an option exits 64"
+expect_empty_log "check --types followed by an option never starts Orca" "$ORCA_LOG"
+
+# --- orchestration worker-show and worker-release: what stage-dispatch.sh ----
+# --- checks before it releases, and the release itself -------------------------
+# Both address one dispatch; there is no Run to name.
+
+reset_logs
+call "$WORK/show.out" orca_orchestration_worker_show ctx_abc
+expect_exit 0 "worker-show: exits 0"
+expect_same "$(printf 'orchestration\nARG worker-show\nARG --dispatch\nARG ctx_abc\nARG --json')" "$(cat "$ORCA_LOG")" \
+  "worker-show: asks for that dispatch, as JSON"
+
+reset_logs
+call "$WORK/show-empty.out" orca_orchestration_worker_show ''
+expect_exit 64 "worker-show without a dispatch id exits 64"
+expect_has 'dispatch' "worker-show without a dispatch id says what is missing" "$WORK/show-empty.out.err"
+expect_empty_log "worker-show without a dispatch id never starts Orca" "$ORCA_LOG"
+
+reset_logs
+call "$WORK/release.out" orca_orchestration_worker_release ctx_abc
+expect_exit 0 "worker-release: exits 0"
+expect_same "$(printf 'orchestration\nARG worker-release\nARG --dispatch\nARG ctx_abc\nARG --json')" "$(cat "$ORCA_LOG")" \
+  "worker-release: releases that dispatch, as JSON"
+
+reset_logs
+call "$WORK/release-empty.out" orca_orchestration_worker_release ''
+expect_exit 64 "worker-release without a dispatch id exits 64"
+expect_has 'dispatch' "worker-release without a dispatch id says what is missing" "$WORK/release-empty.out.err"
+expect_empty_log "worker-release without a dispatch id never starts Orca" "$ORCA_LOG"
+
+# --- worktree create with a parent: the child worktree of a Ticket ------------
+# The Ticket worktree hangs under the Spec worktree, on its own branch off the
+# Integration branch; no agent is started in it (stage-dispatch.sh opens the
+# terminal itself).
+
+reset_logs
+call "$WORK/create-child.out" orca_worktree_create_child '/w/repo main' spec-26-t41 spec-26-t41 \
+    spec-26 41 '/w/repo main/spec-26'
+expect_exit 0 "worktree create with a parent: exits 0"
+expect_same "$(printf 'worktree\nARG create\nARG --repo\nARG path:/w/repo main\nARG --name\nARG spec-26-t41\nARG --branch\nARG spec-26-t41\nARG --base-branch\nARG spec-26\nARG --issue\nARG 41\nARG --parent-worktree\nARG path:/w/repo main/spec-26\nARG --json')" \
+  "$(cat "$ORCA_LOG")" \
+  "worktree create with a parent: the child is filed under the parent, off the base branch, as JSON, with no agent or prompt"
+
+reset_logs
+call "$WORK/create-child-empty.out" orca_worktree_create_child '/w/repo main' spec-26-t41 spec-26-t41 \
+    spec-26 41 ''
+expect_exit 64 "worktree create with a parent, without the parent, exits 64"
+expect_has 'parent' "worktree create without the parent says what is missing" "$WORK/create-child-empty.out.err"
+expect_empty_log "worktree create without the parent never starts Orca" "$ORCA_LOG"
+
 printf '\n%d passed, %d failed\n' "$PASSED" "$FAILED"
 [ "$FAILED" -eq 0 ]
