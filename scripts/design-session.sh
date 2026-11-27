@@ -7,13 +7,15 @@
 # time a session is launched. Its Launcher profile names the launcher; the model
 # and reasoning effort go on that launcher's command line, which is how a Design
 # session can run on something other than Opus. The session is an Orca terminal
-# in the repository running `<launcher> --dangerously-skip-permissions --model …
-# --effort …`, adopted as a worker of a Run with `worker-start --terminal`,
-# which also delivers the prompt as the Task. The typed command records the
-# launcher's exit code in <run dir>/exit-code, which, with one `terminal wait
-# --for exit`, is how the wait notices that the session ended. A session that is
-# already open keeps the route it started on; --attach keeps waiting for it
-# either way and reads no route.
+# in the repository running `<launcher> --model … --effort …`, adopted as a
+# worker of a Run with `worker-start --terminal`, which also delivers the prompt
+# as the Task. Every profile but the official claude adds
+# --dangerously-skip-permissions to that command; claude keeps its TUI's
+# permission prompts, the user being present in a Design session. The typed
+# command records the launcher's exit code in <run dir>/exit-code, which, with
+# one `terminal wait --for exit`, is how the wait notices that the session
+# ended. A session that is already open keeps the route it started on; --attach
+# keeps waiting for it either way and reads no route.
 #
 # Usage:
 #   scripts/design-session.sh feature|map (<topic> | --topic-file <path>)
@@ -386,7 +388,16 @@ EOF
   # alone would not notice the session ending. Each argument is quoted for the
   # terminal's shell (the GLM launchers' model ends in [1m], a glob character).
   # The Task is delivered by worker-start below, not on this command line.
-  LAUNCH_COMMAND="$(printf ' %q' "${LAUNCH_ARGS[0]}" --dangerously-skip-permissions "${LAUNCH_ARGS[@]:1}")"
+  # The official claude profile starts without --dangerously-skip-permissions,
+  # so its TUI asks before push and Bash as in any session the user opens by
+  # hand (the user is present in a Design session); the other profiles keep the
+  # flag, as the GLM terminal path always has.
+  if [ "$ROUTE_PROFILE" = claude ]; then
+    PERMISSION_ARGS=()
+  else
+    PERMISSION_ARGS=(--dangerously-skip-permissions)
+  fi
+  LAUNCH_COMMAND="$(printf ' %q' "${LAUNCH_ARGS[0]}" ${PERMISSION_ARGS[@]+"${PERMISSION_ARGS[@]}"} "${LAUNCH_ARGS[@]:1}")"
   LAUNCH_COMMAND="${LAUNCH_COMMAND# }; echo \$? > $(printf '%q' "$RUN_DIR/exit-code")"
   LAUNCH_JSON=$(orca_terminal_create "$REPO_ROOT" "Design session $KIND" "$LAUNCH_COMMAND" --focus \
     2>"$RUN_DIR/launch.err") ||

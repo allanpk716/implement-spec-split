@@ -357,8 +357,12 @@ expect_file_has 'ARG path:' 'the terminal is opened in the repository checkout' 
 expect_file_has 'ARG --title' 'the Design session terminal gets a title' "$ORCA_LOG"
 expect_file_has 'ARG Design session feature' 'the title names the kind' "$ORCA_LOG"
 expect_file_has 'ARG --focus' 'the Design session tab is focused' "$ORCA_LOG"
-expect_file_has 'ARG claude --dangerously-skip-permissions --model opus --effort high; echo $? > ' \
+expect_file_has 'ARG claude --model opus --effort high; echo $? > ' \
   'terminal create runs the default route: claude with --model opus and --effort high' "$ORCA_LOG"
+# The official claude profile alone goes without --dangerously-skip-permissions:
+# its TUI asks before push and Bash, the user being present in a Design session.
+expect_file_without '--dangerously-skip-permissions' \
+  'the official claude route does not skip permission prompts' "$ORCA_LOG"
 expect_file_has '/exit-code' 'the typed command records the launcher exit code' "$ORCA_LOG"
 expect_file_has 'ARG --terminal' 'worker-start names the terminal' "$ORCA_LOG"
 expect_file_has 'ARG term_glm' 'worker-start adopts the handle terminal create returned' "$ORCA_LOG"
@@ -948,7 +952,7 @@ rm -f "$CHECK_ATTEMPTS"
 run_design_session "$WORK/switch-on.out" map 'Switched map' --timeout 5
 expect_exit 0 'a claude-glm design route opens a Design session'
 expect_file_has 'ARG claude-glm --dangerously-skip-permissions --model glm-5.4\[1m\] --effort high; echo $? > ' \
-  'the typed command runs the switched launcher with its model, quoted for the terminal shell, and effort' \
+  'the typed command runs the switched launcher with --dangerously-skip-permissions, its model, quoted for the terminal shell, and effort' \
   "$ORCA_LOG"
 expect_file_has 'design-session: 本次讨论路由：讨论（design）：claude-glm / glm-5.4 / high' \
   'the switched route is reported on stderr' "$RUN_STDERR"
@@ -984,13 +988,15 @@ expect_file_has '本次讨论路由：讨论（design）：claude-flash / glm-5.
 expect_file_has '自己做候选页面和自检脚本' \
   'claude-flash, like every non-claude profile, makes mock pages itself' "$PROMPT_LOG"
 
-# Back on the default, so is the typed command.
+# Back on the default, so is the typed command, without the flag again.
 set_design_route claude/opus/high
 : > "$ORCA_LOG"
 run_design_session "$WORK/switch-back.out" feature 'Back on opus' --timeout 3
 expect_exit 0 'the default design route opens a Design session again'
-expect_file_has 'ARG claude --dangerously-skip-permissions --model opus --effort high; echo $? > ' \
+expect_file_has 'ARG claude --model opus --effort high; echo $? > ' \
   'switching back restores claude with --model opus and --effort high' "$ORCA_LOG"
+expect_file_without '--dangerously-skip-permissions' \
+  'switching back to the claude profile drops --dangerously-skip-permissions' "$ORCA_LOG"
 expect_file_has '交给 codex-worker.sh 出页面并自检' \
   'the claude profile hands mock pages to a worker again' "$PROMPT_LOG"
 
@@ -1000,7 +1006,7 @@ expect_file_has '交给 codex-worker.sh 出页面并自检' \
 : > "$ORCA_LOG"
 run_design_session "$WORK/switch-review-only.out" feature 'Review only' --timeout 3
 expect_exit 0 'a switched review alone launches a Design session'
-expect_file_has 'ARG claude --dangerously-skip-permissions --model opus --effort high; echo $? > ' \
+expect_file_has 'ARG claude --model opus --effort high; echo $? > ' \
   'a switched review alone leaves the design route alone' "$ORCA_LOG"
 "$ROOT/scripts/stage-route.sh" use review=claude/opus/high >/dev/null 2>&1
 
