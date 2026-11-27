@@ -388,9 +388,9 @@ expect_stdout_has 'judgment-model.sh use <setting>' 'help documents use'
 expect_stdout_has -- '--print <role>' 'help documents --print with a role'
 expect_stdout_has 'grill=opus review=glm-5.4' 'help shows setting both roles in one command'
 
-# A wrapper that still reads its role here does so on every call. opus-review.sh
-# has moved to the Stage route table (scripts/stage-route.sh, issue #33).
-expect_file_has 'judgment-model.sh" --print grill' 'design-session reads the grill role' "$HERE/design-session.sh"
+# No wrapper reads its role here any more: opus-review.sh moved to the Stage
+# route table (scripts/stage-route.sh, issue #33), design-session.sh to its
+# design route in the same table (issue #34).
 
 # The user-facing command is the judgment-model skill, symlinked like the others.
 ROOT=$(cd "$HERE/.." && pwd)
@@ -407,10 +407,9 @@ for doc in README.md docs/setup.md docs/setup.en.md; do
   expect_file_has "$LINK" "$doc documents the skill symlink" "$ROOT/$doc"
   expect_file_has '/judgment-model' "$doc documents the slash command" "$ROOT/$doc"
 done
-# SKILL.md and find-next/SKILL.md describe the Stage route table instead (#33).
-for doc in grill-feature/SKILL.md grill-map/SKILL.md MAINTAINING.md; do
-  expect_file_has '/judgment-model' "$doc points at the slash command" "$ROOT/$doc"
-done
+# SKILL.md and find-next/SKILL.md describe the Stage route table instead (#33);
+# grill-feature/SKILL.md and grill-map/SKILL.md point at /grill-router (#34).
+expect_file_has '/judgment-model' 'MAINTAINING.md points at the slash command' "$ROOT/MAINTAINING.md"
 
 if [ "$FAILED" -gt 0 ]; then
   printf 'Artifacts: %s\n' "$WORK"
