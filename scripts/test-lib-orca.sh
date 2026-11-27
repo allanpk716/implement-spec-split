@@ -801,6 +801,40 @@ expect_exit 64 "worker-release without a dispatch id exits 64"
 expect_has 'dispatch' "worker-release without a dispatch id says what is missing" "$WORK/release-empty.out.err"
 expect_empty_log "worker-release without a dispatch id never starts Orca" "$ORCA_LOG"
 
+# --- orchestration worker-list: how keeper.sh finds the worker of a Spec worktree
+# A query with no Run to name: the keeper has no Run of its own and must see
+# every worker. One page per call; --cursor asks for the page after the one
+# whose nextCursor it carries, and the caller walks the pages.
+
+reset_logs
+call "$WORK/list.out" orca_orchestration_worker_list
+expect_exit 0 "worker-list: exits 0"
+expect_same "$(printf 'orchestration\nARG worker-list\nARG --json')" "$(cat "$ORCA_LOG")" \
+  "worker-list: asks for the workers as JSON, with no Run and no filter"
+
+reset_logs
+call "$WORK/list-cursor.out" orca_orchestration_worker_list --cursor c2
+expect_exit 0 "worker-list --cursor: exits 0"
+expect_same "$(printf 'orchestration\nARG worker-list\nARG --json\nARG --cursor\nARG c2')" "$(cat "$ORCA_LOG")" \
+  "worker-list --cursor: asks for the page after that cursor"
+
+reset_logs
+call "$WORK/list-cursor-empty.out" orca_orchestration_worker_list --cursor ''
+expect_exit 64 "worker-list --cursor without a value exits 64"
+expect_has 'cursor' "worker-list --cursor without a value says what is missing" "$WORK/list-cursor-empty.out.err"
+expect_empty_log "worker-list --cursor without a value never starts Orca" "$ORCA_LOG"
+
+reset_logs
+call "$WORK/list-cursor-option.out" orca_orchestration_worker_list --cursor --take
+expect_exit 64 "worker-list --cursor followed by an option exits 64"
+expect_empty_log "worker-list --cursor followed by an option never starts Orca" "$ORCA_LOG"
+
+reset_logs
+call "$WORK/list-run.out" orca_orchestration_worker_list --run run_abc
+expect_exit 64 "worker-list with --run exits 64: the keeper must see every worker"
+expect_has '--run' "worker-list with an option it does not offer names it" "$WORK/list-run.out.err"
+expect_empty_log "worker-list with an option it does not offer never starts Orca" "$ORCA_LOG"
+
 # --- worktree create with a parent: the child worktree of a Ticket ------------
 # The Ticket worktree hangs under the Spec worktree, on its own branch off the
 # Integration branch; no agent is started in it (stage-dispatch.sh opens the

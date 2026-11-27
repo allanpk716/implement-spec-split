@@ -6,9 +6,14 @@
 #   1. a Run parked on quota or a transient error is resumed once its
 #      recoverable time has passed (at most KEEPER_MAX_RESUMES times per 24h);
 #   2. a session that died (claim interrupted, no new report) is resumed;
-#   3. a session that stalled (no transcript write for KEEPER_STALL_MIN) is
-#      nudged once, and when it stays silent for another KEEPER_STALL_MIN its
-#      terminal is closed, its claim released and the Spec resumed.
+#   3. a session whose files went silent for KEEPER_STALL_MIN is asked of
+#      Orca, which manages it as a worker (the first evidence; the file times
+#      are the second): a live worker is left alone, however old the files
+#      are; an exited worker is a confirmed failure — its terminal is closed,
+#      its claim released and the Spec resumed; a worker Orca cannot vouch
+#      for (unverifiable, or none listed in the Spec worktree) is reported
+#      to a human once per Spec and evidence, and left alone: Orca forbids
+#      a stop, a retry or a release on anything but an exited worker.
 #
 # It never writes to GitHub, pushes, deletes branches or worktrees, or touches a
 # repository whose launch state has auto_land: false.
@@ -25,8 +30,10 @@
 #
 # Environment:
 #   KEEPER_STALL_MIN     minutes without a transcript write before a live claim
-#                        counts as stalled (default 45)
+#                        counts as stalled and is asked of Orca (default 45)
 #   KEEPER_MAX_RESUMES   automatic resumes per Spec per 24 hours (default 3)
+#   KEEPER_WORKER_PAGES  pages of the worker list walked at most while looking
+#                        for the worker of a Spec worktree (default 10)
 #   KEEPER_NOTIFY_CMD    shell command run instead of osascript; it receives
 #                        KEEPER_NOTIFY_TITLE and KEEPER_NOTIFY_MESSAGE
 #   KEEPER_LOG           action log (default ~/ops/var/log/spec-keeper.actions.log)
@@ -53,16 +60,16 @@ CLAIM=${KEEPER_CLAIM:-$SKILL_ROOT/scripts/claim.sh}
 LAUNCH_WAVE=${KEEPER_LAUNCH_WAVE:-$SKILL_ROOT/find-next/scripts/launch-wave.sh}
 LOCK=${KEEPER_LOCK:-$SKILL_ROOT/scripts/lock.sh}
 
-NUDGE_TEXT='继续。你是无人值守 Run：检查后台任务和 worker 状态，按 SKILL.md 推进；不要等人。'
-
 usage() {
   cat <<EOF
 usage: $SCRIPT_NAME [--once] [--dry-run] [--repo <owner/name>] [--state <file>]
 
 Runs one keeper round: resumes quota/transient parking and dead sessions when
-their recoverable time has passed, nudges then restarts a stalled session, and
-notifies a human about parking that needs a decision. Reads GitHub, claims, run
-directories, session transcripts and Orca; with --dry-run it writes nothing.
+their recoverable time has passed, asks Orca whether a silent session is still
+alive and restarts it only when Orca says it exited, and notifies a human about
+parking that needs a decision and about sessions Orca cannot vouch for. Reads
+GitHub, claims, run directories, session transcripts and Orca; with --dry-run it
+writes nothing.
 
   --once     one round and exit (launchd); without it, rounds every
              KEEPER_INTERVAL seconds (default 600)
@@ -71,9 +78,9 @@ directories, session transcripts and Orca; with --dry-run it writes nothing.
   --state    state file (default ~/ops/state/spec-keeper/state.json, else
              ~/.cache/implement-spec-split/keeper-state.json)
 
-Environment: KEEPER_STALL_MIN (45), KEEPER_MAX_RESUMES (3), KEEPER_NOTIFY_CMD,
-KEEPER_LOG, KEEPER_PAUSED, KEEPER_LOCK, KEEPER_CLAIM, KEEPER_LAUNCH_WAVE,
-KEEPER_GH, ISS_ORCA (the Orca executable, see lib-orca.sh).
+Environment: KEEPER_STALL_MIN (45), KEEPER_MAX_RESUMES (3), KEEPER_WORKER_PAGES
+(10), KEEPER_NOTIFY_CMD, KEEPER_LOG, KEEPER_PAUSED, KEEPER_LOCK, KEEPER_CLAIM,
+KEEPER_LAUNCH_WAVE, KEEPER_GH, ISS_ORCA (the Orca executable, see lib-orca.sh).
 EOF
 }
 
@@ -144,6 +151,7 @@ PAUSED_FILE=${KEEPER_PAUSED:-$(dirname -- "$STATE")/paused}
 STALL_MIN=${KEEPER_STALL_MIN:-45}
 MAX_RESUMES=${KEEPER_MAX_RESUMES:-3}
 INTERVAL=${KEEPER_INTERVAL:-600}
+WORKER_PAGES=${KEEPER_WORKER_PAGES:-10}
 case "$STALL_MIN" in
   ''|*[!0-9]*) usage_error "KEEPER_STALL_MIN must be a non-negative integer, got '$STALL_MIN'" ;;
 esac
@@ -152,6 +160,9 @@ case "$MAX_RESUMES" in
 esac
 case "$INTERVAL" in
   ''|*[!0-9]*) usage_error "KEEPER_INTERVAL must be a non-negative integer, got '$INTERVAL'" ;;
+esac
+case "$WORKER_PAGES" in
+  ''|*[!0-9]*|0) usage_error "KEEPER_WORKER_PAGES must be a positive integer, got '$WORKER_PAGES'" ;;
 esac
 STALL_SEC=$(( STALL_MIN * 60 ))
 
@@ -178,7 +189,7 @@ log_line() { # repo spec action reason
   line=$(printf '%s\t%s\t%s\t%s\t%s' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$repo" "$spec" "$action" "$reason")
   printf '%s\n' "$line"
   case "$action" in
-    RESUME|NUDGE|CLOSE_TERMINAL|RELEASE_CLAIM|NOTIFY|WOULD_*)
+    RESUME|CLOSE_TERMINAL|RELEASE_CLAIM|NOTIFY|WOULD_*)
       [ -n "${WORK:-}" ] && printf 'x\n' >>"$WORK/actions" 2>/dev/null
       ;;
   esac
@@ -195,21 +206,20 @@ iso_time() { # epoch seconds -> ISO 8601 with the local offset
 
 # --- node helpers ------------------------------------------------------------
 
-state_op() { # count|add|seen|notify|nudge-get|nudge-set|nudge-clear key [value...]
+state_op() { # count|add|seen|notify key [value...]
   KEEPER_STATE_FILE=$STATE KEEPER_DRY=$DRY node -e '
     const fs = require("fs"), path = require("path");
     const file = process.env.KEEPER_STATE_FILE;
     const dry = process.env.KEEPER_DRY === "1";
     const day = 24 * 60 * 60;
     const now = Math.floor(Date.now() / 1000);
-    const empty = () => ({version: 1, resumes: {}, notified: {}, nudges: {}});
+    const empty = () => ({version: 1, resumes: {}, notified: {}});
     let state = empty();
     try {
       const value = JSON.parse(fs.readFileSync(file, "utf8"));
       if (value && typeof value === "object") {
         if (value.resumes && typeof value.resumes === "object") state.resumes = value.resumes;
         if (value.notified && typeof value.notified === "object") state.notified = value.notified;
-        if (value.nudges && typeof value.nudges === "object") state.nudges = value.nudges;
       }
     } catch (_) {}
     const save = () => {
@@ -238,21 +248,11 @@ state_op() { # count|add|seen|notify|nudge-get|nudge-set|nudge-clear key [value.
     } else if (op === "notify") {
       state.notified[key] = process.argv[3] || String(now);
       save();
-    } else if (op === "nudge-get") {
-      const nudge = state.nudges[key];
-      // The pane of the nudged terminal, never its handle: the handle is asked
-      // of Orca again when it is used (rule 3 of lib-orca.sh).
-      if (nudge && nudge.at) process.stdout.write([nudge.at, nudge.tabId || "", nudge.leafId || ""].join("\x1f"));
-    } else if (op === "nudge-set") {
-      state.nudges[key] = {at: Number(process.argv[3]) || now, tabId: process.argv[4] || "", leafId: process.argv[5] || ""};
-      save();
-    } else if (op === "nudge-clear") {
-      if (state.nudges[key]) { delete state.nudges[key]; save(); }
     }
   ' "$@"
 }
 
-list_repos() { # prints repo<US>auto_land<US>flash<US>launch_agent
+list_repos() { # prints repo<US>auto_land<US>flash
   LAUNCH_STATE_DIR=$LAUNCH_STATE_DIR ONLY_REPO=${ONLY_REPO:-} node -e '
     const fs = require("fs"), path = require("path");
     const dir = process.env.LAUNCH_STATE_DIR;
@@ -269,11 +269,9 @@ list_repos() { # prints repo<US>auto_land<US>flash<US>launch_agent
       try { value = JSON.parse(fs.readFileSync(path.join(dir, name), "utf8")); } catch (_) {}
       const autoLand = !(value && value.auto_land === false);
       const flash = Boolean(value && value.flash === true);
-      const agent = value && typeof value.launch_agent === "string" && value.launch_agent
-        ? value.launch_agent : "claude";
-      rows.push([repo, autoLand ? "1" : "0", flash ? "1" : "0", agent].join("\x1f"));
+      rows.push([repo, autoLand ? "1" : "0", flash ? "1" : "0"].join("\x1f"));
     }
-    if (!rows.length && want) rows.push([want, "1", "0", "claude"].join("\x1f"));
+    if (!rows.length && want) rows.push([want, "1", "0"].join("\x1f"));
     process.stdout.write(rows.join("\n") + (rows.length ? "\n" : ""));
   '
 }
@@ -570,38 +568,135 @@ report_info() { # spec number -> kind<US>id<US>url<US>category<US>recover_at<US>
   ' "$comments"
 }
 
-# One agent terminal in the Spec worktree: no progress tab, preferring the agent
-# the launch state names and otherwise the most recently active one.
-terminal_pick() { # worktree spec launch_agent -> handle<US>title<US>agent<US>tabId<US>leafId
+# --- Orca liveness ------------------------------------------------------------
+# The first evidence about a silent session (the file times are the second):
+# the liveness Orca reports for the worker in the Spec worktree.
+
+# The workers Orca lists in one worktree, out of one page of worker-list read
+# from stdin: a line `dispatch<TAB>liveness<TAB>terminal<TAB>terminalState` per
+# worker, then `cursor<TAB><nextCursor>` (empty on the last page). The worktree
+# is compared by real path: Orca writes the canonical one, git may not.
+workers_in_page() { # worktree
+  WORKTREE_WANT=$1 node -e '
+    const fs = require("fs");
+    let value;
+    try { value = JSON.parse(fs.readFileSync(0, "utf8")); } catch { process.exit(2); }
+    const result = value && value.result && typeof value.result === "object" ? value.result : null;
+    if (!result || !Array.isArray(result.workers)) process.exit(2);
+    const real = (p) => { try { return fs.realpathSync(p); } catch (_) { return p; } };
+    const wanted = real(process.env.WORKTREE_WANT);
+    const rows = [];
+    for (const worker of result.workers) {
+      if (!worker || !worker.dispatchId) continue;
+      const workspace = String(worker.workspace || "");
+      const cut = workspace.indexOf("::");
+      if (real(cut >= 0 ? workspace.slice(cut + 2) : workspace) !== wanted) continue;
+      rows.push([String(worker.dispatchId), String(worker.liveness || ""), String(worker.terminal || ""),
+        String(worker.terminalState || "")].join("\t"));
+    }
+    rows.push("cursor\t" + (result.nextCursor == null ? "" : String(result.nextCursor)));
+    process.stdout.write(rows.join("\n") + "\n");
+  '
+}
+
+# The three fields of a worker-show receipt keeper acts on.
+worker_show_fields() { # stdin: worker-show --json -> liveness<TAB>terminal<TAB>terminalState
   node -e '
     const fs = require("fs");
-    const wanted = process.argv[2];
-    const spec = process.argv[3];
-    const agent = String(process.argv[4] || "claude").toLowerCase();
-    let value = null;
-    try { value = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); } catch (_) {}
-    const terminals = value && value.result && Array.isArray(value.result.terminals)
-      ? value.result.terminals : [];
-    const real = (p) => { try { return fs.realpathSync(p); } catch (_) { return p; } };
-    const progress = new RegExp("^spec-" + spec + " (t[0-9]+|merge t[0-9]+|merge main|fix)$");
-    let best = null;
-    for (const terminal of terminals) {
-      if (!terminal) continue;
-      const worktree = String(terminal.worktreePath || "");
-      if (!worktree || real(worktree) !== real(wanted)) continue;
-      const title = String(terminal.title || "");
-      if (progress.test(title)) continue;
-      const identity = String(terminal.agentIdentity || "").toLowerCase();
-      if (!identity) continue;
-      const score = identity === agent ? 2 : 1;
-      const at = Number(terminal.lastOutputAt || 0);
-      if (!best || score > best.score || (score === best.score && at > best.at)) {
-        best = {score, at, handle: String(terminal.handle || ""), title, identity,
-          tabId: String(terminal.tabId || ""), leafId: String(terminal.leafId || "")};
-      }
-    }
-    if (best) process.stdout.write([best.handle, best.title, best.identity, best.tabId, best.leafId].join("\x1f"));
-  ' "$WORK/terminals.json" "$1" "$2" "$3"
+    let value;
+    try { value = JSON.parse(fs.readFileSync(0, "utf8")); } catch { process.exit(2); }
+    const result = value && value.result && typeof value.result === "object" ? value.result : null;
+    if (!result) process.exit(2);
+    process.stdout.write([String(result.liveness || ""), String(result.terminal || ""),
+      String(result.terminalState || "")].join("\t"));
+  '
+}
+
+# Asks Orca for the worker(s) of the Spec worktree and concludes one of
+#   live         a worker in the worktree is live: the session is alive
+#   exited       every worker in it exited: a confirmed failure
+#   unverifiable anything else: a worker Orca cannot vouch for, no worker at
+#                all for the worktree, an Orca that cannot answer or a page
+#                that cannot be read — nothing is retried on any of these
+# The list has no worktree filter (docs/orca-smoke-2026-11-27.md), so it is
+# walked page by page until the worktree turns up or the list ends, at most
+# KEEPER_WORKER_PAGES pages so that a list Orca keeps extending cannot loop
+# the round; a list cut short by that cap still supports live, but not exited,
+# which is a claim about every worker in the worktree. Each worker found is
+# asked of worker-show, whose liveness decides; a live one ends the walk, since
+# nothing else in the worktree can change that conclusion. Prints
+# verdict<US>key<US>evidence<US>terminals: key is what the once-only
+# notification is keyed on (the dispatch, or none, or orca), evidence names
+# every dispatch and its liveness, and terminals are the handles of the exited
+# workers Orca has not released.
+worker_liveness() { # worktree -> verdict<US>key<US>evidence<US>terminals
+  local worktree=$1 cursor= page=0 rows= next= list= args
+  local dispatches=() dispatch fields liveness terminal state
+  local evidence= key=none handles= unsure=0 truncated=
+  while :; do
+    page=$((page + 1))
+    args=()
+    [ -n "$cursor" ] && args+=(--cursor "$cursor")
+    if ! list=$(orca_orchestration_worker_list ${args[@]+"${args[@]}"} 2>"$WORK/worker-list.err"); then
+      printf 'unverifiable\x1forca\x1forca worker-list 失败：%s\x1f' "$(head -n 1 "$WORK/worker-list.err" 2>/dev/null)"
+      return 0
+    fi
+    if ! rows=$(printf '%s' "$list" | workers_in_page "$worktree"); then
+      printf 'unverifiable\x1forca\x1forca worker-list 的输出无法解析\x1f'
+      return 0
+    fi
+    while IFS= read -r line; do
+      case "$line" in
+        cursor$'\t'*) next=${line#cursor$'\t'} ;;
+        *) dispatches+=("${line%%$'\t'*}") ;;
+      esac
+    done <<<"$rows"
+    [ -n "$next" ] || break
+    if [ "$page" -ge "$WORKER_PAGES" ]; then
+      truncated="只查了前 ${page} 页"
+      break
+    fi
+    cursor=$next
+  done
+  if [ "${#dispatches[@]}" -eq 0 ]; then
+    printf 'unverifiable\x1fnone\x1fworker-list 里没有 workspace 为 %s 的 worker%s\x1f' \
+      "$worktree" "${truncated:+（${truncated}）}"
+    return 0
+  fi
+  for dispatch in ${dispatches[@]+"${dispatches[@]}"}; do
+    if ! fields=$(orca_orchestration_worker_show "$dispatch" 2>"$WORK/worker-show.err" |
+        worker_show_fields); then
+      unsure=1
+      [ "$key" = none ] && key=$dispatch
+      evidence="${evidence}liveness=unknown dispatch=${dispatch}（worker-show 失败：$(head -n 1 "$WORK/worker-show.err" 2>/dev/null)）; "
+      continue
+    fi
+    IFS=$'\t' read -r liveness terminal state <<<"$fields"
+    evidence="${evidence}liveness=${liveness:-unknown} dispatch=$dispatch; "
+    case "$liveness" in
+      live)
+        printf 'live\x1f%s\x1f%s\x1f' "$dispatch" "${evidence%; }"
+        return 0
+        ;;
+      exited)
+        [ "$state" = released ] || [ -z "$terminal" ] || handles="$handles$terminal "
+        ;;
+      *)
+        unsure=1
+        [ "$key" = none ] && key=$dispatch
+        ;;
+    esac
+  done
+  if [ "$unsure" -eq 1 ] || [ -n "$truncated" ]; then
+    # "Every worker exited" is a claim about the whole worktree; a list cut
+    # short before its end cannot support it.
+    evidence="${evidence%; }"
+    [ -z "$truncated" ] || evidence="$evidence; $truncated"
+    [ "$key" != none ] || key=${dispatches[0]}
+    printf 'unverifiable\x1f%s\x1f%s\x1f' "$key" "$evidence"
+  else
+    printf 'exited\x1f%s\x1f%s\x1f%s' "${dispatches[0]}" "${evidence%; }" "$handles"
+  fi
 }
 
 # --- notifications -----------------------------------------------------------
@@ -675,7 +770,6 @@ do_resume() { # spec reason
   word=$("$CLAIM" status "$spec" </dev/null 2>/dev/null | awk '{print $1}')
   if [ "$status" -eq 0 ] && [ "$word" = active ]; then
     state_op add "$REPO#$spec" "$(date +%s)"
-    state_op nudge-clear "$REPO#$spec"
     log_line "$REPO" "#$spec" RESUME "$reason"
   elif [ "$status" -eq 0 ]; then
     log_line "$REPO" "#$spec" ERROR "launch-wave 没有启动 #${spec}（claim=${word}）：$(tail -n 1 "$out" 2>/dev/null)"
@@ -696,6 +790,24 @@ notify_park_once() { # spec comment id url category
   fi
 }
 
+# The third conclusion of stall_check: Orca cannot vouch for the session. The
+# human is told once per Spec and evidence — the key is what the evidence was
+# (the dispatch, or none, or orca), so a session dispatched again by hand is
+# reported again when its new worker cannot be vouched for either — and told
+# what the evidence was. Nothing is retried: Orca forbids a stop, a retry or a
+# release on anything but an exited worker.
+notify_unverifiable_once() { # spec key evidence age
+  local spec=$1 key="unverifiable:$REPO#$1:$2" evidence=$3 age=$4
+  if [ "$(state_op seen "$key")" = 1 ]; then
+    log_line "$REPO" "#$spec" SKIP "无法确认会话状态，已通知过（${evidence}），不自动恢复"
+    return 0
+  fi
+  log_line "$REPO" "#$spec" UNVERIFIABLE "卡住 ${age}s 无写入，Orca 无法确认会话状态（${evidence}），不自动恢复"
+  if notify "$REPO" "#$spec" "$REPO #$spec 无法确认会话是否已退出，未自动恢复（卡住 ${age}s 无写入）：$evidence"; then
+    [ "$DRY" -eq 0 ] && state_op notify "$key" "$(date +%s)"
+  fi
+}
+
 stall_check() { # spec worktree
   local spec=$1 worktree=$2 state phase updated run_mtime worker_mtime
   state=$(run_state "$REPO_NAME" "$spec")
@@ -709,7 +821,6 @@ EOF
     return 0
   fi
   if [ "$phase" = done ] || [ "$phase" = parked ]; then
-    state_op nudge-clear "$REPO#$spec"
     return 0
   fi
   local encoded transcript now activity age
@@ -725,78 +836,49 @@ EOF
   [ "$worker_mtime" -gt "$activity" ] && activity=$worker_mtime
   age=$(( now - activity ))
   if [ "$age" -lt "$STALL_SEC" ]; then
-    state_op nudge-clear "$REPO#$spec"
     return 0
   fi
 
-  local nudge handle at tab leaf picked found status title agent
-  nudge=$(state_op nudge-get "$REPO#$spec")
-  if [ -z "$nudge" ]; then
-    picked=$(terminal_pick "$worktree" "$spec" "$LAUNCH_AGENT")
-    IFS=$'\x1f' read -r handle title agent tab leaf <<<"$picked"
-    if [ -z "$handle" ]; then
-      log_line "$REPO" "#$spec" SKIP "卡住 ${age}s 无写入，但找不到会话终端：$worktree"
+  # Silent for KEEPER_STALL_MIN (the second evidence). What that means is
+  # Orca's to say (the first evidence): nothing below runs on a guess.
+  local verdict key evidence handles
+  IFS=$'\x1f' read -r verdict key evidence handles <<<"$(worker_liveness "$worktree")"
+  case "$verdict" in
+    live)
+      log_line "$REPO" "#$spec" LIVE "卡住 ${age}s 无写入，但 Orca 报告会话仍在运行（${evidence}），不动"
       return 0
-    fi
-    if [ "$DRY" -eq 1 ]; then
-      log_line "$REPO" "#$spec" WOULD_NUDGE "卡住 ${age}s 无写入；发送继续到 $handle"
+      ;;
+    exited) ;;
+    *)
+      notify_unverifiable_once "$spec" "${key:-none}" "${evidence:-判活没有结论}" "$age"
       return 0
-    fi
-    if orca_terminal_send "$handle" "$NUDGE_TEXT" >/dev/null 2>&1; then
-      # Only the pane is kept between rounds; the handle is not (rule 3 of
-      # lib-orca.sh), so the close asks Orca for it again.
-      state_op nudge-set "$REPO#$spec" "$(date +%s)" "$tab" "$leaf"
-      log_line "$REPO" "#$spec" NUDGE "卡住 ${age}s 无写入；已发送继续到 $handle"
-    else
-      log_line "$REPO" "#$spec" ERROR "orca terminal send 失败：$handle"
-    fi
-    return 0
-  fi
-
-  IFS=$'\x1f' read -r at tab leaf <<<"$nudge"
-  if [ $(( now - at )) -lt "$STALL_SEC" ]; then
-    log_line "$REPO" "#$spec" WAIT "已发送继续，仍在等待（$(( now - at ))s）"
-    return 0
-  fi
+      ;;
+  esac
+  log_line "$REPO" "#$spec" EXITED "卡住 ${age}s 无写入，Orca 报告会话已退出（${evidence}）"
   if ! can_resume "$spec"; then
     return 0
   fi
-  # The handle is resolved here, from the pane, right before the close. A pane
-  # Orca no longer lists has no handle: the terminal is already closed. An Orca
-  # that cannot answer is not a closed terminal: it is logged as the failure it
-  # is, and the round goes on as it always did when a close failed. A record
-  # without a pane comes from the keeper version that kept the handle instead.
-  handle=
-  if [ -z "$tab" ] || [ -z "$leaf" ]; then
-    log_line "$REPO" "#$spec" SKIP "上一轮的 nudge 记录没有 pane，拿不到会话终端当前的 handle，不关终端"
-  else
-    status=0
-    found=$(orca_terminal_by_pane "$tab" "$leaf" 2>"$WORK/orca-pane.err") || status=$?
-    case "$status" in
-      0) handle=${found%%$'\t'*} ;;
-      1) log_line "$REPO" "#$spec" SKIP "会话终端（pane ${tab}/${leaf}）已不在 Orca 的终端列表里，不关终端" ;;
-      *) log_line "$REPO" "#$spec" ERROR "orca terminal list 失败，拿不到会话终端（pane ${tab}/${leaf}）的 handle：$(head -n 1 "$WORK/orca-pane.err" 2>/dev/null)" ;;
-    esac
-  fi
+  local handle
   if [ "$DRY" -eq 1 ]; then
-    [ -n "$handle" ] && log_line "$REPO" "#$spec" WOULD_CLOSE_TERMINAL "$handle"
+    for handle in $handles; do log_line "$REPO" "#$spec" WOULD_CLOSE_TERMINAL "$handle"; done
     log_line "$REPO" "#$spec" WOULD_RELEASE_CLAIM "claim.sh release $spec --force"
-    log_line "$REPO" "#$spec" WOULD_RESUME "卡住超过 $STALL_MIN 分钟且发送继续后仍无写入"
+    log_line "$REPO" "#$spec" WOULD_RESUME "Orca 报告会话已退出（${evidence}）"
     return 0
   fi
-  if [ -n "$handle" ]; then
+  # A terminal Orca has not released is closed here; one it released is gone.
+  for handle in $handles; do
     if orca_terminal_close "$handle" >/dev/null 2>&1; then
       log_line "$REPO" "#$spec" CLOSE_TERMINAL "$handle"
     else
       log_line "$REPO" "#$spec" ERROR "orca terminal close 失败：$handle"
     fi
-  fi
+  done
   if ( cd "$REPO_PATH" && "$CLAIM" release "$spec" --force ) >/dev/null 2>&1; then
     log_line "$REPO" "#$spec" RELEASE_CLAIM "claim.sh release $spec --force"
   else
     log_line "$REPO" "#$spec" ERROR "claim.sh release $spec --force 失败"
   fi
-  do_resume "$spec" "卡住超过 $STALL_MIN 分钟，发送继续后仍无写入"
+  do_resume "$spec" "Orca 报告会话已退出（${evidence}）"
 }
 
 process_spec() { # spec title
@@ -851,12 +933,11 @@ EOF
   fi
 }
 
-process_repo() { # repo path flash launch_agent
+process_repo() { # repo path flash
   REPO=$1
   REPO_PATH=$2
   REPO_NAME=${1#*/}
   FLASH=$3
-  LAUNCH_AGENT=$4
   (
     cd "$REPO_PATH" || exit 1
     if ! "$GH" issue list --repo "$REPO" --state all --limit 200 \
@@ -875,7 +956,7 @@ process_repo() { # repo path flash launch_agent
 }
 
 run_round() {
-  local repo auto_land flash agent path started
+  local repo auto_land flash path started
   started=$(date +%s)
   log_line - - ROUND "start dry_run=$DRY"
   if [ -e "$PAUSED_FILE" ]; then
@@ -893,12 +974,10 @@ run_round() {
   : >"$WORK/orca-repos.json"
   orca_repo_list >"$WORK/orca-repos.json" 2>/dev/null </dev/null || : >"$WORK/orca-repos.json"
   ORCA_REPOS_FILE=$WORK/orca-repos.json
-  : >"$WORK/terminals.json"
-  orca_terminal_list >"$WORK/terminals.json" 2>/dev/null </dev/null || : >"$WORK/terminals.json"
   : >"$WORK/actions"
 
   list_repos >"$WORK/repos.txt"
-  while IFS=$'\x1f' read -r repo auto_land flash agent; do
+  while IFS=$'\x1f' read -r repo auto_land flash; do
     [ -n "$repo" ] || continue
     if [ "$auto_land" = 0 ]; then
       log_line "$repo" - SKIP "auto_land=false，不处理"
@@ -917,7 +996,7 @@ run_round() {
       log_line "$repo" - SKIP "找不到本地 checkout，跳过"
       continue
     fi
-    process_repo "$repo" "$path" "$flash" "$agent"
+    process_repo "$repo" "$path" "$flash"
   done <"$WORK/repos.txt"
   log_line - - ROUND "end actions=$(wc -l <"$WORK/actions" 2>/dev/null | tr -d ' ') seconds=$(( $(date +%s) - started ))"
 }
