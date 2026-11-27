@@ -1535,13 +1535,17 @@ if (mode === 'order') {
   // A running Spec and one resumed first both run beside the new wave, so an
   // --apart pair naming either holds its other side out of that wave too.
   const inFlight = new Set([...running, ...interrupted]);
-  function inFlightApartFrom(number) {
+  // The other side of every --apart pair naming number that is in set, ascending.
+  function apartPartnersIn(number, set) {
     const held = [];
     for (const [left, right] of apartPairs) {
-      if (left === number && inFlight.has(right)) held.push(right);
-      if (right === number && inFlight.has(left)) held.push(left);
+      if (left === number && set.has(right)) held.push(right);
+      if (right === number && set.has(left)) held.push(left);
     }
     return [...new Set(held)].sort((a, b) => a - b);
+  }
+  function inFlightApartFrom(number) {
+    return apartPartnersIn(number, inFlight);
   }
   const wave = [];
   const waveSet = new Set();
@@ -1549,11 +1553,8 @@ if (mode === 'order') {
     if (wave.length >= capacity) break;
     const record = records.get(number);
     if (record.complete) continue;
-    const conflicts = inFlightApartFrom(number).length > 0 ||
-      apartPairs.some(([left, right]) => (
-        (left === number && waveSet.has(right)) ||
-        (right === number && waveSet.has(left))
-      ));
+    const conflicts = apartPartnersIn(number, inFlight).length > 0 ||
+      apartPartnersIn(number, waveSet).length > 0;
     if (conflicts) continue;
     wave.push(number);
     waveSet.add(number);
