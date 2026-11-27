@@ -20,6 +20,8 @@
 #   3. V1, V2 and V3 always keep the wrapper away from the real table; the V1 route
 #      cases point ISS_STAGE_ROUTE_FILE at a scratch file one call at a time. L1 restores
 #      the table file rule 1 or 2 decided on, so a whole-suite run keeps that rule for L1.
+#      V1 also runs under a scratch HOME, so nothing it starts can read or migrate the
+#      real ~/.claude/state, whichever table file is in effect at that moment.
 
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -162,7 +164,12 @@ command = "unsafe"
 EOF
   export CODEX_WORKER_HOME CODEX_WORKER_CODEX="$FAKE" CODEX_WORKER_SKIP_PREFLIGHT=1 CODEX_WORKER_POLL=1
   # Rule 3: every V1 case but the route cases below runs with the route table isolated.
+  # The level also runs under a scratch HOME: without ISS_STAGE_ROUTE_FILE stage-route.sh
+  # reads the table, and on a machine that has none yet runs its first-time migration,
+  # from $HOME/.claude/state, so the scratch HOME keeps even a dispatch that lost the
+  # variable away from the real one. The real HOME comes back when the level ends.
   export ISS_STAGE_ROUTE_FILE=/dev/null
+  V1_CALLER_HOME=$HOME; export HOME="$ROOT/v1-shell-home"; mkdir -p "$HOME"
   export FAKE_CODEX_PID_LOG="$ROOT/fake-pids.log"
   export FAKE_CODEX_HOME_LOG="$ROOT/fake-codex-homes.log"
   BRIEF="$ROOT/brief.md"
@@ -727,14 +734,18 @@ EOF
   RO=$ROUTE_EXIT
   check "rule 2: without --model the wrapper runs on the table's route (exit $RO, -m $(ran_model rule2))" test "$RO" -eq 0 -a "$(ran_model rule2)" = glm-5.3 -a "$(ran_effort rule2)" = medium -a "$(notice_lines '阶段路由生效' "$ROUTE_DIR/rule2.err")" = 1
   # A whole-suite run must not carry the V1/V2 isolation into L1: the L1 block restores
-  # the table file rule 1 or 2 decided on at the entry.
-  SAVED_CALLER_FILE=$CALLER_STAGE_ROUTE_FILE
-  CALLER_STAGE_ROUTE_FILE="$ROUTE_DIR/outer.table"; use_caller_route_file
-  check "L1 restores a caller's table file" test "${ISS_STAGE_ROUTE_FILE:-}" = "$ROUTE_DIR/outer.table"
-  CALLER_STAGE_ROUTE_FILE=__unset__; use_caller_route_file
-  check "L1 drops the isolation when the caller set no table file" test "${ISS_STAGE_ROUTE_FILE+set}" != set
-  CALLER_STAGE_ROUTE_FILE=$SAVED_CALLER_FILE
-  export ISS_STAGE_ROUTE_FILE=/dev/null
+  # the table file rule 1 or 2 decided on at the entry. The probes run in a subshell, so
+  # this level's own isolation, exported above, is never lifted in the parent shell; the
+  # subshell exits with the number of probes that failed, to keep the count.
+  L1_ISO_FAILS=$FAILS
+  (
+    CALLER_STAGE_ROUTE_FILE="$ROUTE_DIR/outer.table"; use_caller_route_file
+    check "L1 restores a caller's table file" test "${ISS_STAGE_ROUTE_FILE:-}" = "$ROUTE_DIR/outer.table"
+    CALLER_STAGE_ROUTE_FILE=__unset__; use_caller_route_file
+    check "L1 drops the isolation when the caller set no table file" test "${ISS_STAGE_ROUTE_FILE+set}" != set
+    exit $((FAILS - L1_ISO_FAILS))
+  )
+  L1_ISO_FAILED=$?; FAILS=$((FAILS + L1_ISO_FAILED))
 
   # A Resume keeps the first segment's model, effort and profile and prints no route
   # line, even when the table has since moved to another route; state saved before the
@@ -779,6 +790,8 @@ EOF
     if (bad.length) console.error(bad.join("\n"));
     process.exit(bad.length ? 1 : 0);
   ' "$(codex_home_for_platform "$ROOT")" "$MODEL" "$(codex_home_for_platform "$ROUTE_DIR")"
+  # The levels below run the real codex: back on the real HOME.
+  HOME=$V1_CALLER_HOME
 fi
 
 if [ -z "$ONLY" ] || [ "$ONLY" = V2 ]; then
