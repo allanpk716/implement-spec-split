@@ -487,10 +487,12 @@ check "the switched review still denies unprompted permissions" awk '
   END { for (i = 1; i < count; i++) if (args[i] == "--permission-prompts" && args[i + 1] == "none") exit 0; exit 1 }
 ' "$FAKE_GLM_LOG"
 check "the switched prompt names the executing model" grep -Fq 'executed by glm-5.4' "$FAKE_GLM_LOG"
-check "the switched prompt pins both review axes to the route's model" \
-  grep -Fq 'subagent model to `glm-5.4`' "$FAKE_GLM_LOG"
-check "the switched prompt does not pin the review axes to opus" \
-  bash -c "! grep -Fq 'subagent model to \`opus\`' '$FAKE_GLM_LOG'"
+# The Agent tool takes only the aliases sonnet|opus|haiku|fable: the axes are
+# pinned to opus on this profile too, never to the route's own model name.
+check "the switched prompt pins both review axes to opus, the Agent tool's alias" \
+  grep -Fq 'subagent model to `opus`' "$FAKE_GLM_LOG"
+check "the switched prompt does not pin the review axes to the route's model name" \
+  bash -c "! grep -Fq 'subagent model to \`glm-5.4\`' '$FAKE_GLM_LOG'"
 check "the switched prompt still names the full code-review skill" \
   grep -Fq 'mattpocock-skills:code-review' "$FAKE_GLM_LOG"
 

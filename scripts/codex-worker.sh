@@ -16,15 +16,18 @@
 # route table (GLOSSARY.md "Stage route", ADR 0004; scripts/stage-route.sh,
 # ~/.claude/state/stage-route): a dispatch with --read-only is the research stage, any
 # other the implementation stage. The wrapper always runs the codex-glm Launcher
-# profile, so it takes the route's model and effort whatever profile the route names,
-# and a route whose model or effort codex-glm does not take is a usage error (exit 64)
-# that names the route and its reset command (/grill-router). Priority: the route when
-# it is not the stage's default (its model or effort differs from the default's), then
-# an explicit --model / --thinking, then the default route. On every fresh run one line
-# on stderr (also appended to the run dir's stderr.log) names the route; off the default
-# it also names any overridden --model / --thinking, the expiry and the reset command.
-# status.json and resume.json record the model, effort (thinking) and profile actually
-# used. A Resume does not read the table: it keeps what the first segment saved.
+# profile whatever profile the route names, and takes from the route only its model
+# and effort; a route whose model or effort codex-glm does not take is a usage error
+# (exit 64) that names the route and its reset command (/grill-router). Priority: the
+# route when it is not the stage's default (its model or effort differs from the
+# default's), then an explicit --model / --thinking, then the default route. On every
+# fresh run one line on stderr (also appended to the run dir's stderr.log) names the
+# route; off the default it also names any overridden --model / --thinking, the expiry
+# and the reset command. status.json and resume.json record the route in effect, as
+# the table names it (profile, model, effort): the codex worker always runs through
+# codex-glm and takes only the route's model and effort, so profile is the table's
+# entry (claude-glm by default), not the launcher that ran. A Resume does not read the
+# table: it keeps what the first segment saved.
 #
 # Contract and semantics match pi-worker.sh. --time-limit is one segment's hard budget:
 # it spans every attempt and retry wait since the segment started, and each attempt gets

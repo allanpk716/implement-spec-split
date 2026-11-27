@@ -14,7 +14,7 @@
 #
 # --kind code reviews the repository at --cwd relative to the given fixed point
 # through mattpocock-skills:code-review, with both review-axis subagents pinned
-# to the route's model. --kind draft reviews a draft spec/ticket/research result.
+# to opus. --kind draft reviews a draft spec/ticket/research result.
 # --kind diagnose diagnoses a failed worker/run and recommends 续跑, 改 Brief, or
 # 停车. Every kind must mark items that need a human tradeoff under
 # “需要人取舍”. --cwd defaults to the current directory. --timeout defaults to
@@ -30,10 +30,12 @@
 # is the official claude; any other profile (claude-glm today) is its own
 # launcher, which sets its GLM mappings on top of the same clean environment,
 # exactly as it does for a session the user starts by hand. When the profile is
-# not claude, official Opus is not called: the route is reported on stderr, and
-# a code review's two review-axis subagents are pinned to the route's model
-# rather than to opus. The repair retry runs on the same route. The model is
-# never changed here, and nothing falls back to another one.
+# not claude, official Opus is not called: the route is reported on stderr. A
+# code review's two review-axis subagents are pinned to opus on every profile,
+# never to the route's model name: the Agent tool takes only the aliases
+# sonnet|opus|haiku|fable, and the GLM launcher maps opus to its GLM model. The
+# repair retry runs on the same route. The model is never changed here, and
+# nothing falls back to another one.
 #
 # Every findings file starts with the route that produced it, on the default
 # route as on a switched one, then a blank line, then the model's findings:
@@ -241,6 +243,10 @@ CLAUDE_ARGS=(
   --permission-prompts none
 )
 
+# The review axes are pinned to opus on every profile, never to $ROUTE_MODEL:
+# the Agent tool's model takes only the aliases sonnet|opus|haiku|fable, and the
+# GLM launcher maps opus to its GLM model, so the route's own name (glm-5.4)
+# would be rejected by the tool's schema.
 case "$KIND" in
   code)
     PROMPT="$REVIEWER_LINE
@@ -250,7 +256,7 @@ Review fixed point: $INPUT
 Required procedure:
 1. Call the Skill tool with exactly \`mattpocock-skills:code-review\` (not the built-in code-review skill).
 2. Review the current repository state relative to the fixed point above.
-3. When that skill spawns its Standards and Spec review-axis subagents, explicitly set each subagent model to \`$ROUTE_MODEL\`; neither subagent may inherit or downgrade the model.
+3. When that skill spawns its Standards and Spec review-axis subagents, explicitly set each subagent model to \`opus\`; neither subagent may inherit or downgrade the model.
 4. Read whatever repository context and git history you need. Do not modify files.
 
 Output requirements:
