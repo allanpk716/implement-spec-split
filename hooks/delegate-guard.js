@@ -6,10 +6,11 @@
 // types, small edits, disabled projects, and a temporary override stored at
 // <home>/.claude/state/allow-direct-edit. Flash orchestrator sessions
 // (FLASH_ORCHESTRATOR=1) deny every source-code write, including common Bash
-// writes, while payloads from dispatched subagents (a non-empty agent_id) are
-// allowed. The ordinary limit comes from the nearest
-// .claude/delegate-guard.json above payload.cwd, DELEGATE_GUARD_LIMIT, or the
-// default. Invalid input fails open;
+// writes, from the main thread and from subagents alike: since 规格 #26
+// implementation goes through the dispatch module, not an in-session subagent,
+// so a payload with a non-empty agent_id gets no exemption. The ordinary limit
+// comes from the nearest .claude/delegate-guard.json above payload.cwd,
+// DELEGATE_GUARD_LIMIT, or the default. Invalid input fails open;
 // internal failures fail open and append an error to
 // <home>/.claude/state/delegate-guard.log when that log is writable.
 
@@ -447,8 +448,6 @@ function main() {
     if (!toolInput || typeof toolInput !== 'object') return;
 
     const flashMode = process.env.FLASH_ORCHESTRATOR === '1';
-    const isSubagent =
-      typeof payload.agent_id === 'string' && payload.agent_id !== '';
     if (payload.tool_name === 'Bash') {
       const command = toolInput.command;
       if (typeof command === 'string' && command !== '') {
@@ -459,7 +458,6 @@ function main() {
           return;
         }
         if (!flashMode) return;
-        if (isSubagent) return;
         if (isSourceBashWrite(command)) deny(FLASH_REASON);
       }
       return;
@@ -472,7 +470,6 @@ function main() {
     if (typeof filePath !== 'string' || filePath === '') return;
 
     if (flashMode) {
-      if (isSubagent) return;
       if (isSourceFileName(filePath)) deny(FLASH_REASON);
       return;
     }
