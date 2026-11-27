@@ -228,7 +228,7 @@ flash 模式下，本节所有原本由主会话审读或复核的结论都按�
       草稿只在运行目录，不在仓库内。不能调用 `/to-spec`、`/to-tickets` 本身；worker 直接读最新上游技能规则。
 
       flash 模式下，起草结果出现未决地图条目时按「flash 模式」一节改推荐 `/grill-map`。
-   4. **审稿（我做）**：读 `result.md`、`manifest.json`、`spec.md` 和执行票正文，检查实现决定都有出处且出处确实这么定了；`实现票：`、`地图：`两行正确；执行票是竖切、阻塞合理、跨组阻塞对得上；`blocked_by` 不挂还没有规格的实现票，该交接的写进 `handoffs`；`unresolved` 只留真正要用户拍板的事，每条带推荐答案；标题格式与仓库一致。用 `publish-batch.sh <全部 manifest.json>` 试运行核对计划。小问题直接改；大问题换新 Brief 重派那一组。
+   4. **审稿（我做）**：读 `result.md`、`manifest.json`、`spec.md` 和执行票正文，检查实现决定都有出处且出处确实这么定了；`实现票：`、`地图：`两行正确；执行票是竖切、阻塞合理、碰同一计数器的票已串行并带 `shared-counter` 标签、跨组阻塞对得上；`blocked_by` 不挂还没有规格的实现票，该交接的写进 `handoffs`；`unresolved` 只留真正要用户拍板的事，每条带推荐答案；标题格式与仓库一致。用 `publish-batch.sh <全部 manifest.json>` 试运行核对计划。小问题直接改；大问题换新 Brief 重派那一组。
 
       flash 模式下，本段审稿按「flash 模式」一节并入当轮 Opus review。
 
@@ -298,7 +298,7 @@ flash 模式下，本节所有原本由主会话审读或复核的结论都按�
    <本技能目录>/scripts/launch-wave.sh --repo <owner/name> [--workers N] [--specs K] [--apart 224:239 …] [--no-auto-land]
    ```
 
-   排序由 `pipeline-status.sh --order` 确定性计算：被依赖的先做 → 解锁下游多的先做 → 编号小的先做；完全被挡住的不进第 1 波；进行中的不排；中断的标「先恢复」；搁置执行票不算待实现，未关执行票全是搁置票的规格不进顺序或波次。我只补「改同一块代码」的 `--apart A:B` 判断，依据规格正文里的模块；拿不准不传。有 `--apart` 时按重跑后的结果为准。`--apply` 会把本次 workers/specs/apart 和这一波的 Orca Run 写入 `~/.cache/implement-spec-split/launch/<owner>__<name>.json`，供合入后的 `--next-wave` 复用；开发顺序本身每次重算。没给 `--workers` 时脚本按第 6 步得到的答案传入；第 6 步也没问（已有 max-workers 文件）就不传，让脚本读状态文件或 max-workers 文件。
+   排序由 `pipeline-status.sh --order` 确定性计算：被依赖的先做 → 解锁下游多的先做 → 编号小的先做；完全被挡住的不进第 1 波；进行中的不排；中断的标「先恢复」；搁置执行票不算待实现，未关执行票全是搁置票的规格不进顺序或波次。我只补「改同一块代码」或「都改同一计数器」的 `--apart A:B` 判断，依据规格正文里的模块和起草 worker 在 `result.md` 里的共享计数器提示；拿不准不传。有 `--apart` 时按重跑后的结果为准。`--apply` 会把本次 workers/specs/apart 和这一波的 Orca Run 写入 `~/.cache/implement-spec-split/launch/<owner>__<name>.json`，供合入后的 `--next-wave` 复用；开发顺序本身每次重算。没给 `--workers` 时脚本按第 6 步得到的答案传入；第 6 步也没问（已有 max-workers 文件）就不传，让脚本读状态文件或 max-workers 文件。
 
    默认无人值守落地：试运行和 `--apply` 不带参数时每条命令末尾带 `--auto-land`，`--apply` 把 `auto_land: true` 写进启动状态，`--next-wave` 沿用；显式 `--no-auto-land` 时命令不带它，状态写 `auto_land: false`，`--next-wave` 也沿用它（旧状态文件没有该字段时按开启处理）。`--auto-land` 仍可接受，等同默认。命令里不再有实现后端参数：规格会话按路由表「编排」项经 Orca 托管启动，票的实现按路由表「实现」项派发，都不在这里选。
 

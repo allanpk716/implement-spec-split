@@ -1016,6 +1016,10 @@ run_status "$REPO" "$WORK/help.out" --help
 expect_has '--graph' 'help documents --graph' "$WORK/help.out"
 expect_has 'PIPELINE_STATUS_ORCA_TERMINALS_JSON' 'help documents the terminal-list fixture file' "$WORK/help.out"
 expect_without 'PIPELINE_STATUS_ORCA may' 'help no longer documents a per-script Orca executable' "$WORK/help.out"
+expect_has 'keep the idle' 'help documents that --apart keeps the idle side out of the new wave' \
+  "$WORK/help.out"
+expect_has 'side out of the new wave while the other is in flight' \
+  'help documents that --apart also avoids Specs in flight' "$WORK/help.out"
 run_status "$REPO" "$WORK/graph-order.out" --order --parallel 20 --cmd-suffix ''
 expect_exit 0 "order text output still works with graph fixtures"
 
@@ -1100,6 +1104,81 @@ expect_exit 0 "order mode without apart succeeds"
 expect_has ' 1. #300 Hub root → /implement-spec-split 300 --auto-land' 'default command suffix is --auto-land' "$WORK/order-no-apart.out"
 expect_without '--impl' 'default command names no implementation backend' "$WORK/order-no-apart.out"
 expect_without ' 2. #390 ' 'tie-break spec follows equal-score lower specs' "$WORK/order-no-apart.out"
+
+# An --apart pair whose other side is in flight (running, or interrupted and
+# resumed first) holds its idle side out of the new wave: a running or resumed
+# Spec runs beside the new wave, so "not in the same wave" alone would not keep
+# the two apart. #370 is running and #380 is to be resumed first in this fixture.
+run_order "$WORK/order-apart-control.out" --parallel 8 --cmd-suffix ''
+expect_has ' 4. #390 Tie-break spec → /implement-spec-split 390' \
+  'without a pair the tie-break spec fits wave 1 at parallel eight' "$WORK/order-apart-control.out"
+
+run_order "$WORK/order-apart-inflight.out" --parallel 8 --apart 370:390 --cmd-suffix ''
+expect_exit 0 "order mode with an in-flight apart pair succeeds"
+expect_without '#390 Tie-break spec →' \
+  'apart pair with a running spec keeps the other side out of wave 1' "$WORK/order-apart-inflight.out"
+expect_has ' 7. #390 Tie-break spec（避开 #370）' \
+  'spec held by a running apart side is listed under 之后 naming it' "$WORK/order-apart-inflight.out"
+
+run_order "$WORK/order-apart-inflight-reversed.out" --parallel 8 --apart 390:370 --cmd-suffix ''
+expect_without '#390 Tie-break spec →' \
+  'a reversed apart pair keeps the idle side out of wave 1 too' "$WORK/order-apart-inflight-reversed.out"
+expect_has ' 7. #390 Tie-break spec（避开 #370）' \
+  'a reversed apart pair annotates the same running spec' "$WORK/order-apart-inflight-reversed.out"
+
+run_order "$WORK/order-apart-resume.out" --parallel 8 --apart 380:390 --cmd-suffix ''
+expect_without '#390 Tie-break spec →' \
+  'apart pair with a spec resumed first keeps the other side out of wave 1' "$WORK/order-apart-resume.out"
+expect_has ' 7. #390 Tie-break spec（避开 #380）' \
+  'spec held by a resumed-first apart side names that spec' "$WORK/order-apart-resume.out"
+
+run_order "$WORK/order-apart-both.out" --parallel 8 --apart 380:390 --apart 370:390 --cmd-suffix ''
+expect_has ' 7. #390 Tie-break spec（避开 #370 #380）' \
+  'spec held by a running and a resumed-first side names both ascending' "$WORK/order-apart-both.out"
+
+run_order "$WORK/order-apart-inflight-annotated.out" --parallel 5 --apart 370:330 --cmd-suffix ''
+expect_has ' 3. #390 Tie-break spec → /implement-spec-split 390' \
+  'the next candidate fills the slot a held spec leaves in wave 1' "$WORK/order-apart-inflight-annotated.out"
+expect_has ' 6. #330 Partial dependency（等 #380；另需 #399；避开 #370）' \
+  'the apart note follows the dependency notes of a held spec' "$WORK/order-apart-inflight-annotated.out"
+
+cat > "$WORK/order-apart-inflight-5.expected" <<'EOF'
+开发顺序（同时 5 份）
+先恢复：#380
+进行中：#370（spec-370）
+第 1 波：
+ 1. #300 Hub root → /implement-spec-split 300
+ 2. #420 Spec-owned blocker root → /implement-spec-split 420
+ 3. #330 Partial dependency → /implement-spec-split 330（部分等 #380；另需 #399）
+之后：
+ 4. #310 Downstream one（等 #300）
+ 5. #320 Downstream two（等 #300）
+ 6. #340 Complete dependency（等 #370）
+ 7. #390 Tie-break spec（避开 #370）
+ 8. #410 Blocked by needs tickets（等 #400）
+ 9. #430 Blocked by spec issue（等 #420）
+ 10. #440 Blocked by implementation ref（等 #420）
+循环依赖：#350 #360，需要人工决定
+EOF
+run_order "$WORK/order-apart-inflight-5.out" --parallel 5 --apart 370:390 --cmd-suffix ''
+expect_equal "$WORK/order-apart-inflight-5.out" "$WORK/order-apart-inflight-5.expected" \
+  'apart pair with a running spec changes only the held spec note'
+
+run_order "$WORK/order-apart-inflight.json" --parallel 8 --apart 370:390 --json
+expect_exit 0 "order JSON with an in-flight apart pair succeeds"
+node - "$WORK/order-apart-inflight.json" > "$WORK/order-apart-inflight-check.txt" 2>&1 <<'NODE'
+const fs = require('fs');
+const assert = require('assert');
+const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+assert.deepStrictEqual(plan.wave1.map((item) => item.spec), [300, 420, 330]);
+const held = plan.later.find((item) => item.spec === 390);
+assert.ok(held, 'spec held by a running apart side is in later');
+assert.strictEqual(held.note, '避开 #370');
+assert.deepStrictEqual(plan.active.map((item) => item.spec), [370]);
+assert.deepStrictEqual(plan.resume.map((item) => item.spec), [380]);
+NODE
+RUN_EXIT=$?
+expect_exit 0 "order JSON puts a spec held by a running apart side in later with its note"
 
 run_workers_order "$WORK/order-workers-4.out" --parallel 2 --workers 4
 expect_exit 0 "worker-aware order succeeds"
@@ -1419,6 +1498,104 @@ assert.deepStrictEqual(spec(610).tickets.map((t) => [t.number, t.human]), [[611,
 NODE
 RUN_EXIT=$?
 expect_exit 0 "graph marks human-only specs and human tickets"
+
+# A `shared-counter` execution ticket bumps a shared counter (GLOSSARY.md).
+# The graph carries the label as a ticket-level flag so that frontier.sh reads
+# the same judgement on every path that builds ticket records: an open Spec, a
+# landed Spec, a shelved-only Spec and a legacy parent. The board renders only
+# `human` and `shelved`, not this flag.
+COUNTER_FIXTURE=$WORK/counter-fixture
+mkdir -p "$COUNTER_FIXTURE" || exit 1
+
+COUNTER_FIXTURE=$COUNTER_FIXTURE node > /dev/null <<'NODE'
+const fs = require('fs');
+const directory = process.env.COUNTER_FIXTURE;
+
+function sub(total, completed = total) {
+  return {total, completed, percent_completed: total ? Math.round(100 * completed / total) : 0};
+}
+
+function issue(number, title, state, labels, body = '', children = sub(0)) {
+  return {
+    number,
+    title,
+    state,
+    labels: labels.map((name) => ({name})),
+    body,
+    sub_issues_summary: children,
+    issue_dependencies_summary: {blocked_by: 0, total_blocked_by: 0, blocking: 0, total_blocking: 0},
+    assignees: [],
+  };
+}
+
+const issues = [
+  issue(700, 'Mixed counter spec', 'open', [], '## Problem Statement\nMixed counter.', sub(3, 0)),
+  issue(701, 'Plain ticket', 'open', []),
+  issue(702, 'Counter ticket', 'open', ['shared-counter']),
+  issue(703, 'Human counter ticket', 'open', ['ready-for-human', 'shared-counter']),
+  issue(710, 'Landed counter spec', 'closed', [], '## Problem Statement\nLanded counter.', sub(1, 1)),
+  issue(711, 'Done counter ticket', 'closed', ['shared-counter']),
+  issue(720, 'Shelved counter spec', 'open', [], '## Problem Statement\nShelved counter.', sub(1, 0)),
+  issue(721, '【搁置】Shelved counter ticket', 'open', ['shared-counter']),
+  issue(730, 'Legacy counter spec', 'open', [], 'Old parent shape', sub(1, 0)),
+  issue(731, 'Legacy counter ticket', 'open', ['shared-counter']),
+];
+
+const responses = {
+  'sub-700': [issues[1], issues[2], issues[3]],
+  'sub-710': [issues[5]],
+  'sub-720': [issues[7]],
+  'sub-730': [issues[9]],
+  'blocker-701': [],
+  'blocker-702': [],
+  'blocker-703': [],
+  'blocker-731': [],
+};
+
+fs.writeFileSync(`${directory}/issues.json`, JSON.stringify(issues, null, 2));
+for (const [name, value] of Object.entries(responses)) {
+  fs.writeFileSync(`${directory}/${name}.json`, JSON.stringify(value, null, 2));
+}
+NODE
+
+run_counter_status() {
+  output=$1
+  shift
+  (
+    cd "$REPO" || exit 125
+    env FIXTURE_DIR="$COUNTER_FIXTURE" PATH="$BIN:$PATH" \
+      bash "$SCRIPT" --repo test/repo "$@"
+  ) > "$output" 2> "${output}.err"
+  RUN_EXIT=$?
+}
+
+run_counter_status "$WORK/counter-graph.json" --graph
+expect_exit 0 "shared-counter graph succeeds"
+node - "$WORK/counter-graph.json" > "$WORK/counter-graph-check.txt" 2>&1 <<'NODE'
+const fs = require('fs');
+const assert = require('assert');
+const graph = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const spec = (n) => graph.specs.find((item) => item.number === n);
+const ticket = (n, t) => spec(n).tickets.find((item) => item.number === t);
+// Every ticket record carries the flag; it is the `shared-counter` label.
+assert.strictEqual(ticket(700, 701).shared_counter, false);
+assert.strictEqual(ticket(700, 702).shared_counter, true);
+assert.strictEqual(ticket(700, 703).shared_counter, true);
+assert.strictEqual(ticket(700, 703).human, true);
+assert.deepStrictEqual(
+  spec(700).tickets.map((t) => [t.number, t.shared_counter]),
+  [[701, false], [702, true], [703, true]],
+);
+assert.strictEqual(ticket(710, 711).shared_counter, true);
+assert.strictEqual(ticket(720, 721).shared_counter, true);
+assert.strictEqual(ticket(720, 721).shelved, true);
+assert.strictEqual(ticket(730, 731).shared_counter, true);
+assert.strictEqual(spec(730).kind, 'legacy');
+NODE
+RUN_EXIT=$?
+expect_exit 0 "graph carries shared-counter as a ticket-level flag on every path"
+[ "$RUN_EXIT" -eq 0 ] || cat "$WORK/counter-graph-check.txt"
+expect_has 'shared_counter' 'help documents the shared_counter graph flag' "$WORK/help.out"
 
 (
   cd "$REPO" || exit 125
