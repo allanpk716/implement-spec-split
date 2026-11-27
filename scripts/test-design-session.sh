@@ -1149,7 +1149,7 @@ expect_file_has 'bash scripts/test-design-session.sh' 'MAINTAINING registers the
 expect_file_has 'bash scripts/test-judgment-model.sh' 'MAINTAINING registers the switch test' "$ROOT/MAINTAINING.md"
 expect_file_has 'grill-feature / grill-map 收到 handoff 后自动接 find-next 推进模式' \
   'MAINTAINING records the find-next hand-over decision' "$ROOT/MAINTAINING.md"
-expect_file_has 'judgment-model.sh' 'README documents the judgment model switch' "$ROOT/README.md"
+expect_file_has 'scripts/stage-route.sh' 'README documents the Stage route table' "$ROOT/README.md"
 expect_file_has 'opens a Design session' 'README uses the Design session term' "$ROOT/README.md"
 if grep -RInE 'official-Opus session|Opus session' \
   "$ROOT/README.md" "$ROOT/grill-feature/SKILL.md" "$ROOT/grill-map/SKILL.md" \
