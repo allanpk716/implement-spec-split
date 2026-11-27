@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # List unfinished work in the wayfinder -> to-spec -> to-tickets -> implement pipeline.
+# --order's --apart pairs keep two Specs out of one wave, and keep the idle side out of
+# the new wave while the other is in flight (running, or resumed first); see usage().
 
 set -u
 
@@ -22,7 +24,9 @@ tracker documentation instead.
   --order                Print a deterministic development order for implementable Specs.
   --parallel K           With --order, plan for K concurrent Specs (default: 2).
   --workers N            With --order, split N total workers across K concurrent Specs.
-  --apart A:B            With --order, keep A and B out of the same wave. Repeatable.
+  --apart A:B            With --order, keep A and B out of the same wave, and keep the idle
+                         side out of the new wave while the other is in flight (running, or
+                         interrupted and resumed first). Repeatable.
   --cmd-suffix STR       With --order, append STR to each command (default: --impl codex).
   --json                 With --order, print the same plan as JSON instead of a text table.
   --graph                Print the full relation graph as JSON for the Progress board (closed
@@ -33,10 +37,14 @@ tracker documentation instead.
                          spec_numbers, tickets[]}; specs[] {number, title, kind, state,
                          status landed|needs_tickets|ready|running|interrupted|shelved|human, map
                          (number or null), has_tickets, tickets[] {number, title, state,
-                         shelved, human}, tickets_total, tickets_closed, claim {state
-                         active|reserved|interrupted|idle, branch, worktree, claimed_at}
+                         shelved, human, shared_counter}, tickets_total, tickets_closed, claim
+                         {state active|reserved|interrupted|idle, branch, worktree, claimed_at}
                          or null, depends_on, extra_blockers}; loose_specs[] (Specs
                          without a map); next_wave (same object as --order --json).
+                         Ticket flags come from GitHub labels, the title or the body:
+                         `human` is the `ready-for-human` label, `shared_counter` the
+                         `shared-counter` label (a Ticket that bumps a shared counter;
+                         frontier.sh releases one such Ticket at a time).
 
 PIPELINE_STATUS_NOW may set an ISO-8601 current time for deterministic stale-claim tests.
 PIPELINE_STATUS_ORCA_TERMINALS_JSON may name a file holding `orca terminal list --json`
@@ -523,6 +531,7 @@ if (mode === 'collect') {
       title: issue ? issue.title : '',
       shelved: issue ? isShelved(issue) : false,
       human: issue ? hasLabel(issue, 'ready-for-human') : false,
+      sharedCounter: issue ? hasLabel(issue, 'shared-counter') : false,
     };
   }
 
@@ -1525,16 +1534,29 @@ if (mode === 'order') {
     .filter((number) => states.get(number) === 'running')
     .sort((a, b) => a - b);
   const capacity = Math.max(0, parallel - running.length - interrupted.length);
+  // A running Spec and one resumed first both run beside the new wave, so an
+  // --apart pair naming either holds its other side out of that wave too.
+  const inFlight = new Set([...running, ...interrupted]);
+  // The other side of every --apart pair naming number that is in set, ascending.
+  function apartPartnersIn(number, set) {
+    const held = [];
+    for (const [left, right] of apartPairs) {
+      if (left === number && set.has(right)) held.push(right);
+      if (right === number && set.has(left)) held.push(left);
+    }
+    return [...new Set(held)].sort((a, b) => a - b);
+  }
+  function inFlightApartFrom(number) {
+    return apartPartnersIn(number, inFlight);
+  }
   const wave = [];
   const waveSet = new Set();
   for (const number of orderedNumbers) {
     if (wave.length >= capacity) break;
     const record = records.get(number);
     if (record.complete) continue;
-    const conflicts = apartPairs.some(([left, right]) => (
-      (left === number && waveSet.has(right)) ||
-      (right === number && waveSet.has(left))
-    ));
+    const conflicts = apartPartnersIn(number, inFlight).length > 0 ||
+      apartPartnersIn(number, waveSet).length > 0;
     if (conflicts) continue;
     wave.push(number);
     waveSet.add(number);
@@ -1553,12 +1575,14 @@ if (mode === 'order') {
       .map((value) => `#${value}`);
     const extras = [...record.extraBlockers].sort((a, b) => a - b)
       .map((value) => `#${value}`);
+    const heldFrom = inFlightApartFrom(number).map((value) => `#${value}`);
     const parts = [];
     if (dependencies.length > 0) {
       const prefix = firstWave && record.partial ? '部分等' : '等';
       parts.push(`${prefix} ${dependencies.join(' ')}`);
     }
     if (extras.length > 0) parts.push(`另需 ${extras.join(' ')}`);
+    if (heldFrom.length > 0) parts.push(`避开 ${heldFrom.join(' ')}`);
     return parts.length > 0 ? `（${parts.join('；')}）` : '';
   }
 
@@ -1623,6 +1647,7 @@ if (mode === 'order') {
       state: child.state,
       shelved: isShelved(child),
       human: child.human === true || hasLabel(child, 'ready-for-human'),
+      shared_counter: child.sharedCounter === true || hasLabel(child, 'shared-counter'),
     });
     const specIssue = (number) => {
       const issue = issueByNumber.get(Number(number));

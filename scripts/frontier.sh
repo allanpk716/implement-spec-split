@@ -9,13 +9,18 @@
 # `实现票：#N` line and their sub-issues), read from pipeline-status.sh --graph.
 # A ticket is in the frontier when GitHub's `dependencies/blocked_by` holds no
 # open blocker for it, it is not shelved, and it does not carry
-# `ready-for-human`.
+# `ready-for-human`. Among such tickets carrying the `shared-counter` label
+# (the graph's `shared_counter` flag: it bumps a shared counter) only the
+# lowest-numbered one is in the frontier; the others wait in `# blocked`,
+# naming it, until that one is merged and closed.
 #
 # Output:
 #   zero or more lines `#<t>` — the frontier, one ticket per line, ascending;
-#   then the sections `# blocked` (blocked tickets with their open blockers),
-#   `# human` (ready-for-human tickets, never dispatched) and `# shelved`
-#   (shelved tickets). A ticket may appear in more than one of those three.
+#   then the sections `# blocked` (blocked tickets with their open blockers,
+#   and `shared-counter` tickets waiting for the one released:
+#   `（等共享计数器：#m）`), `# human` (ready-for-human tickets, never
+#   dispatched) and `# shelved` (shelved tickets). A ticket may appear in more
+#   than one of those three.
 #
 # Exit codes:
 #   0  success
@@ -155,6 +160,10 @@ const frontier = [];
 const blocked = [];
 const human = [];
 const shelved = [];
+// The one `shared-counter` ticket released this run (the lowest-numbered among
+// those that pass the other frontier conditions; `open` is ascending, so the
+// first one met is it). The rest wait for it in `# blocked`, naming it.
+let releasedCounterTicket = null;
 for (const ticket of open) {
   const number = Number(ticket.number);
   const openBlockers = blockers.get(number) || [];
@@ -165,7 +174,14 @@ for (const ticket of open) {
     blocked.push(`${line}（阻塞：${openBlockers.map((value) => `#${value}`).join(' ')}）`);
   }
   if (openBlockers.length === 0 && ticket.shelved !== true && ticket.human !== true) {
-    frontier.push(`#${number}`);
+    if (ticket.shared_counter !== true) {
+      frontier.push(`#${number}`);
+    } else if (releasedCounterTicket === null) {
+      releasedCounterTicket = number;
+      frontier.push(`#${number}`);
+    } else {
+      blocked.push(`${line}（等共享计数器：#${releasedCounterTicket}）`);
+    }
   }
 }
 
