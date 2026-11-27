@@ -43,11 +43,11 @@ This division of labour is optimized for one specific situation: **Claude quota 
 
 | Item | Status |
 |---|---|
-| Platform | Windows 11 + Git Bash: fully verified, including real GLM end to end. Ubuntu 24.04: all model-free self-tests pass (`selftest-codex.sh --only V1`, hook tests, doctor tests), but it has not been run with a real codex and GLM. macOS 27 (stock bash 3.2): fully verified with codex-cli 0.164.0, including real GLM end to end (V3, 2026-10-24). Known limitation: the alternate pi backend (`pi-worker.sh`) only kills the root process on Linux/macOS; use the codex backend on those platforms |
+| Platform | Windows 11 + Git Bash: fully verified, including real GLM end to end. Ubuntu 24.04: all model-free self-tests pass (`selftest-codex.sh --only V1`, hook tests, doctor tests), but it has not been run with a real codex and GLM. macOS 27 (stock bash 3.2): fully verified with codex-cli 0.164.0, including real GLM end to end (V3, 2026-10-24) |
 | codex-cli | 0.163.0, 0.164.0. Other versions are unverified; after changing versions, first run `scripts/selftest-codex.sh --only V1` |
 | Model | GLM-5.4, through a local proxy |
-| Stage 1 | The former backends (`codex`, `pi` wrappers) were verified end-to-end in a scratch repo; since 规格 #26 Ticket workers are dispatched as Orca workers, and that path awaits the real-machine smoke ticket |
-| find-next | Local markdown tracker: script unit tests pass, `--worker codex` run once on a real repo (2026-11-01). The GitHub path and `--worker pi` not yet run |
+| Stage 1 | The former `codex` wrapper backend was verified end-to-end in a scratch repo; since 规格 #26 Ticket workers are dispatched as Orca workers, and that path awaits the real-machine smoke ticket |
+| find-next | Local markdown tracker: script unit tests pass, `--worker codex` run once on a real repo (2026-11-01). The GitHub path not yet run |
 | Stage 3 | Hook unit tests and a local smoke test pass; rule adherence in real sessions is still being validated |
 | Install commands | Plugin install commands are given using the marketplace name installed locally (`mattpocock`); `npm i -g @openai/codex` is codex's official installation method. Neither has been re-run on a fresh machine |
 
@@ -112,6 +112,20 @@ A spec is a parent GitHub issue. Its child issues are tickets, and dependencies 
 - After each ticket is complete, it must pass the verification gate and two Opus reviews (Standards and Spec) before it counts as done.
 - Several specs at once: open one session per Orca worktree of the same clone and run the skill in each. Without a spec number, the skill lists the candidates with their state (free / in progress / interrupted?) and lets you choose; once taken, it links the session's worktree to that issue and retitles the tab `spec-<n> …`. Choosing an in-progress or interrupted spec continues the unfinished work (Recovery). `--parallel` counts per run: the workers of parallel runs add up and share one GLM quota.
 
+**The worktree tree and taking over**
+
+- **The sidebar is one collapsible tree**, with no progress tabs (规格 #26): main session → Spec worktree `spec-<n>` (branch `spec-<n>` off `origin/main`; find-next's launch-wave creates it as a child of the main session's worktree) → Ticket worktree `spec-<n>-t<m>` (branch `spec-<n>-t<m>` off the integration branch `spec-<n>`; the dispatch module creates it as a child of the Spec worktree), each Ticket's worker in a terminal titled `spec-<n> t<m>`. The fix and conflict roles run in the Spec worktree itself. Which Spec a Ticket belongs to and how far it has got is what the sidebar shows.
+- **Scripts remove worktrees**: once a Ticket is merged, `scripts/stage-dispatch.sh release` removes its worktree with its branch; once the Spec has landed, `scripts/close-self.sh` removes the remaining Ticket worktrees first and then the Spec worktree; a parked Spec keeps its worktree; the keeper sweeps abandoned ones every round (`scripts/sweep-worktrees.sh`). Do not remove a Spec worktree by hand while its Ticket worktrees exist: Orca neither refuses nor cascades, it orphans them.
+- **One Orca Run per Spec**: the Spec session creates its own at step 0 with `orca orchestration run-create` (its Ticket workers report into it), and the `launch-wave.sh --apply` that started the wave created another one for that wave's Spec sessions. Closing the main session, the Spec session or any coordinating terminal stops nothing below: the workers keep running and their `worker_done` mail keeps landing in the Run. To take over in a new terminal:
+
+  ```bash
+  cat ~/.cache/implement-spec-split/runs/<repo>-<n>-<time>/orca-run-id        # one Spec's Run (that Spec's newest run directory)
+  grep '"run"' ~/.cache/implement-spec-split/launch/<owner>__<repo>.json       # one wave's Run (the launch state)
+  orca orchestration run-use --id <run id> --json
+  ```
+
+  After `run-use` that terminal is the Run's coordinator again (`orca orchestration run-current` names it) and `stage-dispatch.sh` `dispatch` / `wait` / `release` work from it; a Spec session that was replaced continues under the skill's Recovery. A takeover re-dispatches nothing: the workers never stopped.
+
 Change defaults in the "Config" section of `SKILL.md`.
 
 **Verify**
@@ -139,7 +153,7 @@ ln -s ~/.claude/skills/implement-spec-split/find-next ~/.claude/skills/find-next
 ln -s ~/.claude/skills/implement-spec-split/grill-router ~/.claude/skills/grill-router
 ```
 
-**Use**: `/find-next [--worker codex|pi|self]`, or just ask "what's next". For the whole picture use `/find-next --list` (or ask "what is left"): it lists every to-do (in progress, needs tickets, needs a spec, open decisions, unfinished bookkeeping, loose issues) without a worker. To write every missing spec at once use `/find-next --batch`: codex workers draft a spec plus its tickets per group, you confirm once, then they are published and you get a start order for `/implement-spec-split`.
+**Use**: `/find-next [--worker codex|self]`, or just ask "what's next". For the whole picture use `/find-next --list` (or ask "what is left"): it lists every to-do (in progress, needs tickets, needs a spec, open decisions, unfinished bookkeeping, loose issues) without a worker. To write every missing spec at once use `/find-next --batch`: codex workers draft a spec plus its tickets per group, you confirm once, then they are published and you get a start order for `/implement-spec-split`.
 
 - Default `codex`: a script does the mechanical scan (`find-next/scripts/scan.py` for local markdown trackers, `scripts/pipeline-status.sh` for GitHub), and a read-only codex worker does the judgment; the session reads only its conclusion of at most 15 lines. Needs Stage 2.
 - `self`: the session judges on its own, no codex needed.

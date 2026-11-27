@@ -16,20 +16,24 @@ _Avoid_: native subagent, Claude subagent
 A separate coding-agent CLI process, a Worker harness running a Worker model, that the Orchestrator launches outside the session to do one role's work; it shares no conversation with the Orchestrator. Since 规格 #26 that is the headless executor (`scripts/codex-worker.sh`: the step-2 exploration and find-next's research, decision and drafting workers); the implementing roles are not External workers but Orca workers the dispatch module starts on the 实现 route.
 _Avoid_: delegate, GLM subagent, headless subagent
 
+**Orca worker**:
+An executor that Orca orchestration runs for one dispatch of a Stage and keeps track of: a terminal started on a Launcher profile in a worktree and adopted into an Orca Run (`worker-start --terminal`), so that its liveness, its completion report (`worker_done`) and its release are Orca's. Since 规格 #26 the implementing roles are Orca workers the dispatch module starts on the 实现 Stage route; unlike an External worker they have no Time limit or Idle timeout of their own, and nothing wraps them.
+_Avoid_: External worker (that is the headless executor outside Orca), subagent, backend
+
 **Worker harness**:
-The coding-agent CLI program an External worker runs in (codex or pi); it decides how progress is observed, how a stopped worker is Resumed and how its processes are killed, independent of which model it talks to.
-_Avoid_: codex worker / pi worker when the model matters, agent CLI
+The coding-agent CLI program an External worker runs in (codex); it decides how progress is observed, how a stopped worker is Resumed and how its processes are killed, independent of which model it talks to.
+_Avoid_: codex worker when the model matters, agent CLI
 
 **Worker model**:
 The model an External worker's harness talks to (GLM-5.4 today); chosen separately from the harness, so one harness can serve different models and one model can run under different harnesses. On the codex path the Stage routes decide it: a dispatch with `--read-only` runs the research route, any other dispatch the implementation route, both set by the user with `/grill-router`. Every fresh `codex-worker.sh` run reads the table, so a Run that is already executing changes model at its next dispatch, while a Resume keeps the model and effort of its first segment. An Orca worker's model is the 实现 route the dispatch module read when it started, recorded in its Sidecar.
 _Avoid_: implement model, backend model
 
 **Implement backend**:
-Retired (规格 #26): which kind of executor ran the implementing roles for a run — an In-session subagent (`agent`) or an External worker (`codex` / `pi`) — chosen with `IMPLEMENT_BACKEND` and `--impl`. The implementing roles are now always Orca workers dispatched by `scripts/stage-dispatch.sh` on the 实现 Stage route, whatever the session.
+Retired (规格 #26): which kind of executor ran the implementing roles for a run — an In-session subagent or an External worker — chosen in the Config. The implementing roles are now always Orca workers dispatched by `scripts/stage-dispatch.sh` on the 实现 Stage route, whatever the session.
 _Avoid_: using it for the Stage route (the route chooses the launcher, model and effort, never whether a role is dispatched)
 
 **Agent model**:
-Retired (规格 #26, with `--agent-model`): the model the former `agent` backend passed on every Agent call. The model an implementing role runs on is its Stage route, read by the dispatch module at each dispatch.
+Retired (规格 #26): the model the former in-session implementing subagents were passed on every Agent call. The model an implementing role runs on is its Stage route, read by the dispatch module at each dispatch.
 _Avoid_: implement model (ambiguous with harness-specific settings such as `GLM_MODEL`)
 
 **Implementing roles**:
@@ -125,6 +129,10 @@ One invocation of the skill, implementing one Spec from start to finish; several
 **Orca Run**:
 An Orca orchestration Run, named by its id on every Orca orchestration call that acts on a Run and never inherited from the terminal (the calls that name none are the two kinds `lib-orca.sh` Rule 2 excepts: the ones addressing one dispatch by its id, `worker-stop` / `worker-show` / `worker-release`, and `worker-list`, which the keeper calls without a Run of its own): the one `launch-wave.sh` creates per wave for the Spec sessions it dispatches (kept in the Launch state as `run`), and the one each Spec session creates for the Ticket workers it dispatches.
 _Avoid_: Run without "Orca" (that is one invocation of the skill), wave (that is the batch, not Orca's object)
+
+**Takeover**:
+Binding a new terminal to an existing Orca Run with `orca orchestration run-use --id <run id>` after the terminal that coordinated it closed or was replaced, so that dispatching, waiting and releasing can go on. The workers never stopped and nothing is re-dispatched: a worker's `worker_done` mail keeps landing in the Run while no terminal coordinates it.
+_Avoid_: Recovery (that is continuing a Spec's implementation in a new Run), adopt, bind
 
 **Recovery**:
 Continuing, in a new Run, a Spec that an earlier Run started but did not finish; triggered only by the user choosing that Spec.

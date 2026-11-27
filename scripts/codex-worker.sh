@@ -29,7 +29,7 @@
 # entry (claude-glm by default), not the launcher that ran. A Resume does not read the
 # table: it keeps what the first segment saved.
 #
-# Contract and semantics match pi-worker.sh. --time-limit is one segment's hard budget:
+# --time-limit is one segment's hard budget:
 # it spans every attempt and retry wait since the segment started, and each attempt gets
 # only the remainder. --idle-timeout is per attempt and counts only codex progress lines,
 # meaning event types beginning thread., turn. or item.; top-level error lines such as
@@ -65,8 +65,8 @@
 # final fingerprint); pid (this wrapper's Windows pid and Windows start ticks, or its POSIX
 # pid and process start identity, so progress.sh cannot mistake a recycled pid for this
 # worker); watch.json (live
-# watchdog state); and sessions/ for pi-worker run-dir compatibility (codex's authoritative
-# rollout stays under its home directory).
+# watchdog state); and an empty sessions/ (a legacy slot of the retired pi worker's
+# run-dir layout, 规格 #26; codex's authoritative rollout stays under its home directory).
 #
 # Exit codes: 0 ok | 2 auth | 3 quota (documented for contract compatibility; codex
 # event classification never distinguishes quota from 429) | 4 transient, retries used
@@ -169,10 +169,11 @@ while [ $# -gt 0 ]; do
 done
 
 # A flash Orchestrator must not start External workers on its own: its
-# implementing roles are in-session glm-5.4 subagents. Only an explicit
-# `/implement-spec-split --impl codex` Run sets the opt-in (2026-11-21).
+# implementing roles are Orca workers the dispatch module starts (规格 #26). The one
+# opt-in is the step-2 exploration dispatch of /implement-spec-split, which sets
+# WORKER_ALLOW_FLASH=1 for that single call (2026-11-21; reworded 2026-11-28).
 if [ "${FLASH_ORCHESTRATOR:-}" = 1 ] && [ "${WORKER_ALLOW_FLASH:-}" != 1 ]; then
-  die "refusing to run in a flash session (FLASH_ORCHESTRATOR=1): implement Specs with /implement-spec-split <n>; only an explicit --impl codex Run sets WORKER_ALLOW_FLASH=1"
+  die "refusing to run in a flash session (FLASH_ORCHESTRATOR=1): implement Specs with /implement-spec-split <n>; only its step-2 exploration dispatch sets WORKER_ALLOW_FLASH=1"
 fi
 
 if $RESUME; then

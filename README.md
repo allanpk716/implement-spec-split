@@ -9,7 +9,7 @@ A Claude Code skill: [Matt Pocock's `implement-spec`](https://github.com/mattpoc
 
 The original skill lets every subagent inherit the session model, so you pay top-tier prices for coding or get a weaker review. This version passes `model` explicitly on every review subagent call and runs the implementing roles on the Stage route table. It also auto-discovers open, unfinished specs when invoked without an argument.
 
-> Status: fully verified on **Windows 11 + Git Bash** with codex-cli 0.163.0; Ubuntu 24.04 passes all model-free self-tests (not yet run against a real model); macOS 27 (bash 3.2) fully verified with codex-cli 0.164.0, including real GLM (V3, 2026-10-24). Those runs predate 规格 #26: the codex wrapper was exercised end-to-end on a scratch repo (2026-10-11 with pi, 2026-10-18 with codex), and the real-machine smoke test of the dispatched-worker path is a separate ticket. Report problems via issues.
+> Status: fully verified on **Windows 11 + Git Bash** with codex-cli 0.163.0; Ubuntu 24.04 passes all model-free self-tests (not yet run against a real model); macOS 27 (bash 3.2) fully verified with codex-cli 0.164.0, including real GLM (V3, 2026-10-24). Those runs predate 规格 #26: the codex wrapper was exercised end-to-end on a scratch repo (2026-10-18), and the real-machine smoke test of the dispatched-worker path is a separate ticket. Report problems via issues.
 
 > **Security:** codex workers run with `--dangerously-bypass-approvals-and-sandbox` — full read/write/exec access to your machine — and everything they read is sent to your model provider. Read the security section of [docs/setup.md](docs/setup.md) before use.
 >
@@ -22,18 +22,6 @@ The original skill lets every subagent inherit the session model, so you pay top
 - Claude Code with the `mattpocock-skills` plugin installed (uses its `tdd` and `code-review` skills, and its `docs/agents/issue-tracker.md` setup via `/setup-matt-pocock-skills`).
 - For the Ticket workers: Orca, and on PATH the launcher the 实现 route names (`claude-glm` on the default route; `scripts/stage-route.sh`). The Spec session creates an Orca Run per Spec and each Ticket worker is adopted into it from a terminal in a child worktree of the Spec's.
 - For the headless exploration (and find-next's codex workers): the `codex` CLI (tested with 0.163.0 and 0.164.0), Node.js, Git Bash (on Windows), and a `custom` model provider in `~/.codex/config.toml` serving GLM; the worker's TCP preflight is derived from that `base_url` and only probes loopback endpoints (author environment: a local proxy on `127.0.0.1:15722`). Check it with `scripts/selftest-codex.sh` (`--only V1` needs no model at all). Design notes and evidence: [docs/codex-backend.md](docs/codex-backend.md) (中文). Workers start with every MCP server in `config.toml` disabled; pass `--mcp all` (web research) or `--mcp <name,...>` (e.g. `ssh-manager` for remote work) to `codex-worker.sh` when a task needs them. Their prompt asks codex to batch independent tool calls and to spawn explorer subagents for independent exploration; cap those with `[agents] max_concurrent_threads_per_session = 3` in `config.toml` (subagents take no worker slot).
-- For the retiring `pi` wrapper only (`scripts/pi-worker.sh`; 规格 #26 retires it): the `pi` CLI, Node.js, Git Bash (on Windows), and a GLM provider in `~/.pi/agent/models.json` with a valid Zhipu Coding Plan key, e.g.:
-
-  ```json
-  { "providers": { "glm": {
-      "baseUrl": "https://open.bigmodel.cn/api/coding/paas/v4", "api": "openai-completions",
-      "apiKey": "<your key>",
-      "models": [{ "id": "glm-5.4", "name": "GLM-5.4", "reasoning": true, "input": ["text"],
-                   "contextWindow": 1000000, "maxTokens": 131072,
-                   "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 } }] } } }
-  ```
-
-  Check it with `scripts/selftest.sh` (connectivity, then a tiny ticket end-to-end in a scratch repo).
 
 ## Install
 
@@ -45,6 +33,20 @@ Then run scripts/doctor.sh to check your setup.
 Invoke manually with `/implement-spec-split [spec ref] [--parallel n]` (normally find-next starts it, see below). Change the defaults in the "Config" section of `SKILL.md`; the per-stage launcher, model and reasoning effort live in the Stage route table (`/grill-router`).
 
 AI agents installing or operating the skill should read [docs/ai-agents.md](docs/ai-agents.md) first: it gives the quick start, backend requirements, preflight commands, progress inspection, and agent-specific safety rules.
+
+## Takeover and the worktree tree
+
+`/find-next --batch` starts every Spec session in a child worktree of the main session's worktree, and the Spec session gives every Ticket worker a child worktree of its own, so Orca's sidebar shows one collapsible tree instead of a row of tabs: main session → `spec-<n>` (branch `spec-<n>` off `origin/main`) → `spec-<n>-t<m>` (branch `spec-<n>-t<m>` off `spec-<n>`), each Ticket in a terminal titled `spec-<n> t<m>`. The fix and conflict roles run in the Spec worktree itself. Nothing is removed by hand: `scripts/stage-dispatch.sh release` removes a merged Ticket's worktree with its branch, `scripts/close-self.sh` removes the Spec worktree once every Ticket worktree is gone and the Spec has landed, a parked Spec keeps its worktree, and the keeper sweeps abandoned ones (`scripts/sweep-worktrees.sh`). Removing a Spec worktree by hand while its Ticket worktrees exist orphans them in Orca, so leave it to the scripts; progress is the sidebar.
+
+Each Spec has one Orca Run of its own for its Ticket workers (the Spec session creates it at step 0 with `orca orchestration run-create`; the `launch-wave.sh --apply` that started the wave created another one for the Spec sessions of that wave, 规格 #26). Closing the main session, the Spec session or any coordinating terminal stops nothing: the workers keep running and their `worker_done` mail keeps landing in the Run. To take over from a new terminal:
+
+```bash
+cat ~/.cache/implement-spec-split/runs/<repo>-<n>-<time>/orca-run-id            # a Spec's Run (newest run directory of that Spec)
+grep '"run"' ~/.cache/implement-spec-split/launch/<owner>__<repo>.json           # a wave's Run (the launch state)
+orca orchestration run-use --id <run id> --json
+```
+
+After `run-use` the new terminal is the Run's coordinator again (`orca orchestration run-current` names it) and `stage-dispatch.sh` `dispatch` / `wait` / `release` work from it again; a Spec session that was replaced then continues under the skill's Recovery. A Takeover re-dispatches nothing: the workers it found never stopped.
 
 ## Companion skill: `find-next`
 

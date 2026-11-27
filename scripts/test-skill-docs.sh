@@ -2,9 +2,11 @@
 # Checks that the skill's prose says what spec #26 decided about dispatching the
 # implementing roles (ticket #45), and no longer names what it retired. The
 # other test-*.sh scripts check scripts; this one checks SKILL.md, the Ticket
-# Brief template and the hooks README, so that a later edit cannot quietly
-# bring the backend switch or the progress tabs back, or drop the one-command
-# dispatch / wait / release / merge-ticket path, without a test going red.
+# Brief template, the hooks README and (ticket #48) the user documents, so that
+# a later edit cannot quietly bring the backend switch, the progress tabs or
+# the retired wrappers back, or drop the one-command dispatch / wait / release /
+# merge-ticket path, the takeover steps or the worktree tree, without a test
+# going red.
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -17,6 +19,14 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SKILL=$ROOT/SKILL.md
 BRIEF=$ROOT/find-next/templates/brief-implement.md
 HOOKS=$ROOT/hooks/README.md
+GLOSSARY=$ROOT/GLOSSARY.md
+# What a user or a session reads as current wording. MAINTAINING's numbered
+# records, the ADRs and the smoke record keep the old names as history, and
+# docs/codex-backend.md keeps its experiment record, so none of them is listed.
+USER_DOCS="README.md docs/setup.md docs/setup.en.md GLOSSARY.md docs/ai-agents.md hooks/README.md \
+  find-next/SKILL.md grill-feature/SKILL.md grill-map/SKILL.md templates/brief-implement.md \
+  templates/brief-investigate.md templates/brief-mock.md templates/global-claude-md.md \
+  templates/global-claude-md.en.md"
 
 PASSED=0
 FAILED=0
@@ -32,7 +42,7 @@ without() { # text name file
   if grep -Fq -- "$1" "$3" 2>/dev/null; then bad "$2" "unexpected [$1] in ${3#$ROOT/}"; else ok "$2"; fi
 }
 
-for file in "$SKILL" "$BRIEF" "$HOOKS"; do
+for file in "$SKILL" "$BRIEF" "$HOOKS" "$GLOSSARY"; do
   [ -f "$file" ] || { bad "file exists" "$file"; printf '\n%d passed, %d failed\n' "$PASSED" "$FAILED"; exit "$FAILED"; }
 done
 
@@ -84,6 +94,26 @@ has '## 精简启动的 worker' 'hooks README documents the lean start' "$HOOKS"
 has 'merge-ticket.sh' 'hooks README names the script gate' "$HOOKS"
 has '--bare' 'hooks README says --bare loads no hooks' "$HOOKS"
 has 'unattended-stop-guard' 'hooks README names the hooks a lean worker lacks' "$HOOKS"
+
+# --- what ticket #48 retired (规格 #26): the current wording no longer names it -----
+
+# progress-tab.sh, ticket-watch.sh, pi-worker.sh and the pi selftest.sh are gone;
+# `selftest.sh` as a fixed string does not match selftest-codex.sh, which stays.
+for doc in $USER_DOCS; do
+  for gone in 'pi-worker' 'progress-tab' 'ticket-watch' 'selftest.sh'; do
+    without "$gone" "${doc} no longer names $gone" "$ROOT/$doc"
+  done
+done
+
+# --- takeover and the worktree tree (规格 #26 「接管」, User Stories 1–2) -----------
+
+for doc in README.md docs/setup.md docs/setup.en.md; do
+  has 'orca orchestration run-use --id <run id>' "$doc documents the takeover command" "$ROOT/$doc"
+  has 'orca-run-id' "$doc says where a Spec's Orca Run id lives" "$ROOT/$doc"
+  has 'spec-<n>-t<m>' "$doc documents the Ticket worktree under the Spec worktree" "$ROOT/$doc"
+done
+has '**Orca worker**:' 'GLOSSARY defines Orca worker' "$GLOSSARY"
+has '**Takeover**:' 'GLOSSARY defines Takeover' "$GLOSSARY"
 
 printf '\n%d passed, %d failed\n' "$PASSED" "$FAILED"
 exit "$FAILED"

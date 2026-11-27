@@ -1,6 +1,6 @@
 ---
 name: find-next
-description: 默认进入推进模式：循环扫描当前 GitHub 仓库的 wayfinder 地图与票，自动调查并关闭可关的 research 票、为决策票准备选项、推进没讨论完的地图（迷雾毕业、task/prototype 票）、分流地图外散票（等待时机 / 开地图 / 单个决策 / 重复或过时）、批量起草规格和执行票，把所有需要人拍板的问题合成一轮，答完后自动发布并启动第 1 波 implement-spec-split 会话；规格合入 main 后可由 implement-spec-split 调 --next-wave 自动开下一波。--suggest 保留原先只推荐一个下一步的只读行为；--list 列出待办清单；--batch 是推进模式别名。用户问"下一步做什么""推进仓库""该推哪张票""哪个该 to-spec / to-tickets / grill 了""还有什么没做完""给我待办清单""批量写规格 / 批量拆票""接下来开发哪几份规格""开发顺序"，或输入 /find-next 时使用。参数 --suggest、--list、--batch、--workers N（可选）、--specs K、--worker codex|pi|self|agent、--agent-model sonnet|opus|haiku|fable（仅 agent）、--no-auto-land（本批不做无人值守落地；默认无人值守，适合通宵运行）、--auto-land（兼容别名，等同默认）、--watch（只进入总控：汇报各规格落地进度、集中问停车规格要拍板的事、全部完成时给总结；推进模式收尾后也自动进入）。用户问"进度怎样""盯着开发""总控"时也用 --watch。
+description: 默认进入推进模式：循环扫描当前 GitHub 仓库的 wayfinder 地图与票，自动调查并关闭可关的 research 票、为决策票准备选项、推进没讨论完的地图（迷雾毕业、task/prototype 票）、分流地图外散票（等待时机 / 开地图 / 单个决策 / 重复或过时）、批量起草规格和执行票，把所有需要人拍板的问题合成一轮，答完后自动发布并启动第 1 波 implement-spec-split 会话；规格合入 main 后可由 implement-spec-split 调 --next-wave 自动开下一波。--suggest 保留原先只推荐一个下一步的只读行为；--list 列出待办清单；--batch 是推进模式别名。用户问"下一步做什么""推进仓库""该推哪张票""哪个该 to-spec / to-tickets / grill 了""还有什么没做完""给我待办清单""批量写规格 / 批量拆票""接下来开发哪几份规格""开发顺序"，或输入 /find-next 时使用。参数 --suggest、--list、--batch、--workers N（可选）、--specs K、--worker codex|self|agent、--agent-model sonnet|opus|haiku|fable（仅 agent）、--no-auto-land（本批不做无人值守落地；默认无人值守，适合通宵运行）、--auto-land（兼容别名，等同默认）、--watch（只进入总控：汇报各规格落地进度、集中问停车规格要拍板的事、全部完成时给总结；推进模式收尾后也自动进入）。用户问"进度怎样""盯着开发""总控"时也用 --watch。
 ---
 
 # find-next
@@ -11,13 +11,13 @@ description: 默认进入推进模式：循环扫描当前 GitHub 仓库的 wayf
 
 ## 用法
 
-- `/find-next [--workers N] [--specs K] [--worker codex|pi|agent] [--agent-model <model>] [--no-auto-land] [地图号、实现票号或规格号…]`：默认推进模式（见「推进模式」），也是地图、规格、票、开发的通用入口。它循环执行：扫描 → 自动调查/关闭 research 票 → 准备决策题 / 迷雾毕业建议 / task 清单 / prototype 反应题 / 散票分流建议 → 起草规格和执行票 → 有问题就一轮问用户 → 应用答案并再扫描 → 发布 → 启动第 1 波。起草、调研、决策准备、迷雾毕业、散票分流、task 和 prototype 交给 worker：不给 `--worker` 或给 `codex` 时照旧派 codex worker；`pi` 维持现状（被忽略，等同 codex）；`agent` 时改由主会话开 Agent 子代理执行这些步骤（`model` 显式传 `--agent-model`，默认 `sonnet`）。只支持 GitHub 跟踪器；本地 markdown 跟踪器请用 `--suggest` 或 `--list`
-- `/find-next --suggest [--worker codex|pi|self|agent] [--agent-model <model>]`：原先的默认行为，只读挑一个 Next step（见「建议模式流程」）；未给 `--worker` 时等同于 `codex`。支持 GitHub 和本地 markdown 跟踪器
+- `/find-next [--workers N] [--specs K] [--worker codex|agent] [--agent-model <model>] [--no-auto-land] [地图号、实现票号或规格号…]`：默认推进模式（见「推进模式」），也是地图、规格、票、开发的通用入口。它循环执行：扫描 → 自动调查/关闭 research 票 → 准备决策题 / 迷雾毕业建议 / task 清单 / prototype 反应题 / 散票分流建议 → 起草规格和执行票 → 有问题就一轮问用户 → 应用答案并再扫描 → 发布 → 启动第 1 波。起草、调研、决策准备、迷雾毕业、散票分流、task 和 prototype 交给 worker：不给 `--worker` 或给 `codex` 时照旧派 codex worker；`agent` 时改由主会话开 Agent 子代理执行这些步骤（`model` 显式传 `--agent-model`，默认 `sonnet`）。只支持 GitHub 跟踪器；本地 markdown 跟踪器请用 `--suggest` 或 `--list`
+- `/find-next --suggest [--worker codex|self|agent] [--agent-model <model>]`：原先的默认行为，只读挑一个 Next step（见「建议模式流程」）；未给 `--worker` 时等同于 `codex`。支持 GitHub 和本地 markdown 跟踪器
 - `/find-next --list`：不挑一个，列出当前仓库的全部待办清单（见「清单模式」）。总是我自己做，不派 worker，`--worker` 被忽略
 - `/find-next --batch …`：推进模式别名，兼容旧用法
 - `/find-next --watch`：只进入**总控**（见「总控」一节），不推进、不起草；推进模式第 11 步收尾后自动进入同一节。grill-feature / grill-map 启动规格后，本仓库没有总控在跑时也走这里
 - `--workers N` 可选，是全机 GLM worker 总数；每份规格的 `--parallel` = N ÷ K（至少 1）。没给时读 `~/.cache/implement-spec-split/max-workers`（`scripts/max-workers.sh` 用的同一文件）；文件也没有就把 worker 上限并入本轮最后一个问题问用户。`--specs K` 是同时开几份规格，默认 2。**同一仓库同一时间只在一个会话里运行推进模式**：推进模式全程持仓库级 `find-next-advance` 锁（见「推进模式」第 1 步），第二个会话会被拦下；持锁会话被意外关闭后锁自动失效
-- `--agent-model <sonnet|opus|haiku|fable>` 只在 `--worker agent` 时有效，默认 `sonnet`；给了 `--worker codex`/`pi`/`self`（或不给 `--worker`）却给 `--agent-model` 是参数冲突，报错让用户改。一个开关管全程：`--worker agent` 决定本技能自己的调研/决策/起草方式，不提供混搭；生成的开发命令不带后端参数（实现走路由表）。
+- `--agent-model <sonnet|opus|haiku|fable>` 只在 `--worker agent` 时有效，默认 `sonnet`；给了 `--worker codex`/`self`（或不给 `--worker`）却给 `--agent-model` 是参数冲突，报错让用户改。一个开关管全程：`--worker agent` 决定本技能自己的调研/决策/起草方式，不提供混搭；生成的开发命令不带后端参数（实现走路由表）。
 - **无人值守落地**（GLOSSARY.md）默认开启：本批规格（含之后自动开的波次）不停下问人；Opus 审查里带推荐、标「可自动采纳：是」的取舍按推荐落地并记为「自动拍板（可推翻）」，只有真要人决定的事才停车。落地、部分落地、停车都在规格 issue 下留报告，由本会话的总控汇总给用户。`--no-auto-land` 只在推进模式有效，用来让本批保留 push 前确认：第 10 步把它透传给 launch-wave.sh，`--apply` 会把 `auto_land: false` 写进启动状态，`--next-wave` 沿用；`--auto-land` 保留为兼容别名，等同默认。
 
 只扫当前仓库，不跨仓库汇总。
@@ -62,16 +62,16 @@ description: 默认进入推进模式：循环扫描当前 GitHub 仓库的 wayf
    输出 JSON：每张票的票头、阻塞（含仍 open 的阻塞）、所属地图、Parent 引用与被引用、是否含 spec 正文、下游解锁数；每张地图的成员票、前沿与 `has_fog`；以及按阶段 1–4 粗筛的候选（含 `fog_maps`）。脚本只做确定性规则。
 3. **判断**：确认候选能否成立（目的地是否达成、是否搁置、`SPEC.md` 里有没有这一章、候选算不算 spec 正文、散票的时机条件是否由用户明示已满足），按优先级挑出一个；带 `timing` 的散票只作为「等待时机」信息呈现，不成为候选。
    - `--worker self`：我自己读脚本输出，针对性地看几处地图 Notes、票正文和 `SPEC.md` 标题（`grep -n '^#' SPEC.md`）。
-   - `--worker codex` / `pi`：建运行目录 `~/.cache/codex-runs/<仓库名>-<YYYYmmdd-HHMM>-find-next/`，把 `scan.py` 的输出存成其中的 `scan.json`，再用 [templates/brief-judge.md](templates/brief-judge.md) 填好 `brief.md`，后台运行：
+   - `--worker codex`：建运行目录 `~/.cache/codex-runs/<仓库名>-<YYYYmmdd-HHMM>-find-next/`，把 `scan.py` 的输出存成其中的 `scan.json`，再用 [templates/brief-judge.md](templates/brief-judge.md) 填好 `brief.md`，后台运行：
 
      ```bash
      ~/.claude/skills/implement-spec-split/scripts/codex-worker.sh --cwd <仓库> --brief <运行目录>/brief.md \
        --run-dir <运行目录> --read-only --time-limit 1200 --idle-timeout 600
      ```
 
-     `pi` 用同目录的 `pi-worker.sh`。结束后只读 `status.json`、`result.md`（worker 的最终回复，≤15 行结论），结论是 to-spec 或 to-tickets 时再读 `digest.md`。
+     结束后只读 `status.json`、`result.md`（worker 的最终回复，≤15 行结论），结论是 to-spec 或 to-tickets 时再读 `digest.md`。
    - `--worker agent`：照旧建同一个运行目录、存 `scan.json`/`scan.txt`、用 [templates/brief-judge.md](templates/brief-judge.md) 填好 `brief.md`；但不运行 codex-worker.sh，而是开一个 Agent 子代理，`model` 显式传 `--agent-model` 的值（默认 `sonnet`），prompt 固定为：「读 <运行目录>/brief.md 并照做，把最终报告写到 <运行目录>/result.md，同时作为你的最终回复」。Brief 里「wrapper 会把最终回复存成 result.md，不要自己写」这类话是对 codex worker 说的，agent 模式下以 prompt 为准：子代理自己写 `result.md`。结束后照旧读 `result.md`（结论是 to-spec 或 to-tickets 时再读 `digest.md`）；没有 `status.json`，以子代理的返回为准。
-   - worker 出错时按全局 CLAUDE.md 的处理表：`auth` / `quota` / `transient` → 告诉用户，问他们是等一会儿、换 `pi`，还是 `--worker self`，**不自动降级**；`stalled` / `error` → 把失败原因补进 Brief，换新运行目录重跑一次；`violation` → 报告作废，把 `changed_paths` 交给用户。`agent` 子代理没有 `status.json`：返回为空或明确报错时，把失败原因补进 Brief、换新运行目录重派一次，再失败就停下报告；不自动改用 codex 或 self。
+   - worker 出错时按全局 CLAUDE.md 的处理表：`auth` / `quota` / `transient` → 告诉用户，问他们是等一会儿，还是 `--worker self`，**不自动降级**；`stalled` / `error` → 把失败原因补进 Brief，换新运行目录重跑一次；`violation` → 报告作废，把 `changed_paths` 交给用户。`agent` 子代理没有 `status.json`：返回为空或明确报错时，把失败原因补进 Brief、换新运行目录重派一次，再失败就停下报告；不自动改用 codex 或 self。
    - **阶段路由**：本技能所有 `codex-worker.sh` 调用（判断、调研、决策票、任务票、散票分流、批量起草）的模型和思考强度取自阶段路由表（`scripts/stage-route.sh`，GLOSSARY「Stage route」，ADR 0004）：带 `--read-only` 的读「调研起草」（research），其余读「实现」（implementation），两者默认都是 glm-5.4 / high；命令里不传 `--model`。wrapper 每次派发时读表：阶段路由非默认时压过显式参数，在 stderr 报一行并写进运行目录的 `stderr.log`；`status.json` 的 `model`、`thinking`、`profile` 记实际用的模型、思考强度和档案。worker 因型号不可用而失败、或预检（`scripts/selftest-codex.sh --only L1`）失败时，报告里点名 `status.json.model`、路由当前值（运行 `scripts/stage-route.sh` 查看）和复位命令（该阶段那一行「切回用」后面那串，如 `/grill-router use implementation=claude-glm/glm-5.4/high`）；不要自己改路由表。
 4. **交接**：结论是 to-spec 或 to-tickets 时，那两个技能只能综合当前对话，所以要先把材料放进上下文。`self` 模式读地图和已关闭票的 Resolution；worker 模式读 `digest.md`。然后用几句话讲清要点，提示用户敲命令。结论是决策票或地图迷雾待毕业时，只报名字和命令；迷雾地图的命令是 `/find-next --batch <地图号>`。其他散票提示推进模式会分流；时机票只提示条件，用户明确说「开 #N」才继续。
 
@@ -131,7 +131,7 @@ I. 散票（bug / needs-triage 等；含等待时机、疑似重复和推进模�
 
 ## 推进模式（默认；`--batch` 是别名）
 
-用途：把用户从「逐张判断、逐个技能、逐轮确认」里解放出来。主会话只保留必须跨全批做的判断：分组、审稿、把关 Resolution、判断 `--apart`；读长材料和写长文都交给 worker——默认（不给 `--worker` 或给 `codex`/`pi`）是新的 codex worker；`--worker agent` 时是主会话开的 Agent 子代理（`model` 显式传 `--agent-model`，默认 `sonnet`）。每一轮尽可能自动推进，只有真正的取舍题才问用户，而且所有问题合成一轮。
+用途：把用户从「逐张判断、逐个技能、逐轮确认」里解放出来。主会话只保留必须跨全批做的判断：分组、审稿、把关 Resolution、判断 `--apart`；读长材料和写长文都交给 worker——默认（不给 `--worker` 或给 `codex`）是新的 codex worker；`--worker agent` 时是主会话开的 Agent 子代理（`model` 显式传 `--agent-model`，默认 `sonnet`）。每一轮尽可能自动推进，只有真正的取舍题才问用户，而且所有问题合成一轮。
 
 flash 模式下，本节所有原本由主会话审读或复核的结论都按「flash 模式」一节交给 Opus review。
 
@@ -334,7 +334,7 @@ flash 模式下，本节所有原本由主会话审读或复核的结论都按�
 
 ## 推进模式出错处理与终止
 
-- worker `auth` / `quota` / `transient`：停止后续自动动作，把错误和已完成的安全结果告诉用户，问是等、换 `pi` 还是停止；不自动降级为 `self` 或其他模型。
+- worker `auth` / `quota` / `transient`：停止后续自动动作，把错误和已完成的安全结果告诉用户，问是等还是停止；不自动降级为 `self` 或其他模型。
 - worker `stalled` / `error`：把失败原因补进 Brief，换新运行目录重跑一次；再失败就停下报告。
 - worker `violation`：报告作废，把 `changed_paths` 交给用户；不发布、不关票。
 - `--worker agent` 的子代理没有 `status.json` 和上述错误码：以子代理返回与 `result.md` 为准，失败时换新运行目录重派一次；再失败就停下报告，不自动改用 codex 或 self。
@@ -369,7 +369,7 @@ flash 模式下，Opus review 与 Design session 的失败处理见「flash 模�
 
   `map` 用于地图、迷雾、空地图、地图内 decision/research 票和大模块话题；`feature` 用于小功能或单个决策类散票。flash 提示用户切换、阻塞等待 handoff，成功后只读 `handoff.md` 并执行其中交给 Orchestrator 的待办，脚本非 0 时转述 stderr 并停止。
 - **推荐入口替换**：flash 模式下，上文推荐 `/wayfinder` 的地方改推荐 `/grill-map`；推荐 `/grill-with-docs` 的地方，小功能或单个决策改 `/grill-feature`，画图、推进地图或大模块讨论改 `/grill-map`。`/find-next` 自身入口和 `/to-spec`、`/to-tickets`、`/implement-spec-split` 的推荐不变。
-- **worker 后端**：没给 `--worker` 时按 `--worker agent` 处理（flash 环境里 `sonnet`/`opus` 都映射到 glm-5.4，子代理本身就是 GLM，与 implement-spec-split、launch-wave 的 flash 默认一致）。`codex-worker.sh` / `pi-worker.sh` 在 `FLASH_ORCHESTRATOR=1` 时拒跑；只有用户显式给了 `--worker codex|pi`，才在每条 wrapper 命令前加 `WORKER_ALLOW_FLASH=1`，其他情况不许设置，也不许绕开本技能自己起 worker。
+- **worker 后端**：没给 `--worker` 时按 `--worker agent` 处理（flash 环境里 `sonnet`/`opus` 都映射到 glm-5.4，子代理本身就是 GLM，与 implement-spec-split、launch-wave 的 flash 默认一致）。`codex-worker.sh` 在 `FLASH_ORCHESTRATOR=1` 时拒跑；只有用户显式给了 `--worker codex`，才在每条 wrapper 命令前加 `WORKER_ALLOW_FLASH=1`，其他情况不许设置，也不许绕开本技能自己起 worker。
 - **第 1 波启动**：仍按第 10 步的原有命令试运行并 `--apply`；规格会话由 `launch-wave.sh` 按路由表「编排」项（锁定 flash）经 Orca 托管启动，用的就是 OpenClaude 槽位，技能层不重复实现该规则。
 - **Opus review 不可用**：退出码为 3（额度或 429）时按 quota 停车，其余非 0 退出码仍按原规则停车并说明（退出码含义见 scripts/opus-review.sh 头注释）；不自动重试、不降级到 GLM、不改由 flash 自己审读。Design session 脚本失败同样停下并转述错误。
 - **阶段路由**：`/grill-router`（只由用户敲，背后是 `~/.claude/skills/implement-spec-split/scripts/stage-route.sh`）是用户设置的全局路由表（GLOSSARY.md 的 Stage route）：编排、讨论、调研起草、实现、审查、诊断六个阶段各用哪个启动器档案、模型和思考强度，可带到期。`opus-review.sh` 每次被调用时自己读「审查」（`--kind code`、`draft`）或「诊断」（`--kind diagnose`）的路由，`design-session.sh` 读「讨论」，正在推进的运行不用重开，下一次审查就是新路由。findings 文件首行每次都是 `路由：审查（review）claude-glm / glm-5.4 / medium · <时间>`；档案不是 `claude` 时 `opus-review.sh` 的 stderr 会说明本次没调官方 Opus。照常按 findings 执行，汇报结论时带上这一行。不要自己改路由表，也不要把切换当成降级而拒收 findings。

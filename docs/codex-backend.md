@@ -90,7 +90,7 @@
    - auto_review 拦不住写仓库外（E7）。
 
    安全边界仍然靠 worktree 隔离、Brief 规则和验收检查。exploration 角色同样用 bypass，"不改仓库"由 Brief 规则加验收检查（`new_commits` = 0 且树干净）保证。
-3. **启动方式：子 shell 里 `exec node <codex.js> exec ...`**，或者 `exec codex`。wrapper 和 codex 之间**绝不能插入 MSYS 程序**（`timeout`、不带 exec 的 sh），否则杀进程树会失效（F9）。杀进程沿用 pi-worker 的 `kill_tree`。
+3. **启动方式：子 shell 里 `exec node <codex.js> exec ...`**，或者 `exec codex`。wrapper 和 codex 之间**绝不能插入 MSYS 程序**（`timeout`、不带 exec 的 sh），否则杀进程树会失效（F9）。杀进程用 `kill_tree`。
 4. **stdin 必须是会结束的输入。** Brief 用 `< brief.md` 喂给 stdin，prompt 参数写 `-`；或者 stdin 用 `</dev/null`、Brief 走参数。绝不能继承一个开着的管道（F8）。
 5. **固定参数：**
    - `-m <model> -c model_provider=custom`：防止 CC Switch 改了 config 后悄悄换模型；（2026-11-27 注记，ADR 0004：`<model>` 是阶段路由表 `scripts/stage-route.sh` 里「调研起草」（带 `--read-only`）或「实现」阶段的生效值，默认 glm-5.4，由用户经 `/grill-router` 设置；wrapper 每次新起 worker 时读表，仍每次显式传、不读 config。路由非默认时它压过调用方显式传的 `--model` / `--thinking`，思考强度同样按表经 `-c model_reasoning_effort=<强度>` 传，并在 stderr 说明。）
@@ -122,9 +122,9 @@
    - 参数顺序见 E5；
    - 会话文件在全局 `~/.codex/sessions/`，不在 run dir 里。坏 Resume 的检查改成"`~/.codex/sessions` 下能找到包含该 thread_id 的 rollout 文件"，找不到就退出 64；
    - 不能用 `--ephemeral`。
-10. **对外契约与 pi-worker 保持一致：** 参数、run dir 文件、`status.json` 字段（`session_id` 字段放 thread_id）、退出码 0/2/3/4/5/6/7/64、Resume 规则。SKILL.md 的编排逻辑不分叉，只换脚本名和 Config。唯一 codex 专属扩展是 `--read-only`：只读调查模式把第一段开跑前的 workspace 指纹存进 run dir 的 `fingerprint-start.json`，每段结束时把当前指纹写入 `fingerprint-end.json`；`resume.json` 只记录 `read_only: true|false`，Resume 校验基线指纹文件后继承只读设置。`status.json` 只在只读模式额外写 `read_only`、`read_only_violation`、`changed_paths`。违规把原本的 `ok` 改成 `violation` 并退出 8；其他状态保留原退出码；取指纹或比较失败一律判违规。指纹覆盖 HEAD、已跟踪文件的二进制 diff、未跟踪且未被忽略文件的对象哈希；被 `.gitignore` 忽略的文件不检测。`pi-worker.sh` 不支持该参数，退出码 8 也只属于 codex-worker。
+10. **对外契约：** 参数、run dir 文件、`status.json` 字段（`session_id` 字段放 thread_id）、退出码 0/2/3/4/5/6/7/64、Resume 规则。SKILL.md 的编排逻辑不分叉，只换脚本名和 Config。唯一 codex 专属扩展是 `--read-only`：只读调查模式把第一段开跑前的 workspace 指纹存进 run dir 的 `fingerprint-start.json`，每段结束时把当前指纹写入 `fingerprint-end.json`；`resume.json` 只记录 `read_only: true|false`，Resume 校验基线指纹文件后继承只读设置。`status.json` 只在只读模式额外写 `read_only`、`read_only_violation`、`changed_paths`。违规把原本的 `ok` 改成 `violation` 并退出 8；其他状态保留原退出码；取指纹或比较失败一律判违规。指纹覆盖 HEAD、已跟踪文件的二进制 diff、未跟踪且未被忽略文件的对象哈希；被 `.gitignore` 忽略的文件不检测。退出码 8 只属于 codex-worker。
 11. **Preflight：** 目标按优先级取自 `CODEX_WORKER_PREFLIGHT=off`（或旧别名 `CODEX_WORKER_SKIP_PREFLIGHT=1`）、显式 `<host>:<port>`、`CODEX_WORKER_BASE_URL`、`config.toml` 的 `[model_providers.custom].base_url`。从 URL 推导时 http/https 缺省端口为 80/443，且只探测本地回环地址；远程端点跳过探测并交给 codex 自己报错。没有配置也跳过。端口不通时报本地代理未监听，再跑 L1（让模型回一个词）。
-12. **测试钩子：** `CODEX_WORKER_CODEX` 可以换成假的 codex 可执行文件（同 `PI_WORKER_PI` 的思路），`CODEX_WORKER_BASE_URL` 可以把 provider 指向假服务器。
+12. **测试钩子：** `CODEX_WORKER_CODEX` 可以换成假的 codex 可执行文件，`CODEX_WORKER_BASE_URL` 可以把 provider 指向假服务器。
 13. **挽救"答完了却不收尾"的情况**（插件 #391）。触发条件：Idle timeout 触发时，已经出现过 `agent_message` 而没有 `turn.completed`。处理：
     - 照样杀掉；
     - 把最后一条 `agent_message` 写进 `result.md`；
@@ -191,7 +191,7 @@
 - F4：约 90s 内得到 4；
 - F6：在约束 5 设定的上限内退出，不会拖到 30 分钟。
 
-### V3 真 GLM 小任务（selftest L1/L2）
+### V3 真 GLM 小任务（`scripts/selftest-codex.sh --only V3`）
 在临时仓库的 worktree 里完成一个小 tdd ticket。断言：
 
 - 退出 0，有新 commit，树干净，我们重跑测试能通过；
@@ -204,7 +204,7 @@
 另外同时跑 2 个 worker，各自在自己的 worktree 里（插件 #382 说共享 `~/.codex` 会有竞争）：两个都要通过上面的断言，`stderr.log` 里不能有 sqlite/lock 相关的错误。
 
 ### V4 L3 端到端
-在 `allanpk716/iss-e2e-test` 上开新 spec，执行 `/implement-spec-split --impl codex`。检查项沿用 MAINTAINING.md 的 L3 清单，再加两条：
+在 `allanpk716/iss-e2e-test` 上开新 spec，执行 `/implement-spec-split <spec>`（规格 #26 起没有后端参数）。检查项沿用 MAINTAINING.md 的 L3 清单，再加两条：
 
 - 跑完没有残留的 codex/node 进程；
 - 每次运行结束时 `progress.sh` 的最后输出和 `status.json` 一致。
@@ -222,4 +222,4 @@
 2. SKILL.md 加 `--impl codex`，同步改 MAINTAINING.md（重写第 9 条，新增 codex 相关要点）和 GLOSSARY.md；README 同步。
 3. V4。
 4. `scripts/progress.sh`，改全局 CLAUDE.md，V5。
-5. pi 后端是否删除，等 V4、V5 通过、用过一段时间后再定。
+5. pi 后端已删除（规格 #26 票 #48，ADR 0004）：V4、V5 通过后 codex 是唯一的 headless 执行器。

@@ -751,7 +751,6 @@ testCase('codex wrappers and non-exec codex commands allow', home => {
     'codex login status',
     'codex e hi',
     '~/.claude/skills/implement-spec-split/scripts/codex-worker.sh --cwd /tmp --brief b.md --run-dir /tmp/r',
-    'scripts/pi-worker.sh --cwd /tmp',
     'scripts/selftest-codex.sh --only L1',
     'echo "run codex exec please"',
     "cat <<'EOF' > docs/a.md\ncodex exec hi\nEOF",

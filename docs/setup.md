@@ -42,11 +42,11 @@ English: [setup.en.md](setup.en.md)
 
 | 项目 | 状态 |
 |---|---|
-| 平台 | Windows 11 + Git Bash：完整验证（含真实 GLM 端到端）。Ubuntu 24.04：无模型的自测全部通过（`selftest-codex.sh --only V1`、hook 测试、doctor 测试），但没有用真实 codex 和 GLM 跑过。macOS 27（系统自带 bash 3.2）：完整验证（codex-cli 0.164.0，含真实 GLM 端到端 V3，2026-10-24）。已知限制：备用的 pi 后端（`pi-worker.sh`）在 Linux/macOS 上杀进程时只杀根进程，在这两个平台上请用 codex 后端 |
+| 平台 | Windows 11 + Git Bash：完整验证（含真实 GLM 端到端）。Ubuntu 24.04：无模型的自测全部通过（`selftest-codex.sh --only V1`、hook 测试、doctor 测试），但没有用真实 codex 和 GLM 跑过。macOS 27（系统自带 bash 3.2）：完整验证（codex-cli 0.164.0，含真实 GLM 端到端 V3，2026-10-24） |
 | codex-cli | 0.163.0、0.164.0。其他版本未验证，换版本后先跑 `scripts/selftest-codex.sh --only V1` |
 | 模型 | GLM-5.4，经本地代理 |
-| 阶段 1 | 旧后端（`codex`、`pi` wrapper）在试验仓库端到端验证过；规格 #26 起票的实现经 Orca worker 派发，这条路径等真机冒烟票验证 |
-| find-next | 本地 markdown 跟踪器：脚本单测通过，`--worker codex` 在真实仓库实跑过一次（2026-11-01）。GitHub 路径和 `--worker pi` 未实跑 |
+| 阶段 1 | 旧的 `codex` wrapper 后端在试验仓库端到端验证过；规格 #26 起票的实现经 Orca worker 派发，这条路径等真机冒烟票验证 |
+| find-next | 本地 markdown 跟踪器：脚本单测通过，`--worker codex` 在真实仓库实跑过一次（2026-11-01）。GitHub 路径未实跑 |
 | 阶段 3 | hook 单元测试和本机冒烟测试通过；真实会话里的规则遵守情况仍在验收 |
 | 安装命令 | 插件安装命令按本机已装的 marketplace 名（`mattpocock`）给出；`npm i -g @openai/codex` 是 codex 官方的安装方式。都没有在全新机器上重走一遍 |
 
@@ -111,6 +111,20 @@ spec 是一个 GitHub 父 issue，它的子 issue 就是 ticket，ticket 之间�
 - 每个 ticket 完成后都要经过验证关口和两个 Opus 审查（Standards、Spec）才算完。
 - 多个 spec 同时做：在同一个 clone 的多个 Orca worktree 里各开一个会话、各跑一次技能。不带 spec 编号时，技能会列出候选和状态（空闲 / 进行中 / 疑似中断），由你选；领到后会把会话的 worktree 关联到该 issue、标签页改名为 `spec-<n> …`。选一个"进行中"或"疑似中断"的 spec 就是接着做上次没做完的（Recovery）。`--parallel` 按每个运行计，几个运行的 worker 数相加，共享 GLM 额度。
 
+**工作区三层与接管**
+
+- **侧栏是一棵可折叠的树**，不再有进度标签（规格 #26）：主会话 → 规格工作区 `spec-<n>`（分支 `spec-<n>`，从 `origin/main` 切出，由 find-next 的 launch-wave 建为主会话工作区的子工作区）→ 票工作区 `spec-<n>-t<m>`（分支 `spec-<n>-t<m>`，从集成分支 `spec-<n>` 切出，由派发模块建为规格工作区的子工作区），每张票的 worker 跑在标题为 `spec-<n> t<m>` 的终端里；fix 和冲突解算角色直接在规格工作区里跑。看一张票属于哪份规格、做到哪了，看侧栏就行。
+- **工作区由脚本删**：票合入后 `scripts/stage-dispatch.sh release` 连分支一起删掉票工作区；规格落地后 `scripts/close-self.sh` 先删完剩下的票工作区、再删规格工作区；停车的规格保留工作区；遗弃的由 keeper 每轮经 `scripts/sweep-worktrees.sh` 清扫。不要手工 `orca worktree rm` 还有票工作区的规格工作区——子工作区会变成孤儿（Orca 不级联也不拒绝）。
+- **每份规格一个 Orca Run**：规格会话在第 0 步 `orca orchestration run-create` 建自己那份（票的 worker 都向它汇报），启动这一波的 `launch-wave.sh --apply` 另建一份给这一波的规格会话。主会话、规格会话或任何协调终端关掉都不影响下层：worker 照常跑，`worker_done` 照常进 Run。在新终端里接管：
+
+  ```bash
+  cat ~/.cache/implement-spec-split/runs/<仓库>-<n>-<时间>/orca-run-id        # 某份规格的 Run（取该规格最新的运行目录）
+  grep '"run"' ~/.cache/implement-spec-split/launch/<owner>__<仓库>.json       # 某一波的 Run（启动状态文件）
+  orca orchestration run-use --id <run id> --json
+  ```
+
+  `run-use` 之后这个终端又是 Run 的协调者（`orca orchestration run-current` 能认出它），`stage-dispatch.sh` 的 `dispatch` / `wait` / `release` 重新可用；被替换掉的规格会话按技能的 Recovery 接着做。接管不重派任何东西——worker 本来就没停。
+
 默认值在 `SKILL.md` 的 "Config" 一节修改。
 
 **验证**
@@ -145,7 +159,7 @@ ln -s ~/.claude/skills/implement-spec-split/grill-map ~/.claude/skills/grill-map
 ln -s ~/.claude/skills/implement-spec-split/grill-router ~/.claude/skills/grill-router
 ```
 
-**用法**：`/find-next [--worker codex|pi|self]`，也可以直接问「下一步做什么」。想看全貌时用 `/find-next --list`，或者直接问「还有什么没做完」：列出全部待办（正在实现、未拆票、缺规格、待讨论的决策票、状态没收尾、散票），不派 worker。决定接下来开发什么时用 `/find-next --batch --workers 4`（`--workers` 是全机 GLM worker 总数，`--specs` 是同时开几份规格，默认 2）：缺规格的票和有规格未拆票的规格，每组由一个 codex worker 起草，你确认一轮后统一发布；最后总是给出全仓库可以开发的规格的编号顺序和每个会话要跑的命令，你确认后它在 Orca 里自动开 worktree 并启动会话（不在 Orca 里时把命令复制到各个 worktree 运行）。一波合入后再跑一次开下一波。同一仓库同一时间只在一个会话里跑 `--batch`。
+**用法**：`/find-next [--worker codex|self]`，也可以直接问「下一步做什么」。想看全貌时用 `/find-next --list`，或者直接问「还有什么没做完」：列出全部待办（正在实现、未拆票、缺规格、待讨论的决策票、状态没收尾、散票），不派 worker。决定接下来开发什么时用 `/find-next --batch --workers 4`（`--workers` 是全机 GLM worker 总数，`--specs` 是同时开几份规格，默认 2）：缺规格的票和有规格未拆票的规格，每组由一个 codex worker 起草，你确认一轮后统一发布；最后总是给出全仓库可以开发的规格的编号顺序和每个会话要跑的命令，你确认后它在 Orca 里自动开 worktree 并启动会话（不在 Orca 里时把命令复制到各个 worktree 运行）。一波合入后再跑一次开下一波。同一仓库同一时间只在一个会话里跑 `--batch`。
 
 - 默认 `codex`：机械扫描交给脚本（本地 markdown 跟踪器用 `find-next/scripts/scan.py`，GitHub 用 `scripts/pipeline-status.sh`），判断交给一个只读的 codex worker，会话里只读它不超过 15 行的结论。需要先完成阶段 2。
 - `self`：会话自己判断，不依赖 codex。

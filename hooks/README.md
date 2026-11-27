@@ -33,7 +33,7 @@ matcher 必须包含 `Bash`，flash 模式才能识别 `sed -i`、heredoc、`>` 
 
 对所有会话生效：不论是否 `FLASH_ORCHESTRATOR`、是否子代理，也不受 `allow-direct-edit` 例外和 `DELEGATE_GUARD_DISABLE` 影响，hook 都会拒绝在 Bash 里直接调用 `codex exec`。判定方式是先复用现有的 shell 分词（去掉 heredoc 正文），再看某个命令位置（命令开头，或 `|` `;` `&&` `||` `&` `(` 之后，跳过 `env`、`VAR=val` 前缀、`nohup`、`timeout <n>`、`time`）的可执行名 basename 是否为 `codex`，且其后的第一个非选项参数是否为 `exec`（例如 `codex exec …`、`codex -C dir exec …`；只认 `exec`，不认 `codex e`）。
 
-不拦 `codex --version`、`codex login status`、`codex-worker.sh`、`pi-worker.sh`、`selftest-codex.sh`，也不把字符串或 heredoc 正文里出现的 `codex` 字样当成命令。拒绝理由是裸 `codex exec` 没有卡死检测（2026-11-22 曾挂 10 小时）：headless 的 codex worker 一律通过 `~/.claude/skills/implement-spec-split/scripts/codex-worker.sh` 启动；票的实现由 `scripts/stage-dispatch.sh` 派发的 Orca worker 在自己的工作区里写（见下文「精简启动的 worker」），规格会话自己不写代码。hook 内部异常仍 fail open。
+不拦 `codex --version`、`codex login status`、`codex-worker.sh`、`selftest-codex.sh`，也不把字符串或 heredoc 正文里出现的 `codex` 字样当成命令。拒绝理由是裸 `codex exec` 没有卡死检测（2026-11-22 曾挂 10 小时）：headless 的 codex worker 一律通过 `~/.claude/skills/implement-spec-split/scripts/codex-worker.sh` 启动；票的实现由 `scripts/stage-dispatch.sh` 派发的 Orca worker 在自己的工作区里写（见下文「精简启动的 worker」），规格会话自己不写代码。hook 内部异常仍 fail open。
 
 ## 配置
 
