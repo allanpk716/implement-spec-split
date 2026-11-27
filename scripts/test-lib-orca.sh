@@ -230,6 +230,20 @@ call "$WORK/send-twice.out" orca_orchestration_send run_abc --run run_other --su
 expect_exit 64 "send with a second --run exits 64"
 expect_empty_log "send with a second --run never starts Orca" "$ORCA_LOG"
 
+# --- orchestration run-create: the Run a coordinator waits on --------------------
+
+reset_logs
+call "$WORK/run-create.out" orca_orchestration_run_create 'Design session handoff for repo'
+expect_exit 0 "run-create: exits 0"
+expect_same "$(printf 'orchestration\nARG run-create\nARG --objective\nARG Design session handoff for repo\nARG --json')" \
+  "$(cat "$ORCA_LOG")" "run-create: creates a Run with that objective, as JSON"
+
+reset_logs
+call "$WORK/run-create-empty.out" orca_orchestration_run_create ''
+expect_exit 64 "run-create without an objective exits 64"
+expect_has 'objective' "run-create without an objective says what is missing" "$WORK/run-create-empty.out.err"
+expect_empty_log "run-create without an objective never starts Orca" "$ORCA_LOG"
+
 # --- orchestration check: look by default, take only on request -----------------
 
 reset_logs
@@ -295,6 +309,62 @@ reset_logs
 call "$WORK/check-timeout-missing.out" orca_orchestration_check run_abc --timeout-ms
 expect_exit 64 "check --timeout-ms without a value exits 64"
 expect_empty_log "check --timeout-ms without a value never starts Orca" "$ORCA_LOG"
+
+# --- orchestration worker-start: adopting a terminal the caller opened ------------
+
+reset_logs
+call "$WORK/start.out" orca_orchestration_worker_start run_abc --terminal term_glm \
+    --spec-file "$WORK/prompt.txt" --timeout-ms 180000
+expect_exit 0 "worker-start: exits 0"
+expect_same "$(printf 'orchestration\nARG worker-start\nARG --run\nARG run_abc\nARG --terminal\nARG term_glm\nARG --spec-file\nARG %s\nARG --json\nARG --timeout-ms\nARG 180000' "$WORK/prompt.txt")" \
+  "$(cat "$ORCA_LOG")" \
+  "worker-start: names the Run, adopts the terminal and reads the spec from the file, as JSON"
+
+reset_logs
+call "$WORK/start-no-timeout.out" orca_orchestration_worker_start run_abc \
+    --terminal term_glm --spec-file "$WORK/prompt.txt"
+expect_exit 0 "worker-start without --timeout-ms: exits 0"
+expect_same "$(printf 'orchestration\nARG worker-start\nARG --run\nARG run_abc\nARG --terminal\nARG term_glm\nARG --spec-file\nARG %s\nARG --json' "$WORK/prompt.txt")" \
+  "$(cat "$ORCA_LOG")" "worker-start without --timeout-ms: no timeout argument at all"
+
+reset_logs
+call "$WORK/start-empty.out" orca_orchestration_worker_start '' --terminal term_glm \
+    --spec-file "$WORK/prompt.txt"
+expect_exit 64 "worker-start with an empty Run id exits 64"
+expect_has 'Run id' "worker-start with an empty Run id says what is missing" "$WORK/start-empty.out.err"
+expect_empty_log "worker-start with an empty Run id never starts Orca" "$ORCA_LOG"
+
+reset_logs
+call "$WORK/start-twice.out" orca_orchestration_worker_start run_abc --run run_other \
+    --terminal term_glm --spec-file "$WORK/prompt.txt"
+expect_exit 64 "worker-start with a second --run exits 64"
+expect_empty_log "worker-start with a second --run never starts Orca" "$ORCA_LOG"
+
+reset_logs
+call "$WORK/start-no-terminal.out" orca_orchestration_worker_start run_abc --spec-file "$WORK/prompt.txt"
+expect_exit 64 "worker-start without --terminal exits 64"
+expect_has 'terminal' "worker-start without --terminal says what is missing" "$WORK/start-no-terminal.out.err"
+expect_empty_log "worker-start without --terminal never starts Orca" "$ORCA_LOG"
+
+reset_logs
+call "$WORK/start-no-spec.out" orca_orchestration_worker_start run_abc --terminal term_glm
+expect_exit 64 "worker-start without --spec-file exits 64"
+expect_has 'spec' "worker-start without --spec-file says what is missing" "$WORK/start-no-spec.out.err"
+expect_empty_log "worker-start without --spec-file never starts Orca" "$ORCA_LOG"
+
+reset_logs
+call "$WORK/start-unknown.out" orca_orchestration_worker_start run_abc --terminal term_glm \
+    --spec-file "$WORK/prompt.txt" --model glm-5.4
+expect_exit 64 "worker-start with --model exits 64: the launcher already got the model on its command line"
+expect_has '--model' "worker-start with an option it does not offer names it" "$WORK/start-unknown.out.err"
+expect_empty_log "worker-start with an option it does not offer never starts Orca" "$ORCA_LOG"
+
+reset_logs
+call "$WORK/start-timeout-word.out" orca_orchestration_worker_start run_abc --terminal term_glm \
+    --spec-file "$WORK/prompt.txt" --timeout-ms soon
+expect_exit 64 "worker-start with a word for --timeout-ms exits 64"
+expect_has 'soon' "worker-start with a word for a timeout names it" "$WORK/start-timeout-word.out.err"
+expect_empty_log "worker-start with a word for a timeout never starts Orca" "$ORCA_LOG"
 
 # --- terminal handle: resolved again on every call -----------------------------
 
@@ -442,6 +512,63 @@ call "$WORK/terminal-create-empty.out" orca_terminal_create '/w/repo main' '' 'c
 expect_exit 64 "terminal create without a title exits 64"
 expect_has 'title' "terminal create without a title says what is missing" "$WORK/terminal-create-empty.out.err"
 expect_empty_log "terminal create without a title never starts Orca" "$ORCA_LOG"
+
+reset_logs
+call "$WORK/terminal-create-focus.out" orca_terminal_create '/w/repo main' 'Design session feature' \
+    'claude --dangerously-skip-permissions --model opus --effort high' --focus
+expect_exit 0 "terminal create --focus: exits 0"
+expect_same "$(printf 'terminal\nARG create\nARG --worktree\nARG path:/w/repo main\nARG --title\nARG Design session feature\nARG --command\nARG claude --dangerously-skip-permissions --model opus --effort high\nARG --focus\nARG --json')" \
+  "$(cat "$ORCA_LOG")" \
+  "terminal create --focus: opens the terminal and switches to it, as JSON"
+
+reset_logs
+call "$WORK/terminal-create-other.out" orca_terminal_create '/w/repo main' t 'claude' --keep-open
+expect_exit 64 "terminal create with an option it does not offer exits 64"
+expect_has '--keep-open' "terminal create with an unknown option names it" "$WORK/terminal-create-other.out.err"
+expect_empty_log "terminal create with an unknown option never starts Orca" "$ORCA_LOG"
+
+# --- terminal switch and wait: how design-session.sh follows a Design session ----
+
+reset_logs
+call "$WORK/switch.out" orca_terminal_switch term_orchestrator
+expect_exit 0 "terminal switch: exits 0"
+expect_same "$(printf 'terminal\nARG switch\nARG --terminal\nARG term_orchestrator')" "$(cat "$ORCA_LOG")" \
+  "terminal switch: brings that terminal's tab to the front"
+
+reset_logs
+call "$WORK/switch-empty.out" orca_terminal_switch ''
+expect_exit 64 "terminal switch without a handle exits 64"
+expect_has 'handle' "terminal switch without a handle says what is missing" "$WORK/switch-empty.out.err"
+expect_empty_log "terminal switch without a handle never starts Orca" "$ORCA_LOG"
+
+reset_logs
+call "$WORK/wait.out" orca_terminal_wait term_glm exit 7200000
+expect_exit 0 "terminal wait: exits 0"
+expect_same "$(printf 'terminal\nARG wait\nARG --terminal\nARG term_glm\nARG --for\nARG exit\nARG --timeout-ms\nARG 7200000\nARG --json')" \
+  "$(cat "$ORCA_LOG")" "terminal wait: one blocking wait for the condition, with its timeout, as JSON"
+
+reset_logs
+call "$WORK/wait-empty.out" orca_terminal_wait '' exit 1000
+expect_exit 64 "terminal wait without a handle exits 64"
+expect_has 'handle' "terminal wait without a handle says what is missing" "$WORK/wait-empty.out.err"
+expect_empty_log "terminal wait without a handle never starts Orca" "$ORCA_LOG"
+
+reset_logs
+call "$WORK/wait-condition.out" orca_terminal_wait term_glm idle 1000
+expect_exit 64 "terminal wait with a condition it does not offer exits 64"
+expect_has 'idle' "terminal wait with an unknown condition names it" "$WORK/wait-condition.out.err"
+expect_empty_log "terminal wait with an unknown condition never starts Orca" "$ORCA_LOG"
+
+reset_logs
+call "$WORK/wait-timeout-word.out" orca_terminal_wait term_glm exit soon
+expect_exit 64 "terminal wait with a word for a timeout exits 64"
+expect_has 'soon' "terminal wait with a word for a timeout names it" "$WORK/wait-timeout-word.out.err"
+expect_empty_log "terminal wait with a word for a timeout never starts Orca" "$ORCA_LOG"
+
+reset_logs
+call "$WORK/wait-timeout-none.out" orca_terminal_wait term_glm exit
+expect_exit 64 "terminal wait without a timeout exits 64: a wait always carries one"
+expect_empty_log "terminal wait without a timeout never starts Orca" "$ORCA_LOG"
 
 printf '\n%d passed, %d failed\n' "$PASSED" "$FAILED"
 [ "$FAILED" -eq 0 ]
