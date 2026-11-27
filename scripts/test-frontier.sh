@@ -71,9 +71,10 @@ run_frontier() {
   RUN_EXIT=$?
 }
 
-FIXTURE=$FIXTURE node > /dev/null <<'NODE'
+FIXTURE=$FIXTURE WORK=$WORK node > /dev/null <<'NODE'
 const fs = require('fs');
 const directory = process.env.FIXTURE;
+const work = process.env.WORK;
 
 function sub(total, completed = total) {
   return {total, completed, percent_completed: total ? Math.round(100 * completed / total) : 0};
@@ -92,35 +93,96 @@ function issue(number, title, state, labels, body = '', children = sub(0)) {
   };
 }
 
+const ready = [
+  issue(12, 'Ready ticket', 'open', []),
+  issue(13, 'Ready after closed blocker', 'open', []),
+];
+const openBlocker = issue(20, 'Open blocker', 'open', []);
+const closedBlocker = issue(21, 'Closed blocker', 'closed', []);
+
 const issues = [
   issue(10, 'Test spec', 'open', [], '## Problem Statement\nTest spec.', sub(5, 0)),
   issue(11, 'Blocked ticket', 'open', []),
-  issue(12, 'Ready ticket', 'open', []),
-  issue(13, 'Ready after closed blocker', 'open', []),
+  ...ready,
   issue(14, '【搁置】Shelved ticket', 'open', []),
   issue(15, 'Human ticket', 'open', ['ready-for-human']),
-  issue(20, 'Open blocker', 'open', []),
-  issue(21, 'Closed blocker', 'closed', []),
+  openBlocker,
+  closedBlocker,
 ];
 
 const responses = {
   'sub-10': [
     issue(11, 'Blocked ticket', 'open', []),
-    issue(12, 'Ready ticket', 'open', []),
-    issue(13, 'Ready after closed blocker', 'open', []),
+    ...ready,
     issue(14, '【搁置】Shelved ticket', 'open', []),
     issue(15, 'Human ticket', 'open', ['ready-for-human']),
   ],
-  'blocker-11': [issue(20, 'Open blocker', 'open', []), issue(21, 'Closed blocker', 'closed', [])],
+  'blocker-11': [openBlocker, closedBlocker],
   'blocker-12': [],
-  'blocker-13': [issue(21, 'Closed blocker', 'closed', [])],
-  'blocker-14': [issue(20, 'Open blocker', 'open', [])],
+  'blocker-13': [closedBlocker],
+  'blocker-14': [openBlocker],
   'blocker-15': [],
 };
 
 fs.writeFileSync(`${directory}/issues.json`, JSON.stringify(issues, null, 2));
 for (const [name, value] of Object.entries(responses)) {
   fs.writeFileSync(`${directory}/${name}.json`, JSON.stringify(value, null, 2));
+}
+
+// One fixture directory per `shared-counter` scenario, run by run_counter_case below.
+const scenarios = {
+  // Two labelled tickets with no blocker: only #16 is released, #17 and #18 wait for it.
+  'counter-two-open': {
+    tickets: [
+      issue(16, 'Counter ticket one', 'open', ['shared-counter']),
+      issue(17, 'Counter ticket two', 'open', ['shared-counter']),
+      issue(18, 'Counter ticket three', 'open', ['shared-counter']),
+    ],
+    blockers: {16: [], 17: [], 18: []},
+  },
+  // #16 merged and closed: the next labelled ticket is released on the next run.
+  'counter-smaller-closed': {
+    tickets: [
+      issue(16, 'Counter ticket one', 'closed', ['shared-counter']),
+      issue(17, 'Counter ticket two', 'open', ['shared-counter']),
+    ],
+    blockers: {17: []},
+  },
+  // A labelled ticket with an open blocker stays in `# blocked` for that reason
+  // and takes no slot, so #17 is the one released.
+  'counter-blocked-takes-no-slot': {
+    tickets: [
+      issue(16, 'Counter ticket one', 'open', ['shared-counter']),
+      issue(17, 'Counter ticket two', 'open', ['shared-counter']),
+    ],
+    blockers: {16: [20], 17: []},
+  },
+  // A labelled ticket that is human or shelved takes no slot either.
+  'counter-human-shelved-take-no-slot': {
+    tickets: [
+      issue(16, 'Human counter ticket', 'open', ['ready-for-human', 'shared-counter']),
+      issue(17, '【搁置】Shelved counter ticket', 'open', ['shared-counter']),
+      issue(18, 'Counter ticket three', 'open', ['shared-counter']),
+    ],
+    blockers: {16: [], 17: [], 18: []},
+  },
+};
+
+const extraIssues = [openBlocker, closedBlocker];
+const readyBlockers = {12: [], 13: [21]};
+const blockerIssues = {20: openBlocker, 21: closedBlocker};
+for (const [name, scenario] of Object.entries(scenarios)) {
+  const scenarioDirectory = `${work}/${name}`;
+  fs.mkdirSync(scenarioDirectory, {recursive: true});
+  const children = [...ready, ...scenario.tickets.filter((ticket) => ticket.state === 'open')];
+  const spec = issue(10, 'Test spec', 'open', [], '## Problem Statement\nTest spec.', sub(children.length, 0));
+  const scenarioIssues = [spec, ...ready, ...scenario.tickets, ...extraIssues];
+  fs.writeFileSync(`${scenarioDirectory}/issues.json`, JSON.stringify(scenarioIssues, null, 2));
+  fs.writeFileSync(`${scenarioDirectory}/sub-10.json`, JSON.stringify(children, null, 2));
+  for (const [number, list] of Object.entries({...readyBlockers, ...scenario.blockers})) {
+    const blockers = list.map((value) => blockerIssues[value]);
+    fs.writeFileSync(`${scenarioDirectory}/blocker-${number}.json`, JSON.stringify(blockers, null, 2));
+  }
 }
 NODE
 
@@ -217,90 +279,6 @@ fi
 # Each scenario is the Spec's own fixture directory, swapped in by overriding
 # FIXTURE_DIR on the run_frontier call. Expected outputs are hand-written, not
 # recomputed.
-WORK=$WORK node > /dev/null <<'NODE'
-const fs = require('fs');
-const work = process.env.WORK;
-
-function sub(total, completed = total) {
-  return {total, completed, percent_completed: total ? Math.round(100 * completed / total) : 0};
-}
-
-function issue(number, title, state, labels, body = '', children = sub(0)) {
-  return {
-    number,
-    title,
-    state,
-    labels: labels.map((name) => ({name})),
-    body,
-    sub_issues_summary: children,
-    issue_dependencies_summary: {blocked_by: 0, total_blocked_by: 0, blocking: 0, total_blocking: 0},
-    assignees: [],
-  };
-}
-
-const ready = [
-  issue(12, 'Ready ticket', 'open', []),
-  issue(13, 'Ready after closed blocker', 'open', []),
-];
-const readyBlockers = {12: [], 13: [21]};
-const openBlocker = issue(20, 'Open blocker', 'open', []);
-const closedBlocker = issue(21, 'Closed blocker', 'closed', []);
-
-const scenarios = {
-  // Two labelled tickets with no blocker: only #16 is released, #17 and #18 wait for it.
-  'counter-two-open': {
-    tickets: [
-      issue(16, 'Counter ticket one', 'open', ['shared-counter']),
-      issue(17, 'Counter ticket two', 'open', ['shared-counter']),
-      issue(18, 'Counter ticket three', 'open', ['shared-counter']),
-    ],
-    blockers: {16: [], 17: [], 18: []},
-  },
-  // #16 merged and closed: the next labelled ticket is released on the next run.
-  'counter-smaller-closed': {
-    tickets: [
-      issue(16, 'Counter ticket one', 'closed', ['shared-counter']),
-      issue(17, 'Counter ticket two', 'open', ['shared-counter']),
-    ],
-    blockers: {17: []},
-  },
-  // A labelled ticket with an open blocker stays in `# blocked` for that reason
-  // and takes no slot, so #17 is the one released.
-  'counter-blocked-takes-no-slot': {
-    tickets: [
-      issue(16, 'Counter ticket one', 'open', ['shared-counter']),
-      issue(17, 'Counter ticket two', 'open', ['shared-counter']),
-    ],
-    blockers: {16: [20], 17: []},
-  },
-  // A labelled ticket that is human or shelved takes no slot either.
-  'counter-human-shelved-take-no-slot': {
-    tickets: [
-      issue(16, 'Human counter ticket', 'open', ['ready-for-human', 'shared-counter']),
-      issue(17, '【搁置】Shelved counter ticket', 'open', ['shared-counter']),
-      issue(18, 'Counter ticket three', 'open', ['shared-counter']),
-    ],
-    blockers: {16: [], 17: [], 18: []},
-  },
-};
-
-const extraIssues = [openBlocker, closedBlocker];
-const blockerIssues = {20: openBlocker, 21: closedBlocker};
-for (const [name, scenario] of Object.entries(scenarios)) {
-  const directory = `${work}/${name}`;
-  fs.mkdirSync(directory, {recursive: true});
-  const children = [...ready, ...scenario.tickets.filter((ticket) => ticket.state === 'open')];
-  const spec = issue(10, 'Test spec', 'open', [], '## Problem Statement\nTest spec.', sub(children.length, 0));
-  const issues = [spec, ...ready, ...scenario.tickets, ...extraIssues];
-  fs.writeFileSync(`${directory}/issues.json`, JSON.stringify(issues, null, 2));
-  fs.writeFileSync(`${directory}/sub-10.json`, JSON.stringify(children, null, 2));
-  for (const [number, list] of Object.entries({...readyBlockers, ...scenario.blockers})) {
-    const blockers = list.map((value) => blockerIssues[value]);
-    fs.writeFileSync(`${directory}/blocker-${number}.json`, JSON.stringify(blockers, null, 2));
-  }
-}
-NODE
-
 run_counter_case() {
   scenario=$1
   output=$2
