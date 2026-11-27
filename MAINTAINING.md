@@ -346,6 +346,7 @@
      - （codex）跑完没有残留的 codex/node 进程，`progress.sh` 的输出和 `status.json` 一致；
      - 最后的报告里列出了每次运行的目录，并且标注了是否在高峰期。
   5. 用 `--impl agent`（或别名 `--impl sonnet`）再跑一遍。这次重点看：实现类的子代理确实用了 agent 模型（`--agent-model`，默认 `IMPLEMENT_MODEL`），而且全程没有调用 `pi-worker.sh`；给了 `--parallel N` 时实现类子代理的并发确实不超过 N。
+- **票合入脚本**：`bash scripts/test-merge-ticket.sh`。用临时 git 仓库（带 bare origin，集成分支与票分支各在独立 worktree）和按参数传入的假测试命令测 `merge-ticket.sh`：干净合入是 `--no-ff` merge commit、测试命令在集成分支工作区里经 `bash -c` 跑、输出原样透出、退出 0；集成分支在票分出后动过但无冲突照样合入（带 env 前缀和 `&&` 的复合命令照跑）；有冲突退出 3、stderr 列出冲突文件、HEAD 不变、工作区干净且无冲突标记、不跑测试；测试失败（含测试命令本身跑不起来）退出 4、测试输出留在 stdout/stderr、merge commit 保留；前置门退出 2、不合并不跑测试——票分支已合入或没有提交、票工作区有未跟踪 / 已修改文件、票分支不存在或没挂在任何 worktree、集成分支工作区不干净、worktree 不在集成分支上 / detached HEAD / 是子目录 / 不是 git 目录；缺参、未知参数、空 `--test`、重复选项退出 64，`--help` 退出 0，不访问网络、不碰 Orca。
 
 ## 安装方式
 
