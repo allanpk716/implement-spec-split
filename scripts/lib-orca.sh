@@ -11,12 +11,13 @@
 #
 # Three groups:
 #   worktree       orca_repo_list, orca_worktree_list, orca_worktree_create,
-#                  orca_worktree_rm
+#                  orca_worktree_create_child, orca_worktree_rm
 #   terminal       orca_terminal_list, orca_terminal_by_pane,
 #                  orca_terminal_create, orca_terminal_switch, orca_terminal_wait,
 #                  orca_terminal_close, orca_terminal_send
 #   orchestration  orca_orchestration_run_create, orca_orchestration_send,
-#                  orca_orchestration_worker_start, orca_orchestration_check
+#                  orca_orchestration_check, orca_orchestration_worker_start,
+#                  orca_orchestration_worker_show, orca_orchestration_worker_release
 # plus the two top-level Orca commands that belong to no group, orca_status and
 # orca_agent_launch.
 #
@@ -102,6 +103,23 @@ orca_worktree_create() { # repo_path name branch base_branch issue agent prompt
 orca_worktree_rm() { # path: removes that worktree, forced, with its branch
   orca_require_value "${1:-}" 'a worktree path' worktree_rm
   orca_run worktree rm --worktree "path:$1" --force --delete-branch
+}
+
+orca_worktree_create_child() { # repo_path name branch base_branch issue parent_worktree
+  # Creates the named worktree on a new branch off the base branch, filed under
+  # the issue and hanging under the parent worktree (the Spec worktree of a
+  # Ticket), and starts no agent in it: the caller opens the terminal itself
+  # (stage-dispatch.sh). --base-branch is the caller's to name, since a child
+  # does not inherit its parent's branch (docs/orca-smoke-2026-11-27.md, A4).
+  # Prints the JSON result.
+  orca_require_value "${1:-}" 'a repository path' worktree_create_child
+  orca_require_value "${2:-}" 'a worktree name' worktree_create_child
+  orca_require_value "${3:-}" 'a branch' worktree_create_child
+  orca_require_value "${4:-}" 'a base branch' worktree_create_child
+  orca_require_value "${5:-}" 'an issue number' worktree_create_child
+  orca_require_value "${6:-}" 'a parent worktree' worktree_create_child
+  orca_run worktree create --repo "path:$1" --name "$2" --branch "$3" \
+    --base-branch "$4" --issue "$5" --parent-worktree "path:$6" --json
 }
 
 # --- terminal -----------------------------------------------------------------
@@ -231,13 +249,25 @@ orca_orchestration_send() { # run_id <orca send arguments...>
 # handoff); anything else must not take messages an agent still needs to see.
 # Waiting is one blocking call: --timeout-ms <n> becomes --wait --timeout-ms
 # <n>. There is no bare --wait (it could block forever) and no polling here.
-orca_orchestration_check() { # run_id [--take] [--timeout-ms <positive integer>]
-  local run=${1:-} take=0 timeout_ms=
+# --types <type,...> narrows what wakes the wait (worker_done alone, for a
+# dispatch waiting on its worker); the batch Orca returns is the whole FIFO
+# either way.
+orca_orchestration_check() { # run_id [--take] [--types <type,...>] [--timeout-ms <positive integer>]
+  local run=${1:-} take=0 timeout_ms= types=
   orca_require_run "$run" orchestration_check
   shift
   while [ $# -gt 0 ]; do
     case "$1" in
       --take) take=1; shift ;;
+      --types)
+        if [ $# -lt 2 ] || [ -z "$2" ] || [[ "$2" == -* ]]; then
+          printf 'lib-orca: orchestration_check: --types needs a comma-separated list of message types, got [%s]\n' \
+            "${2:-}" >&2
+          exit 64
+        fi
+        types=$2
+        shift 2
+        ;;
       --timeout-ms)
         if [ $# -lt 2 ] || ! [[ "$2" =~ ^[1-9][0-9]*$ ]]; then
           printf 'lib-orca: orchestration_check: --timeout-ms needs a positive integer of milliseconds, got [%s]\n' \
@@ -254,6 +284,7 @@ orca_orchestration_check() { # run_id [--take] [--timeout-ms <positive integer>]
     esac
   done
   local args=(orchestration check --run "$run" --json)
+  [ -z "$types" ] || args+=(--types "$types")
   [ "$take" -eq 1 ] || args+=(--peek)
   [ -n "$timeout_ms" ] && args+=(--wait --timeout-ms "$timeout_ms")
   orca_run "${args[@]}"
@@ -318,4 +349,21 @@ orca_orchestration_worker_start() { # run_id --terminal <handle> --spec-file <pa
   local args=(orchestration worker-start --run "$run" --terminal "$handle" --spec-file "$spec" --json)
   [ -z "$timeout_ms" ] || args+=(--timeout-ms "$timeout_ms")
   orca_run "${args[@]}"
+}
+
+# The two calls that address one dispatch by its id. Neither names a Run: a
+# dispatch belongs to exactly one, and the id is what worker-start returned.
+
+orca_orchestration_worker_show() { # dispatch_id: prints `worker-show --json` (state, stage, liveness)
+  orca_require_value "${1:-}" 'a dispatch id' worker_show
+  orca_run orchestration worker-show --dispatch "$1" --json
+}
+
+# Releases a settled worker: closes the agent terminal Orca opened and archives
+# the transcript. Orca refuses one that is not settled and exits non-zero; a
+# terminal the caller opened itself is retained and must be closed by the caller
+# with orca_terminal_close; the worktree and branch are never touched.
+orca_orchestration_worker_release() { # dispatch_id: prints the JSON receipt
+  orca_require_value "${1:-}" 'a dispatch id' worker_release
+  orca_run orchestration worker-release --dispatch "$1" --json
 }
