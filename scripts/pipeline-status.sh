@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 # List unfinished work in the wayfinder -> to-spec -> to-tickets -> implement pipeline.
+#
+# --order plans the next wave. --apart A:B keeps two Specs out of the same wave,
+# and keeps the idle side out of the new wave while the other is in flight
+# (running, or interrupted and resumed first): a Spec resumed first runs beside
+# the new wave, so "not in the same wave" alone would not keep the pair apart.
+# --next-wave reuses the pairs recorded in the launch state through this order.
 
 set -u
 
@@ -22,7 +28,9 @@ tracker documentation instead.
   --order                Print a deterministic development order for implementable Specs.
   --parallel K           With --order, plan for K concurrent Specs (default: 2).
   --workers N            With --order, split N total workers across K concurrent Specs.
-  --apart A:B            With --order, keep A and B out of the same wave. Repeatable.
+  --apart A:B            With --order, keep A and B out of the same wave, and keep the idle
+                         side out of the new wave while the other is in flight (running, or
+                         interrupted and resumed first). Repeatable.
   --cmd-suffix STR       With --order, append STR to each command (default: --impl codex).
   --json                 With --order, print the same plan as JSON instead of a text table.
   --graph                Print the full relation graph as JSON for the Progress board (closed
@@ -1525,16 +1533,28 @@ if (mode === 'order') {
     .filter((number) => states.get(number) === 'running')
     .sort((a, b) => a - b);
   const capacity = Math.max(0, parallel - running.length - interrupted.length);
+  // A running Spec and one resumed first both run beside the new wave, so an
+  // --apart pair naming either holds its other side out of that wave too.
+  const inFlight = new Set([...running, ...interrupted]);
+  function inFlightApartFrom(number) {
+    const held = [];
+    for (const [left, right] of apartPairs) {
+      if (left === number && right !== number && inFlight.has(right)) held.push(right);
+      if (right === number && left !== number && inFlight.has(left)) held.push(left);
+    }
+    return [...new Set(held)].sort((a, b) => a - b);
+  }
   const wave = [];
   const waveSet = new Set();
   for (const number of orderedNumbers) {
     if (wave.length >= capacity) break;
     const record = records.get(number);
     if (record.complete) continue;
-    const conflicts = apartPairs.some(([left, right]) => (
-      (left === number && waveSet.has(right)) ||
-      (right === number && waveSet.has(left))
-    ));
+    const conflicts = inFlightApartFrom(number).length > 0 ||
+      apartPairs.some(([left, right]) => (
+        (left === number && waveSet.has(right)) ||
+        (right === number && waveSet.has(left))
+      ));
     if (conflicts) continue;
     wave.push(number);
     waveSet.add(number);
@@ -1553,12 +1573,14 @@ if (mode === 'order') {
       .map((value) => `#${value}`);
     const extras = [...record.extraBlockers].sort((a, b) => a - b)
       .map((value) => `#${value}`);
+    const heldFrom = inFlightApartFrom(number).map((value) => `#${value}`);
     const parts = [];
     if (dependencies.length > 0) {
       const prefix = firstWave && record.partial ? '部分等' : '等';
       parts.push(`${prefix} ${dependencies.join(' ')}`);
     }
     if (extras.length > 0) parts.push(`另需 ${extras.join(' ')}`);
+    if (heldFrom.length > 0) parts.push(`避开 ${heldFrom.join(' ')}`);
     return parts.length > 0 ? `（${parts.join('；')}）` : '';
   }
 
