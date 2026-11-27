@@ -21,7 +21,7 @@ The coding-agent CLI program an External worker runs in (codex or pi); it decide
 _Avoid_: codex worker / pi worker when the model matters, agent CLI
 
 **Worker model**:
-The model an External worker's harness talks to (GLM-5.4 today); chosen separately from the harness, so one harness can serve different models and one model can run under different harnesses.
+The model an External worker's harness talks to (GLM-5.4 today); chosen separately from the harness, so one harness can serve different models and one model can run under different harnesses. On the codex path it is the user's own global switch (`/worker-model`, backed by `scripts/worker-model.sh` and stored in `~/.claude/state/worker-model`; default glm-5.4, ADR 0003): every `codex-worker.sh` fresh run reads it, so a Run that is already executing changes model at its next dispatch, while a Resume keeps the model of its first segment. v1 switches the codex path only (pi and the `agent` backend are not switched). Separate from the Judgment model, which has its own switch.
 _Avoid_: implement model, backend model
 
 **Implement backend**:
@@ -30,7 +30,7 @@ _Avoid_: implement model (GLM is not a model the session can select)
 
 **Agent model**:
 The model the `agent` backend passes explicitly on every Agent call, selected per run with `--agent-model <sonnet|opus|haiku|fable>`; defaults to `IMPLEMENT_MODEL` (sonnet). In a GLM proxy environment an explicit `opus` may actually run GLM-5.4.
-_Avoid_: implement model (ambiguous with CODEX_MODEL/GLM_MODEL)
+_Avoid_: implement model (ambiguous with harness-specific settings such as `GLM_MODEL`)
 
 **Implementing roles**:
 The exploration, implementer, merger and fix roles; everything except review.
@@ -47,7 +47,7 @@ A non-interactive judgment pass run outside the Orchestrator's session that read
 _Avoid_: strong-model review (ambiguous in a GLM session, where "opus" maps to GLM)
 
 **Judgment model**:
-The model that stands in for Opus in each of two roles: `review` (every Opus review) and `grill` (Design sessions). Each role is Opus, or the substitute the user names with the global switch (`/judgment-model`, backed by `scripts/judgment-model.sh` and stored in `~/.claude/state/judgment-model`), today only glm-5.4; one command sets both roles. Both wrappers read their own role on every call, so a session that is already executing changes model at its next review or new Design session.
+The model that stands in for Opus in each of two roles: `review` (every Opus review) and `grill` (Design sessions). Each role is Opus, or the substitute the user names with its own global switch (`/judgment-model`, backed by `scripts/judgment-model.sh` and stored in `~/.claude/state/judgment-model`), today only glm-5.4; one command sets both roles. Both wrappers read their own role on every call, so a session that is already executing changes model at its next review or new Design session. Separate from the Worker model, which has its own switch (`/worker-model`).
 _Avoid_: strong model, fallback model (the switch is the user's decision, never an automatic downgrade)
 
 ## Work

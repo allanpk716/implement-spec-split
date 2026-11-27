@@ -12,7 +12,7 @@ See docs/setup.md, stage 3.
 
 ---
 
-<!-- opus-codex-division: v1 -->
+<!-- opus-codex-division: v2 -->
 ## Opus / codex division of labour (cost control)
 
 The native Claude Code subscription quota is not enough. Spend Opus quota only on judgment; delegate high-volume, low-judgment execution to codex workers: `codex exec` runs over <GLM endpoint description>, which has plentiful quota, through the `codex-worker.sh` wrapper script. The wrapper can show progress and automatically detect a stalled worker.
@@ -44,6 +44,8 @@ Invocation (all scripts are in `~/.claude/skills/implement-spec-split/scripts/`)
    Add `--skill <tdd-skill-directory>` when TDD is needed. Add `--read-only` for investigation tasks: once the workspace changes, `status.json` marks `read_only_violation` with exit code 8 (`violation`); discard that report, and I inspect and handle the changes.
 
    MCP is off by default: add `--mcp all` for research that needs web search, `--mcp ssh-manager` for remote-server work (several names may be comma-separated); omit it for coding tasks.
+
+   The Worker model (default glm-5.4) is decided by the user's global switch `/worker-model` (`scripts/worker-model.sh`, ADR 0003); do not pass `--model` to the wrapper — it is overridden while the switch is off the default.
 3. When it finishes, read `<run-directory>/status.json` and `result.md`.
 
 **Briefs must be self-contained**: state the goal, relevant file paths and line numbers, root-cause analysis, the desired approach to changes, acceptance criteria (which tests/commands to run), and out-of-scope areas. The worker cannot read our conversation. The Brief must also include two rules:

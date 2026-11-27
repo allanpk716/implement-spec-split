@@ -133,11 +133,12 @@ After a wayfinder discussion leaves you with a pile of tickets and no idea which
 
 Maps and tickets marked shelved (搁置) are skipped. The implementation stage is not scanned; that is `/implement-spec-split --status`.
 
-**Install**: symlink it into the skills directory (on Windows use `mklink /J`, or copy). Symlink the judgment-model switch command the same way; `/judgment-model` is described in Stage 4:
+**Install**: symlink it into the skills directory (on Windows use `mklink /J`, or copy). Symlink the two model switch commands the same way (`/judgment-model` for the judgment model, `/worker-model` for the Worker model), both described in Stage 4:
 
 ```bash
 ln -s ~/.claude/skills/implement-spec-split/find-next ~/.claude/skills/find-next
 ln -s ~/.claude/skills/implement-spec-split/judgment-model ~/.claude/skills/judgment-model
+ln -s ~/.claude/skills/implement-spec-split/worker-model ~/.claude/skills/worker-model
 ```
 
 **Use**: `/find-next [--worker codex|pi|self]`, or just ask "what's next". For the whole picture use `/find-next --list` (or ask "what is left"): it lists every to-do (in progress, needs tickets, needs a spec, open decisions, unfinished bookkeeping, loose issues) without a worker. To write every missing spec at once use `/find-next --batch`: codex workers draft a spec plus its tickets per group, you confirm once, then they are published and you get a start order for `/implement-spec-split`.
@@ -173,7 +174,7 @@ This makes `codex exec` do work with GLM. Both Stage 1's `--impl codex` and Stag
    requires_openai_auth = true
    ```
 
-   The provider name must be `custom`: the wrappers pin the provider and model with `-c model_provider=custom -m glm-5.4`. If the model is not `glm-5.4`, add `--model <id>` when calling `codex-worker.sh`; in Stage 1, change `CODEX_MODEL` in the Config section of `SKILL.md`. Do not put the key in this repository.
+   The provider name must be `custom`: the wrappers pin the provider and model with `-c model_provider=custom -m <model>`, where `<model>` is the Worker model switch's effective value (`/worker-model`, default `glm-5.4`; see "The Worker model switch" in Stage 4); the `model` key in `config.toml` has no effect on a worker. To change the model use `/worker-model`, and do not pass `--model` to `codex-worker.sh` (it is overridden while the switch is off the default). Do not put the key in this repository.
 
    If you follow Zhipu's official Codex recipe (direct to `open.bigmodel.cn`), its provider is named `ZAI`: rename both `model_provider = "ZAI"` and `[model_providers.ZAI]` to `custom`; `name = "ZAI"` can stay (codex 0.164+ requires a non-empty `name`). Otherwise the worker fails with `model_providers.custom: provider name must not be empty`. Support for other provider names is tracked in issue #6.
 
@@ -439,6 +440,35 @@ $S opus                                             # both back
 - Design sessions read the switch only when they are **opened** (the `grill` role): after the switch, `/grill-feature` and `/grill-map` open a glm-5.4 session (an Orca terminal running `claude-glm`, which makes the mock pages itself instead of handing them to a worker); the handoff and the wait are unchanged.
 - A Design session that is already open on Opus cannot change model. To carry on in the same conversation, run `claude-glm --resume` in a terminal of that repository and pick it from the list; the handoff contract is still in that conversation, and the run directory and the wait are unchanged. If the wait timed out, continue it with the `design-session.sh --attach <run dir>` command printed on stderr.
 - Nothing switches by itself: an Opus review that fails on quota (exit code 3) still parks as `quota`, and a parked spec is still resumed by keeper after its 可恢复时间. Switching is your decision.
+
+**The Worker model switch: changing the model codex workers run on**
+
+The model codex workers (External workers) run on is decided by a second user switch, independent of the judgment model switch ([ADR 0003](adr/0003-worker-model-hot-switch.md)). It governs every call that goes through `codex-worker.sh`, flash or not: the implementing roles of `--impl codex` Runs, the codex workers find-next dispatches (research, decision and drafting), and the everyday hand-offs of Stage 3. The default is `glm-5.4`; it can be switched to `glm-5.3` or `glm-5.3-flash`. Type it in any Claude Code session (the thin `worker-model/` skill, symlinked as above):
+
+```text
+/worker-model                                   # show the current status
+/worker-model use glm-5.3                       # switch to glm-5.3, until you switch back
+/worker-model use glm-5.3-flash until 7:00 tomorrow  # switch to flash, back to the default by itself then
+/worker-model use glm-5.3 for 5 hours           # for the next 5 hours
+/worker-model use glm-5.4                       # reset: back to the default, --model is honoured again
+```
+
+Outside a session the script does the same:
+
+```bash
+S=~/.claude/skills/implement-spec-split/scripts/worker-model.sh
+$S use glm-5.3                                            # switch; no time means it stays
+$S use glm-5.3-flash --until 2026-11-28T07:00:00+08:00   # back to the default by itself at that time
+$S use glm-5.3-flash --for 5h                             # or: for the next 5 hours (30m, 2d12h also work)
+$S                                                       # show the current status
+$S use glm-5.4                                           # reset
+```
+
+- The setting is `~/.claude/state/worker-model` and applies to every repository and session on this machine. `codex-worker.sh` reads it every time it starts a worker, so **a Run or find-next session that is already running needs no restart**: its next dispatch uses the new model; a worker already running is unchanged, and a Resume keeps its first segment's model.
+- Priority: the switch (when off the default) > an explicit `--model` from the caller > the default. While the switch is in effect `--model` is overridden, and the wrapper writes one line, `Worker model 开关生效：…`, to stderr and to the run directory's `stderr.log` (the model, any overridden `--model`, the expiry, whether the model is in the worker catalog, and the reset command); `status.json`'s `model` records the model actually used. In everyday use, do not pass `--model` to the wrapper.
+- `glm-5.3-flash` has not been verified on the codex path and is not in the `models.json` model catalog. Before switching to it, verify: `scripts/selftest-codex.sh --only L1 --model glm-5.3-flash`; when the error points at the model or the catalog, add an entry to `~/.codex/models.json` (`input_modalities: ["text"]`, `supported_reasoning_levels` as for `glm-5.3`, `context_window` at 1M for now) and rerun `scripts/setup-worker-home.sh` (editing `~/.codex-worker/models.json` directly is overwritten by the next rerun; before rerunning, check the top-level `model_provider` in `~/.codex/config.toml`, which is copied into the worker home as is). `/worker-model use glm-5.3-flash` only warns, never refuses, when the catalog lacks the model. Passing L1 only proves the endpoint accepts the model; it does not prove the `high` reasoning level or the 1M context work.
+- Not covered: `--impl pi`, `--impl agent` (including the default agent backend in a flash environment, whose subagent models the launcher decides), keeper and run-phase. In a flash environment only an explicit `--impl codex` Run with `WORKER_ALLOW_FLASH=1` goes through the wrapper and the switch. On a machine that never calls `codex-worker.sh` (train3060) the switch is inert; do not install the `/worker-model` symlink there.
+- Only the user switches: the thin skill sets `disable-model-invocation`, so a session cannot invoke it; that is a soft constraint (a session can still run the script through Bash), the same as `/judgment-model`. When both switches are off their defaults, an unattended Run still lands automatically, and the landing report and the final report both state both switches.
 
 **The flash boundary**
 

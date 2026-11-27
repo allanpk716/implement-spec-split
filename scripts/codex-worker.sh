@@ -4,13 +4,22 @@
 #
 # Usage:
 #   codex-worker.sh --cwd <worktree> --brief <file> --run-dir <dir>
-#                    [--model glm-5.4] [--time-limit 1800] [--idle-timeout 600]
+#                    [--model <id>] [--time-limit 1800] [--idle-timeout 600]
 #                    [--retries 2] [--retry-wait 60]
 #                    [--thinking <low|medium|high|xhigh>] [--skill <dir>]...
 #                    [--add-dir <dir>]...
 #                    [--read-only] [--mcp <名字[,名字…]|all>]... [--no-slot]
 #   codex-worker.sh --resume --run-dir <dir> [--time-limit ..] [--idle-timeout ..]
 #                    [--retries ..] [--retry-wait ..] [--no-slot]
+#
+# The model (-m) is the Worker model switch's effective value (scripts/worker-model.sh,
+# ~/.claude/state/worker-model; ADR 0003). On every fresh run the wrapper reads the
+# switch: when it is not on the default the switch wins over --model, otherwise an
+# explicit --model is used, otherwise the switch's default. While the switch is in
+# effect one line on stderr (also appended to the run dir's stderr.log) names the
+# model, any overridden --model, the expiry and the reset command. status.json.model
+# and resume.json.model record the model actually used. A Resume does not read the
+# switch: it keeps the model the first segment saved.
 #
 # Contract and semantics match pi-worker.sh. --time-limit is one segment's hard budget:
 # it spans every attempt and retry wait since the segment started, and each attempt gets
@@ -99,7 +108,9 @@ set -u
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 
-MODEL="glm-5.4"
+# The default model is defined only in worker-model.sh (DEFAULT_MODEL); a fresh run
+# asks for it in resolve_worker_model below. An explicit --model fills this in first.
+MODEL=""
 TIME_LIMIT=1800
 IDLE_TIMEOUT=600
 RETRIES=2
@@ -565,12 +576,61 @@ resolve_worker_home() {
   WORKER_HOME_WARNING="no worker home found; falling back to the legacy CODEX_HOME. Run scripts/setup-worker-home.sh to create a worker home."
 }
 
+# One line to the caller's stderr and to the run dir's stderr.log: a background
+# Bash's stderr is fleeting, the run dir is what a person reads later.
+emit_notice() {
+  echo "codex-worker: $*" >&2
+  if [ -w "$STDERR" ]; then
+    echo "codex-worker: $*" >> "$STDERR"
+  fi
+}
+
 emit_worker_home_warning() {
   [ -n "$WORKER_HOME_WARNING" ] || return 0
-  echo "codex-worker: warning: $WORKER_HOME_WARNING" >&2
-  if [ -w "$STDERR" ]; then
-    echo "codex-worker: warning: $WORKER_HOME_WARNING" >> "$STDERR"
+  emit_notice "warning: $WORKER_HOME_WARNING"
+}
+
+format_until() {
+  node -e '
+    const date = new Date(Number(process.argv[1]) * 1000);
+    const pad = (n) => String(n).padStart(2, "0");
+    const offset = -date.getTimezoneOffset();
+    const sign = offset >= 0 ? "+" : "-";
+    const zone = sign + pad(Math.floor(Math.abs(offset) / 60)) + ":" + pad(Math.abs(offset) % 60);
+    console.log(`${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+      `${pad(date.getHours())}:${pad(date.getMinutes())} ${zone}`);
+  ' "$1" 2>/dev/null || printf '@%s' "$1"
+}
+
+# Resolves the Worker model of a fresh run (ADR 0003). Priority: the switch when it
+# is not on the default, then an explicit --model, then the switch's default. The
+# switch script is a hard dependency on purpose: when it prints nothing the run
+# exits 64 here rather than start codex with an empty -m.
+resolve_worker_model() {
+  local switch_model switch_default switch_until catalog detail=""
+  switch_model=$("$HERE/worker-model.sh" --print 2>/dev/null || true)
+  [ -n "$switch_model" ] || die "worker-model.sh --print returned nothing"
+  switch_default=$("$HERE/worker-model.sh" --print default 2>/dev/null || true)
+  [ -n "$switch_default" ] || die "worker-model.sh --print default returned nothing"
+  if [ "$switch_model" = "$switch_default" ]; then
+    $GOT_MODEL || MODEL="$switch_model"
+    return 0
   fi
+  switch_until=$("$HERE/worker-model.sh" --print until 2>/dev/null || true)
+  if $GOT_MODEL; then detail="覆盖 --model $MODEL"; fi
+  case "$switch_until" in
+    ''|*[!0-9]*) ;;
+    *) detail="${detail:+${detail}；}到期 $(format_until "$switch_until")" ;;
+  esac
+  # The catalog warning of `use` appears once, when the switch is set; a switch with
+  # a two-day expiry fails every dispatch two days later with only a model name in
+  # stderr. Say here, per dispatch, when the model is not in the worker catalog. Information
+  # only: the switch is the user's decision and is applied regardless.
+  catalog=$(CODEX_WORKER_HOME="$WORKER_HOME" "$HERE/worker-model.sh" --print catalog 2>/dev/null || true)
+  if [ "$catalog" = no ]; then detail="${detail:+${detail}；}不在 worker 目录，L1 未验"; fi
+  detail="${detail:+${detail}；}复位 /worker-model use $switch_default"
+  emit_notice "Worker model 开关生效：${switch_model}（${detail}）"
+  MODEL="$switch_model"
 }
 
 write_state() {
@@ -713,6 +773,7 @@ else
   if $READ_ONLY; then workspace_fingerprint "$CWD" "$RUN_DIR/fingerprint-start.json" || die "--read-only: could not fingerprint $CWD"; fi
   SEGMENTS=1; ATTEMPT=0
   CODEX_HOME_FOR_CODEX="$(winpath "$WORKER_HOME")"
+  resolve_worker_model
   write_state
   emit_worker_home_warning
 fi

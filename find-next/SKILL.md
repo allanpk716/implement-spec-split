@@ -72,6 +72,7 @@ description: 默认进入推进模式：循环扫描当前 GitHub 仓库的 wayf
      `pi` 用同目录的 `pi-worker.sh`。结束后只读 `status.json`、`result.md`（worker 的最终回复，≤15 行结论），结论是 to-spec 或 to-tickets 时再读 `digest.md`。
    - `--worker agent`：照旧建同一个运行目录、存 `scan.json`/`scan.txt`、用 [templates/brief-judge.md](templates/brief-judge.md) 填好 `brief.md`；但不运行 codex-worker.sh，而是开一个 Agent 子代理，`model` 显式传 `--agent-model` 的值（默认 `sonnet`），prompt 固定为：「读 <运行目录>/brief.md 并照做，把最终报告写到 <运行目录>/result.md，同时作为你的最终回复」。Brief 里「wrapper 会把最终回复存成 result.md，不要自己写」这类话是对 codex worker 说的，agent 模式下以 prompt 为准：子代理自己写 `result.md`。结束后照旧读 `result.md`（结论是 to-spec 或 to-tickets 时再读 `digest.md`）；没有 `status.json`，以子代理的返回为准。
    - worker 出错时按全局 CLAUDE.md 的处理表：`auth` / `quota` / `transient` → 告诉用户，问他们是等一会儿、换 `pi`，还是 `--worker self`，**不自动降级**；`stalled` / `error` → 把失败原因补进 Brief，换新运行目录重跑一次；`violation` → 报告作废，把 `changed_paths` 交给用户。`agent` 子代理没有 `status.json`：返回为空或明确报错时，把失败原因补进 Brief、换新运行目录重派一次，再失败就停下报告；不自动改用 codex 或 self。
+   - **Worker model 开关**：本技能所有 `codex-worker.sh` 调用（判断、调研、决策票、任务票、散票分流、批量起草）用的模型由用户的全局开关 `/worker-model` 决定（`scripts/worker-model.sh`，默认 glm-5.4，ADR 0003），命令里不传 `--model`。wrapper 每次派发时读开关，非默认时在 stderr 报一行并写进运行目录的 `stderr.log`，`status.json.model` 记实际用的型号。worker 因型号不可用而失败时，报告里点名 `status.json.model`、开关当前值（运行 `scripts/worker-model.sh` 查看）和复位命令 `/worker-model use glm-5.4`；不要自己改开关。
 4. **交接**：结论是 to-spec 或 to-tickets 时，那两个技能只能综合当前对话，所以要先把材料放进上下文。`self` 模式读地图和已关闭票的 Resolution；worker 模式读 `digest.md`。然后用几句话讲清要点，提示用户敲命令。结论是决策票或地图迷雾待毕业时，只报名字和命令；迷雾地图的命令是 `/find-next --batch <地图号>`。其他散票提示推进模式会分流；时机票只提示条件，用户明确说「开 #N」才继续。
 
    flash 模式下，本步要推荐的讨论入口按「flash 模式」一节替换。
@@ -374,6 +375,7 @@ flash 模式下，Opus review 与 Design session 的失败处理见「flash 模�
 - **第 1 波启动**：仍按第 10 步的原有命令试运行并 `--apply`；flash 环境下 `launch-wave.sh` 自己选择 OpenClaude 规格会话，并在未显式指定实现后端时默认 agent 后端，技能层不重复实现该规则。
 - **Opus review 不可用**：退出码为 3（额度或 429）时按 quota 停车，其余非 0 退出码仍按原规则停车并说明（退出码含义见 scripts/opus-review.sh 头注释）；不自动重试、不降级到 GLM、不改由 flash 自己审读。Design session 脚本失败同样停下并转述错误。
 - **判断模型开关**：`/judgment-model`（只由用户敲，背后是 `~/.claude/skills/implement-spec-split/scripts/judgment-model.sh`）是用户设置的全局开关（GLOSSARY.md），分两个角色：`review` 决定 Opus review 用 `opus`（默认）还是 `glm-5.4`，`grill` 决定 Design session 讨论；一条命令可以同时设两样。`opus-review.sh` 和 `design-session.sh` 每次被调用时自己读它，正在推进的运行不用重开，下一次审查就是新模型。`opus-review.sh` 的 stderr 说明本次用了 glm-5.4 时，findings 首行会有 `判断模型：glm-5.4…`：照常按 findings 执行，汇报结论时注明「本次审读由 glm-5.4 代替 Opus」。不要自己改开关，也不要把切换当成降级而拒收 findings。
+- **Worker model 开关**：`/worker-model` 只管 `codex-worker.sh`；flash 环境默认走 agent 后端的运行不经过它，开关对那些运行无效（子代理型号由启动器决定）。只有显式 `--worker codex`（带 `WORKER_ALLOW_FLASH=1`）的派发才按开关。不要自己改开关。
 
 ## 建议模式输出（适合手机阅读）
 

@@ -79,6 +79,14 @@ ln -s ~/.claude/skills/implement-spec-split/judgment-model ~/.claude/skills/judg
 
 `/judgment-model` shows the global judgment-model switch. It has two roles, `grill` (Design session discussions) and `review` (every Opus review), each on `opus` or `glm-5.4`: `/judgment-model grill=opus review=glm-5.4` sets both in one command, a time such as `到 <time>` or `<duration>` makes the switched roles return to opus by themselves, and `/judgment-model opus` switches both back. The wrapper only runs `scripts/judgment-model.sh` and relays its two status lines.
 
+Install the worker-model switch command the same way:
+
+```bash
+ln -s ~/.claude/skills/implement-spec-split/worker-model ~/.claude/skills/worker-model
+```
+
+`/worker-model` shows the global Worker model switch (ADR 0003), independent of `/judgment-model`: the model every `codex-worker.sh` External worker runs on — `--impl codex` Runs, find-next's codex workers and the everyday hand-offs alike — on `glm-5.4` (the default), `glm-5.3` or `glm-5.3-flash`. `/worker-model use glm-5.3-flash --for 5h` switches for a while (`--until <time>` works too), `/worker-model use glm-5.4` is the reset. `codex-worker.sh` reads the switch on every fresh run, so a Run that is already executing changes model at its next dispatch; a Resume keeps its first segment's model, and an explicit `--model` is overridden while the switch is off the default (the wrapper says so on stderr and records the real model in `status.json`). The `agent` backend and pi are not switched. The wrapper only runs `scripts/worker-model.sh` and relays its status line.
+
 `/grill-feature <idea>` opens a Design session for a small feature; `/grill-map <map or idea>` does the same for a large-module wayfinder map. Each wrapper blocks until `scripts/design-session.sh` receives `handoff.md`.
 Run `scripts/grill-status.sh` from a managed repository (or pass its directory) to list each Design session topic with spec and ticket progress; it is read-only and does not spend tokens. `scripts/completion-report.sh` turns the same design-session records plus git/GitHub state into a Chinese completion conclusion — current topic progress, repository-wide status, a release recommendation with a suggested version (it never tags or pushes), tickets a release would unfreeze, and interrupted grills.
 

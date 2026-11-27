@@ -18,6 +18,8 @@ export CODEX_WORKER_CODEX="$FAKE"
 export CODEX_WORKER_SKIP_PREFLIGHT=1
 export CODEX_WORKER_POLL=1
 export CODEX_WORKER_HOME="$TEST_ROOT/codex-home"
+# Keep the real Worker model switch out of the test: these workers pass no --model.
+export ISS_WORKER_MODEL_FILE="$TEST_ROOT/no-worker-model"
 export FAKE_CODEX_SCENARIO=slot-hold
 
 PASS=0

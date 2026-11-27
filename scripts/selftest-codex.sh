@@ -1,24 +1,33 @@
 #!/usr/bin/env bash
 # Self-test for the codex External worker backend.
 #
-# Usage: scripts/selftest-codex.sh [--model glm-5.4] [--only L1|V1|V2|V3]
+# Usage: scripts/selftest-codex.sh [--model <id>] [--only L1|V1|V2|V3]
 #
 # V1 uses a deterministic fake codex and costs no tokens. V2 uses real codex-cli
 # against local mock Responses servers and costs no GLM tokens. L1 and V3 use real GLM
 # through the author's Ferryman proxy and do cost tokens. Scratch dirs live under
 # ~/.cache/implement-spec-split-selftest-codex/<timestamp>-<pid> and are removed only after a
 # successful token-free level; a failed level keeps its artifacts for diagnosis.
+#
+# The model under test follows the Worker model switch rules (ADR 0003):
+#   1. --model given: that model is tested, and the switch is kept out of the test
+#      (ISS_WORKER_MODEL_FILE points at no file), so the explicit value is what codex gets.
+#   2. no --model: the model is the switch's effective value (worker-model.sh --print) and
+#      the switch is not isolated, so step 0's L1 preflight tests what a worker really runs on.
+#   3. V1, V2 and V3 always keep the wrapper away from the real switch file; the V1 switch
+#      cases point ISS_WORKER_MODEL_FILE at a scratch file one call at a time.
 
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 WORKER="$HERE/codex-worker.sh"
 PROGRESS="$HERE/progress.sh"
 FAKE="$HERE/testing/fake-codex.sh"
-MODEL="glm-5.4"
+MODEL=""
+GOT_MODEL=false
 ONLY=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --model) MODEL="$2"; shift 2 ;;
+    --model) MODEL="$2"; GOT_MODEL=true; shift 2 ;;
     --only) ONLY="$2"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 64 ;;
   esac
@@ -26,6 +35,15 @@ done
 case "${ONLY:-all}" in L1|V1|V2|V3|all) ;; *) echo "--only must be L1, V1, V2, or V3" >&2; exit 64 ;; esac
 
 ROOT="$HOME/.cache/implement-spec-split-selftest-codex/$(date +%Y%m%d-%H%M%S)-$$"
+if $GOT_MODEL; then
+  # Rule 1: test the explicit model, isolated from the machine's real switch.
+  export ISS_WORKER_MODEL_FILE="$ROOT/no-worker-model"
+else
+  # Rule 2: no --model tests the switch's effective model. The default itself is defined
+  # only in worker-model.sh; an empty answer must not become `--model ""`.
+  MODEL=$("$HERE/worker-model.sh" --print 2>/dev/null || true)
+  [ -n "$MODEL" ] || { echo "worker-model.sh --print returned nothing" >&2; exit 64; }
+fi
 mkdir -p "$ROOT"
 export ISS_STATE_DIR="$ROOT/worker-state"
 FAILS=0
@@ -131,6 +149,8 @@ command = "gamma"
 command = "unsafe"
 EOF
   export CODEX_WORKER_HOME CODEX_WORKER_CODEX="$FAKE" CODEX_WORKER_SKIP_PREFLIGHT=1 CODEX_WORKER_POLL=1
+  # Rule 3: every V1 case but the switch cases below runs with the switch isolated.
+  export ISS_WORKER_MODEL_FILE="$ROOT/no-worker-model"
   export FAKE_CODEX_PID_LOG="$ROOT/fake-pids.log"
   export FAKE_CODEX_HOME_LOG="$ROOT/fake-codex-homes.log"
   BRIEF="$ROOT/brief.md"
@@ -445,7 +465,7 @@ EOF
   check "bad resume keeps finished progress state" bash -c "'$PROGRESS' '$ROOT/ok-run' | grep -q '^state: finished: ok'"
 
   GRAND_PID_FILE="$ROOT/grandchild.pid"
-  FAKE_CODEX_GRANDCHILD_MARKER="$GRAND_PID_FILE" FAKE_CODEX_SCENARIO=grandchild "$WORKER" --cwd "$ROOT/v1" --brief "$BRIEF" --run-dir "$ROOT/grand-run" --retries 0 --time-limit 60 --idle-timeout 6 >/dev/null
+  FAKE_CODEX_GRANDCHILD_MARKER="$GRAND_PID_FILE" FAKE_CODEX_SCENARIO=grandchild "$WORKER" --cwd "$ROOT/v1" --brief "$BRIEF" --run-dir "$ROOT/grand-run" --model "$MODEL" --retries 0 --time-limit 60 --idle-timeout 6 >/dev/null
   GR=$?; check "grandchild case exit code (got $GR)" test "$GR" -eq 7
   GP=$(cat "$GRAND_PID_FILE" 2>/dev/null); sleep 2
   if alive "$GP"; then fail "grandchild survived tree kill"; else pass "grandchild killed with tree"; fi
@@ -462,7 +482,7 @@ EOF
   check "commentary has no salvage error" bash -c "! grep -q 'final reply' '$ROOT/commentary-run/status.json'"
   check "commentary result_file is null" test "$(json "$ROOT/commentary-run/status.json" result_file)" = null
 
-  FAKE_CODEX_SCENARIO=busy-forever "$WORKER" --cwd "$ROOT/v1" --brief "$BRIEF" --run-dir "$ROOT/dead-run" --retries 0 --time-limit 120 --idle-timeout 20 >/dev/null &
+  FAKE_CODEX_SCENARIO=busy-forever "$WORKER" --cwd "$ROOT/v1" --brief "$BRIEF" --run-dir "$ROOT/dead-run" --model "$MODEL" --retries 0 --time-limit 120 --idle-timeout 20 >/dev/null &
   WPID=$!
   for _ in 1 2 3 4 5; do [ -s "$ROOT/dead-run/pid" ] && break; sleep 1; done
   WWIN=$(awk '{print $1}' "$ROOT/dead-run/pid" 2>/dev/null || echo 0)
@@ -496,10 +516,139 @@ EOF
   printf '%s %s\n' "$REUSE_WIN" "$REUSE_TICKS" > "$ROOT/pid-reuse-run/pid"
   check "live pid with matching start ticks is running" bash -c "'$PROGRESS' '$ROOT/pid-reuse-run' | grep -q '^state: running'"
   kill_tree_test "$REUSE_WIN"
+
+  # Worker model switch (ADR 0003). Each case points ISS_WORKER_MODEL_FILE at a scratch
+  # file for one wrapper call; every other V1 case above stays isolated.
+  SWITCH_DIR="$ROOT/switch"; mkdir -p "$SWITCH_DIR"
+  SWITCH_FILE="$SWITCH_DIR/worker-model"
+  switch_run() {
+    # <name> <switch file> <content: '-' leaves the file alone, '' removes it> [wrapper args]
+    local name="$1" file="$2" state="$3"; shift 3
+    if [ "$state" = - ]; then :; elif [ -z "$state" ]; then rm -f "$file"; else printf '%s\n' "$state" > "$file"; fi
+    env ISS_WORKER_MODEL_FILE="$file" FAKE_CODEX_SCENARIO="${SWITCH_SCENARIO:-ok}" FAKE_CODEX_ARGS_LOG="$SWITCH_DIR/$name.args.jsonl" \
+      "$WORKER" --cwd "$ROOT/v1" --brief "$BRIEF" --run-dir "$SWITCH_DIR/$name" --retries 0 --time-limit 120 --idle-timeout 20 "$@" \
+      >"$SWITCH_DIR/$name.out" 2>"$SWITCH_DIR/$name.err"
+    SWITCH_EXIT=$?
+  }
+  switch_m() {
+    node -e 'const a=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8").trim().split(/\r?\n/).pop());const i=a.indexOf("-m");process.stdout.write(i<0?"<none>":a[i+1])' \
+      "$(codex_home_for_platform "$SWITCH_DIR/$1/fake-codex-args.jsonl")"
+  }
+  switch_lines() { local n; n=$(grep -Fc 'Worker model 开关生效' "$1" 2>/dev/null) || n=0; printf '%s\n' "$n"; }
+
+  # The switch, off the default, overrides an explicit --model and says so on stderr.
+  switch_run override "$SWITCH_FILE" $'worker=glm-5.3\nworker.until=' --model glm-5.4
+  SO=$SWITCH_EXIT
+  check "switch overrides --model (exit $SO)" test "$SO" -eq 0 -a "$(switch_m override)" = glm-5.3
+  check "switch line appears exactly once on stderr" test "$(switch_lines "$SWITCH_DIR/override.err")" = 1
+  check "switch line names the model and the overridden --model" bash -c "grep -Fq '开关生效：glm-5.3' '$SWITCH_DIR/override.err' && grep -Fq '覆盖 --model glm-5.4' '$SWITCH_DIR/override.err' && grep -Fq '复位 /worker-model use glm-5.4' '$SWITCH_DIR/override.err'"
+  check "switch line is in the run dir's stderr.log exactly once" test "$(switch_lines "$SWITCH_DIR/override/stderr.log")" = 1
+  check "status.json and resume.json record the switched model" test "$(json "$SWITCH_DIR/override/status.json" model)" = glm-5.3 -a "$(json "$SWITCH_DIR/override/resume.json" model)" = glm-5.3
+  switch_run override-no-model "$SWITCH_FILE" $'worker=glm-5.3\nworker.until='
+  SO=$SWITCH_EXIT
+  check "switch applies without --model (exit $SO)" test "$SO" -eq 0 -a "$(switch_m override-no-model)" = glm-5.3
+  check "switch line without --model has no override part" bash -c "test \"\$(grep -Fc 'Worker model 开关生效' '$SWITCH_DIR/override-no-model.err')\" -eq 1 && ! grep -Fq '覆盖 --model' '$SWITCH_DIR/override-no-model.err'"
+  switch_run override-until "$SWITCH_FILE" $'worker=glm-5.3\nworker.until=4102444800'
+  SO=$SWITCH_EXIT
+  check "switch with an expiry runs the switched model (exit $SO)" test "$SO" -eq 0 -a "$(switch_m override-until)" = glm-5.3
+  check "switch line shows the expiry and the reset command" bash -c "grep -Eq '到期 [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} [+-][0-9]{2}:[0-9]{2}；复位 /worker-model use glm-5.4' '$SWITCH_DIR/override-until.err'"
+
+  # An expired switch, a broken file and an unknown model all mean the default again.
+  switch_run expired "$SWITCH_FILE" $'worker=glm-5.3\nworker.until=1000000000'
+  SO=$SWITCH_EXIT
+  check "expired switch runs on the default (exit $SO)" test "$SO" -eq 0 -a "$(switch_m expired)" = glm-5.4
+  check "expired switch prints no switch line" test "$(switch_lines "$SWITCH_DIR/expired.err")" = 0 -a "$(switch_lines "$SWITCH_DIR/expired/stderr.log")" = 0
+  check "expired switch records the default model" test "$(json "$SWITCH_DIR/expired/status.json" model)" = glm-5.4
+  switch_run broken "$SWITCH_FILE" $'garbage\nnot key value\n'
+  SO=$SWITCH_EXIT
+  check "broken switch file runs on the default (exit $SO)" test "$SO" -eq 0 -a "$(switch_m broken)" = glm-5.4
+  check "broken switch file prints no switch line" test "$(switch_lines "$SWITCH_DIR/broken.err")" = 0
+  switch_run unknown "$SWITCH_FILE" $'worker=gpt-x\nworker.until='
+  SO=$SWITCH_EXIT
+  check "unknown switch model runs on the default (exit $SO)" test "$SO" -eq 0 -a "$(switch_m unknown)" = glm-5.4 -a "$(switch_lines "$SWITCH_DIR/unknown.err")" = 0
+
+  # Once the switch is back on the default, or has no file, --model is honoured again.
+  switch_run reset "$SWITCH_FILE" $'worker=glm-5.4\nworker.until=' --model glm-5.3
+  SO=$SWITCH_EXIT
+  check "reset switch honours --model again (exit $SO)" test "$SO" -eq 0 -a "$(switch_m reset)" = glm-5.3
+  check "reset switch prints no switch line" test "$(switch_lines "$SWITCH_DIR/reset.err")" = 0
+  switch_run nofile-model "$SWITCH_FILE" '' --model glm-5.3
+  SO=$SWITCH_EXIT
+  check "missing switch file honours --model (exit $SO)" test "$SO" -eq 0 -a "$(switch_m nofile-model)" = glm-5.3 -a "$(switch_lines "$SWITCH_DIR/nofile-model.err")" = 0
+  switch_run nofile "$SWITCH_FILE" ''
+  SO=$SWITCH_EXIT
+  check "missing switch file runs on the default (exit $SO)" test "$SO" -eq 0 -a "$(switch_m nofile)" = glm-5.4 -a "$(switch_lines "$SWITCH_DIR/nofile.err")" = 0
+  check "status.json fields are unchanged without the switch" node -e '
+    const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    const want = ["status", "error", "attempts", "segments", "duration_s", "model", "session_id", "cwd", "run_dir", "base_head", "head",
+      "new_commits", "dirty", "result_file", "slot", "queued_seconds"].sort();
+    process.exit(JSON.stringify(Object.keys(s).sort()) === JSON.stringify(want) ? 0 : 1);
+  ' "$(codex_home_for_platform "$SWITCH_DIR/nofile/status.json")"
+  check "resume.json fields are unchanged without the switch" node -e '
+    const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    const want = ["cwd", "model", "skills", "thinking", "add_dirs", "session_id", "base_head", "segments", "attempts", "codex_home", "read_only", "mcp"].sort();
+    process.exit(JSON.stringify(Object.keys(s).sort()) === JSON.stringify(want) ? 0 : 1);
+  ' "$(codex_home_for_platform "$SWITCH_DIR/nofile/resume.json")"
+
+  # Rule 1: with --model given this selftest isolates the switch, so the explicit model is
+  # what codex gets even on a machine whose switch is on another model.
+  printf 'worker=glm-5.3-flash\nworker.until=\n' > "$SWITCH_DIR/outer.state"
+  switch_run rule1 "$ROOT/no-worker-model" - --model glm-5.3
+  SO=$SWITCH_EXIT
+  check "rule 1: an explicit --model is isolated from a switched machine (exit $SO)" test "$SO" -eq 0 -a "$(switch_m rule1)" = glm-5.3 -a "$(switch_lines "$SWITCH_DIR/rule1.err")" = 0
+  # Rule 2: without --model the model under test is the switch's value and the wrapper reads the switch.
+  OUTER_MODEL=$(ISS_WORKER_MODEL_FILE="$SWITCH_DIR/outer.state" "$HERE/worker-model.sh" --print 2>/dev/null || true)
+  switch_run rule2a "$SWITCH_DIR/outer.state" - --model "$OUTER_MODEL"
+  SO=$SWITCH_EXIT
+  check "rule 2: without --model the switch's model is tested (exit $SO, print $OUTER_MODEL, -m $(switch_m rule2a))" test "$SO" -eq 0 -a "$OUTER_MODEL" = glm-5.3-flash -a "$(switch_m rule2a)" = glm-5.3-flash
+  printf 'worker=glm-5.4\nworker.until=\n' > "$SWITCH_DIR/outer-default.state"
+  OUTER_MODEL=$(ISS_WORKER_MODEL_FILE="$SWITCH_DIR/outer-default.state" "$HERE/worker-model.sh" --print 2>/dev/null || true)
+  switch_run rule2b "$SWITCH_DIR/outer-default.state" - --model "$OUTER_MODEL"
+  SO=$SWITCH_EXIT
+  check "rule 2: a default switch tests the default (exit $SO, -m $(switch_m rule2b))" test "$SO" -eq 0 -a "$OUTER_MODEL" = glm-5.4 -a "$(switch_m rule2b)" = glm-5.4
+
+  # A Resume keeps the first segment's model and prints no switch line, even when the
+  # switch has since moved to another model.
+  SWITCH_SCENARIO=busy-forever
+  switch_run resume "$SWITCH_FILE" $'worker=glm-5.3\nworker.until=' --time-limit 6
+  SWITCH_SCENARIO=ok
+  RS=$SWITCH_EXIT
+  check "switched first segment times out (got $RS)" test "$RS" -eq 5
+  check "first segment saved the switched model" test "$(json "$SWITCH_DIR/resume/resume.json" model)" = glm-5.3
+  printf 'worker=glm-5.3-flash\nworker.until=\n' > "$SWITCH_FILE"
+  env ISS_WORKER_MODEL_FILE="$SWITCH_FILE" FAKE_CODEX_SCENARIO=ok FAKE_CODEX_ARGS_LOG="$SWITCH_DIR/resume-resumed.args.jsonl" \
+    "$WORKER" --resume --run-dir "$SWITCH_DIR/resume" --retries 0 --time-limit 30 --idle-timeout 20 >"$SWITCH_DIR/resume-resumed.out" 2>"$SWITCH_DIR/resume-resumed.err"
+  RR=$?
+  check "resume under another switch value exit code (got $RR)" test "$RR" -eq 0
+  check "resume keeps the first segment's model" test "$(switch_m resume)" = glm-5.3
+  check "resume prints no switch line" test "$(switch_lines "$SWITCH_DIR/resume-resumed.err")" = 0
+
+  # Rule 3: every other V1 case ran codex on $MODEL, whatever a machine's switch says.
+  check "every existing V1 case ran codex on \$MODEL ($MODEL)" node -e '
+    const fs = require("fs"), path = require("path");
+    const root = process.argv[1], want = process.argv[2], skip = process.argv[3];
+    const bad = [];
+    const walk = d => {
+      for (const e of fs.readdirSync(d, {withFileTypes: true})) {
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) { if (p !== skip) walk(p); continue; }
+        if (e.name !== "fake-codex-args.jsonl") continue;
+        for (const line of fs.readFileSync(p, "utf8").split("\n").filter(Boolean)) {
+          const a = JSON.parse(line), i = a.indexOf("-m");
+          if (a[i + 1] !== want) bad.push(p + ": " + a[i + 1]);
+        }
+      }
+    };
+    walk(root);
+    if (bad.length) console.error(bad.join("\n"));
+    process.exit(bad.length ? 1 : 0);
+  ' "$(codex_home_for_platform "$ROOT")" "$MODEL" "$(codex_home_for_platform "$SWITCH_DIR")"
 fi
 
 if [ -z "$ONLY" ] || [ "$ONLY" = V2 ]; then
   echo "V2 real codex + mock provider"
+  # Rule 3: V2 passes --model "$MODEL" explicitly and stays isolated from the real switch.
+  export ISS_WORKER_MODEL_FILE="$ROOT/no-worker-model"
   V2_HOME="$ROOT/v2-home"; write_config "$V2_HOME" "http://127.0.0.1:1/v1"
   V2_WORKER_HOME="$V2_HOME"
   if command -v cygpath >/dev/null 2>&1; then V2_WORKER_HOME=$(cygpath -m "$V2_HOME"); fi
@@ -544,6 +693,8 @@ fi
 
 if [ -z "$ONLY" ] || [ "$ONLY" = V3 ]; then
   echo "V3 real GLM integration (not run by agent)"
+  # V3 always passes --model "$MODEL" explicitly, so it is isolated from the real switch like rule 1.
+  export ISS_WORKER_MODEL_FILE="$ROOT/no-worker-model"
   TDD_SKILL=$(ls -d "$HOME"/.claude/plugins/cache/mattpocock/mattpocock-skills/*/skills/*/tdd 2>/dev/null | sort -V | tail -1)
   [ -n "$TDD_SKILL" ] || TDD_SKILL="$HOME/.agents/skills/tdd"
   [ -d "$TDD_SKILL" ] || fail "tdd skill not found"

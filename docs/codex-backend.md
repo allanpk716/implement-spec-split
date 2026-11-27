@@ -30,6 +30,7 @@
 | E15 | 实现 codex-worker.sh 时（bypass 模式，2026-10-17），codex 想清理测试目录 | **bypass 下仍有内置命令策略**：`rm -rf`、`Remove-Item -Recurse` 被拒（"blocked by policy"）。codex 会自己换写法或放弃清理，不会卡住。Brief 里不要要求它递归删目录，清理由 wrapper/调用方做 |
 | E16 | 同一任务，33 分钟、212 行事件 | 外层 `wc -l < events.jsonl` 偶发 `No such file or directory`（Windows 上读正在写的文件）。监控读事件文件必须容错（codex-worker.sh 用 node 读、出错按 0 处理） |
 | E14 | hooks：开着 vs `--disable hooks`，进程监控 | 两种情况下都没观察到 Ferryman/Orca 钩子进程，`codex exec` 0.163 实际上不触发它们。注意本会话里 `ORCA_PANE_KEY` 是设了的，若钩子触发会把 worker 的状态报到当前 Orca 面板 |
+| E17 | `-m glm-5.3-flash -c model_provider=custom`（2026-11-27，Worker model 开关的允许值之一，ADR 0003） | **未验证**：flash 不在 `~/.codex-worker/models.json` 目录里（目录只有 glm-5.4、glm-5.3、glm-5-turbo）。验证顺序：先 `scripts/selftest-codex.sh --only L1 --model glm-5.3-flash`；报错指向型号或目录时，在 `~/.codex/models.json` 补条目（`input_modalities: ["text"]`、`supported_reasoning_levels` 照 glm-5.3、`context_window` 暂按 1M 并标试验值），重跑 `scripts/setup-worker-home.sh`，再测。即使通过，也只证明端点接受该型号：`model_reasoning_effort = "high"` 是否被接受、1M 上下文是否可用，未验证 |
 
 ### 失败路径（假服务器 / 真 GLM 杀进程）
 
@@ -92,7 +93,7 @@
 3. **启动方式：子 shell 里 `exec node <codex.js> exec ...`**，或者 `exec codex`。wrapper 和 codex 之间**绝不能插入 MSYS 程序**（`timeout`、不带 exec 的 sh），否则杀进程树会失效（F9）。杀进程沿用 pi-worker 的 `kill_tree`。
 4. **stdin 必须是会结束的输入。** Brief 用 `< brief.md` 喂给 stdin，prompt 参数写 `-`；或者 stdin 用 `</dev/null`、Brief 走参数。绝不能继承一个开着的管道（F8）。
 5. **固定参数：**
-   - `-m <model> -c model_provider=custom`：防止 CC Switch 改了 config 后悄悄换模型；
+   - `-m <model> -c model_provider=custom`：防止 CC Switch 改了 config 后悄悄换模型；（2026-11-27 注记，ADR 0003：`<model>` 是 Worker model 开关 `scripts/worker-model.sh` 的生效值，默认 glm-5.4；wrapper 每次新起 worker 时读开关，仍每次显式传、不读 config。开关非默认时它压过调用方显式传的 `--model`，并在 stderr 说明。）
    - `-c 'project_doc_fallback_filenames=["CLAUDE.md"]'`；
    - `--disable hooks`；
    - `-c model_providers.custom.stream_idle_timeout_ms=120000 -c model_providers.custom.stream_max_retries=2`：把 F6 压到约 6 分钟以内；

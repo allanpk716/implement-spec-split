@@ -10,7 +10,7 @@ See docs/setup.md, stage 3.
 
 ---
 
-<!-- opus-codex-division: v1 -->
+<!-- opus-codex-division: v2 -->
 ## Opus / codex 分工（控制费用）
 
 CC 原生套餐用量不够。Opus 的额度只花在判断上，体量大而判断少的执行交给 codex worker：`codex exec` 走 <GLM 代理说明>，额度充足，由 wrapper 脚本 `codex-worker.sh` 运行。这个 wrapper 能看到进度、会自动判断卡死。
@@ -42,6 +42,8 @@ CC 原生套餐用量不够。Opus 的额度只花在判断上，体量大而判
    需要 TDD 时加 `--skill <tdd 技能目录>`。调查任务加 `--read-only`：工作区一旦有改动，`status.json` 会标记 `read_only_violation`，退出码为 8（`violation`），这次报告作废，改动要由我检查后处理。
 
    MCP 默认关闭：要联网搜索的调研任务加 `--mcp all`，要操作远程服务器的加 `--mcp ssh-manager`（可写多个服务名，逗号分隔）；写代码的任务不加。
+
+   Worker model（默认 glm-5.4）由用户的全局开关 `/worker-model` 决定（`scripts/worker-model.sh`，ADR 0003）；不要给 wrapper 传 `--model`，开关非默认时它会被覆盖。
 3. 结束后读 `<运行目录>/status.json` 和 `result.md`。
 
 **Brief 要自包含**：写清目标、相关文件路径与行号、根因分析、期望的修改方式、验收标准（要跑哪些测试/命令）、不要碰的范围。worker 读不到我们的对话。Brief 里还要写两条：

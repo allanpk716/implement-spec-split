@@ -138,12 +138,13 @@ spec 是一个 GitHub 父 issue，它的子 issue 就是 ticket，ticket 之间�
 ln -s ~/.claude/skills/implement-spec-split/find-next ~/.claude/skills/find-next
 ```
 
-再软链两个 Design session 薄包装技能和判断模型开关命令（Windows 同样用 `mklink /J` 或复制）：
+再软链两个 Design session 薄包装技能和两个模型开关命令（判断模型 `/judgment-model`、Worker model `/worker-model`，都见阶段 4；Windows 同样用 `mklink /J` 或复制）：
 
 ```bash
 ln -s ~/.claude/skills/implement-spec-split/grill-feature ~/.claude/skills/grill-feature
 ln -s ~/.claude/skills/implement-spec-split/grill-map ~/.claude/skills/grill-map
 ln -s ~/.claude/skills/implement-spec-split/judgment-model ~/.claude/skills/judgment-model
+ln -s ~/.claude/skills/implement-spec-split/worker-model ~/.claude/skills/worker-model
 ```
 
 **用法**：`/find-next [--worker codex|pi|self]`，也可以直接问「下一步做什么」。想看全貌时用 `/find-next --list`，或者直接问「还有什么没做完」：列出全部待办（正在实现、未拆票、缺规格、待讨论的决策票、状态没收尾、散票），不派 worker。决定接下来开发什么时用 `/find-next --batch --workers 4`（`--workers` 是全机 GLM worker 总数，`--specs` 是同时开几份规格，默认 2）：缺规格的票和有规格未拆票的规格，每组由一个 codex worker 起草，你确认一轮后统一发布；最后总是给出全仓库可以开发的规格的编号顺序和每个会话要跑的命令，你确认后它在 Orca 里自动开 worktree 并启动会话（不在 Orca 里时把命令复制到各个 worktree 运行）。一波合入后再跑一次开下一波。同一仓库同一时间只在一个会话里跑 `--batch`。
@@ -179,7 +180,7 @@ ln -s ~/.claude/skills/implement-spec-split/judgment-model ~/.claude/skills/judg
    requires_openai_auth = true
    ```
 
-   provider 的名字必须是 `custom`：wrapper 用 `-c model_provider=custom -m glm-5.4` 钉死 provider 和模型。模型不是 `glm-5.4` 时，调用 `codex-worker.sh` 要加 `--model <id>`，阶段 1 则修改 `SKILL.md` Config 里的 `CODEX_MODEL`。key 不要写进本仓库。
+   provider 的名字必须是 `custom`：wrapper 用 `-c model_provider=custom -m <型号>` 钉死 provider 和模型，`<型号>` 取自 Worker model 开关（`/worker-model`，默认 `glm-5.4`，见阶段 4 的「Worker model 开关」），`config.toml` 里的 `model` 对 worker 不起作用。要换模型用 `/worker-model`，不要给 `codex-worker.sh` 传 `--model`（开关非默认时它会被覆盖）。key 不要写进本仓库。
 
    照智谱官方 Codex 教程配置、直连 `open.bigmodel.cn` 的话，教程里的 provider 叫 `ZAI`：把 `model_provider = "ZAI"` 和 `[model_providers.ZAI]` 都改成 `custom`，`name = "ZAI"` 可以保留（codex 0.164 起 `name` 不能为空）。否则 worker 会报 `model_providers.custom: provider name must not be empty`。支持其他 provider 名见 issue #6。
 
@@ -445,6 +446,35 @@ $S opus                                             # 两个都切回
 - Design session 只在**新开**时读开关（看的是 `grill`）：切过去后 `/grill-feature`、`/grill-map` 开出的是 glm-5.4 会话（Orca 终端里跑 `claude-glm`，界面 mock 由它自己做，不派 worker），交接和等待流程不变。
 - 已经开着的 Opus Design session 换不了模型。要在原对话上接着谈：在那个仓库的终端里运行 `claude-glm --resume`，从列表里选它；交接约定还在原对话里，运行目录和等待也不变。等待超时了，用 stderr 里打印的 `design-session.sh --attach <运行目录>` 续等。
 - 不会自动切换：Opus review 报额度错误（退出码 3）照旧按 `quota` 停车，已经停车的规格仍由 keeper 在可恢复时间之后恢复。切不切由你决定。
+
+**Worker model 开关：给 codex worker 换模型**
+
+codex worker（External worker）用的模型由另一个用户开关决定，和判断模型开关互相独立（[ADR 0003](adr/0003-worker-model-hot-switch.md)）。它管所有走 `codex-worker.sh` 的调用，不限于 flash：`--impl codex` 的实现角色、find-next 派的 codex worker（调研、决策、起草）、阶段 3 日常分工里的派活。默认 `glm-5.4`，可切到 `glm-5.3` 或 `glm-5.3-flash`。在任意 Claude Code 会话里敲（薄包装技能 `worker-model/`，按上文软链安装）：
+
+```text
+/worker-model                                   # 查看当前状态
+/worker-model use glm-5.3                       # 切到 glm-5.3，一直生效
+/worker-model use glm-5.3-flash 到 明早 7:00     # 切到 flash，到点自动回到默认
+/worker-model use glm-5.3 持续 5 小时             # 从现在起 5 小时
+/worker-model use glm-5.4                       # 复位：回到默认，--model 重新生效
+```
+
+不在会话里时用脚本，效果相同：
+
+```bash
+S=~/.claude/skills/implement-spec-split/scripts/worker-model.sh
+$S use glm-5.3                                            # 切换，不带时间就一直生效
+$S use glm-5.3-flash --until 2026-11-28T07:00:00+08:00   # 到点自动回到默认
+$S use glm-5.3-flash --for 5h                             # 或：从现在起 5 小时（也支持 30m、2d12h）
+$S                                                       # 查看当前状态
+$S use glm-5.4                                           # 复位
+```
+
+- 开关是 `~/.claude/state/worker-model`，对本机所有仓库、所有会话生效。`codex-worker.sh` 每次新起 worker 时读它，所以**已经在跑的 Run 和 find-next 会话不用重开**：下一次派发就是新模型；已经在跑的 worker 不变，续跑（Resume）仍用第一段的模型。
+- 优先级：开关（非默认时）> 调用方显式传的 `--model` > 默认。开关生效期间 `--model` 会被覆盖，wrapper 会在 stderr 和运行目录的 `stderr.log` 里写一行 `Worker model 开关生效：…`（型号、被覆盖的 `--model`、到期时间、是否在 worker 模型目录里、复位命令），`status.json` 的 `model` 记实际用的型号。日常用法不要给 wrapper 传 `--model`。
+- `glm-5.3-flash` 还没有在 codex 路径上实证，也不在 `models.json` 模型目录里。切到它之前先验证：`scripts/selftest-codex.sh --only L1 --model glm-5.3-flash`；报错指向型号或目录时，在 `~/.codex/models.json` 补条目（`input_modalities: ["text"]`，`supported_reasoning_levels` 照 `glm-5.3`，`context_window` 暂按 1M），重跑 `scripts/setup-worker-home.sh`（直接改 `~/.codex-worker/models.json` 会被下次重跑覆盖；重跑前看一眼 `~/.codex/config.toml` 顶层的 `model_provider`，它会被原样复制进 worker home）。`/worker-model use glm-5.3-flash` 遇到目录里没有的型号只警告、不拦。L1 通过也只证明端点接受该型号，不证明 `high` 推理档和 1M 上下文可用。
+- 不管的：`--impl pi`、`--impl agent`（含 flash 环境默认的 agent 后端，子代理型号由启动器决定）、keeper、run-phase。flash 环境里只有显式 `--impl codex` 并带 `WORKER_ALLOW_FLASH=1` 的 Run 才经过 wrapper、才受开关影响。不调 `codex-worker.sh` 的机器（如 train3060）上开关是惰性的，那边不要装 `/worker-model` 软链。
+- 只由用户切：薄技能设了 `disable-model-invocation`，会话不能自己调它；这只是软约束（会话仍可经 Bash 跑脚本），和 `/judgment-model` 一样。两个开关同时非默认时，无人值守 Run 照常自动落地，落地报告和最终报告会同时写两个开关的状态。
 
 **flash 的边界**
 

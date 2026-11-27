@@ -52,7 +52,7 @@ EOF
   printf '%s\n' 'name = "custom"' >> "$CASE_CODEX/config.toml"
   printf '%s\n' 'base_url = "https://api.example.invalid/v1"' >> "$CASE_CODEX/config.toml"
   printf '%s\n' 'wire_api = "responses"' >> "$CASE_CODEX/config.toml"
-  printf '<!-- opus-codex-division: v1 -->\n' > "$CASE_CLAUDE/CLAUDE.md"
+  printf '<!-- opus-codex-division: v2 -->\n' > "$CASE_CLAUDE/CLAUDE.md"
   hook_settings "$ROOT/hooks/delegate-guard.js" 'Edit|Write|NotebookEdit' > "$CASE_CLAUDE/settings.json"
 }
 
@@ -188,7 +188,7 @@ new_case
 printf '<!-- opus-codex-division: v0 -->\n' > "$CASE_CLAUDE/CLAUDE.md"
 run_doctor --json
 expect_exit 0 "stale rule version exits 0"
-expect_has WARN "模板是 v1" "stale rule version reports WARN"
+expect_has WARN "模板是 v2" "stale rule version reports WARN"
 
 # 7. Unverified codex version.
 new_case
