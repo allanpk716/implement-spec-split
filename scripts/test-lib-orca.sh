@@ -789,6 +789,20 @@ expect_exit 64 "worker-show without a dispatch id exits 64"
 expect_has 'dispatch' "worker-show without a dispatch id says what is missing" "$WORK/show-empty.out.err"
 expect_empty_log "worker-show without a dispatch id never starts Orca" "$ORCA_LOG"
 
+# --full is the record stage-dispatch.sh verify reads the worker's model from
+# (projection.provider, which Orca reads off the worker's TUI).
+reset_logs
+call "$WORK/show-full.out" orca_orchestration_worker_show ctx_abc --full
+expect_exit 0 "worker-show --full: exits 0"
+expect_same "$(printf 'orchestration\nARG worker-show\nARG --dispatch\nARG ctx_abc\nARG --full\nARG --json')" "$(cat "$ORCA_LOG")" \
+  "worker-show --full: asks for the full record of that dispatch, as JSON"
+
+reset_logs
+call "$WORK/show-bogus.out" orca_orchestration_worker_show ctx_abc --verbose
+expect_exit 64 "worker-show with an unknown option exits 64"
+expect_has '--full' "worker-show with an unknown option names the one option it takes" "$WORK/show-bogus.out.err"
+expect_empty_log "worker-show with an unknown option never starts Orca" "$ORCA_LOG"
+
 reset_logs
 call "$WORK/release.out" orca_orchestration_worker_release ctx_abc
 expect_exit 0 "worker-release: exits 0"

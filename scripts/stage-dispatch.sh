@@ -22,6 +22,7 @@
 #                  [--cwd <dir>] [--timeout <seconds>] [--run <run id>] [--attempt <n>]
 #   stage-dispatch.sh wait --sidecar <file> [--timeout <seconds>]
 #   stage-dispatch.sh release --sidecar <file>
+#   stage-dispatch.sh verify --run-dir <dir>
 #
 # --run is the Spec's Orca Run (#40: one Run per Spec), named explicitly and
 # never inherited from the terminal. --run-dir is the Spec's run directory
@@ -125,6 +126,35 @@
 # --delete-branch` on the child worktree. A parked Ticket is not released: the
 # caller decides.
 #
+# verify, for the reports (票 #47): Orca records no model for an adopted
+# terminal (the Dispatch's launch.effective.model is null,
+# docs/orca-smoke-2026-11-27.md 2.1), so the model a worker actually ran on is
+# read off its TUI. verify prints, for the Run whose run directory it is
+# given, the Stage route table as the table's display command shows it now
+# (the six stages) and then one line per Orca worker this Run dispatched,
+# `<role> #<ticket> → <route model> / <actual model> / <verdict>`: 一致 when
+# the two are the same model (the GLM launchers' [1m] suffix aside, which the
+# status line shows and the route does not), 警告 when they differ, 无法核对
+# with the reason when no model could be read. The reading is taken from the
+# worker's terminal status line (`terminal read --screen`: Claude Code's
+# `[<model>] │ <dir> …` line) and, when the screen has none, from the provider
+# of its full worker-show record (projection.provider, what Orca read off the
+# TUI), and is recorded in the sidecar as actual_model {model, source,
+# checked_at} — {model: null, note, checked_at} when neither named one. The
+# record is what the reports read, and it can only be taken while the
+# terminal exists: once the TUI left, the screen shows the shell, and once
+# the terminal is closed the read comes back empty and Orca's provider with
+# it (docs/orca-smoke-2026-11-27.md 6.1). So release takes the reading before
+# it releases anything, and verify takes one live only for a dispatch that
+# holds its terminal still (a worker that is running, say a parked Ticket's);
+# a released dispatch is read from its record, and one without a record says
+# 无法核对. Headless dispatches are not checked here: their route is on the
+# first line of their own result (the executor's 路由 line). A 警告 is a
+# warning on the line and on stderr and nothing else: verify exits 0 whatever
+# the verdicts, release releases a mismatching worker all the same, and no
+# report is held back by one. The effort is not verified: no status line
+# carries it.
+#
 # Sidecar fields: version, stage, role, ticket, attempt, run_id, run_dir,
 # route {profile, model, effort}, form (interactive|headless), dispatch_dir,
 # started_at; interactive: launcher, bare, bare_note (the lean start: whether
@@ -134,14 +164,15 @@
 # dispatch_id, task_id; headless: script, brief|input, kind (review), cwd,
 # report_path (the executor's report once it ran), exit_code, finished_at;
 # after a wait: worker_done {outcome, report_path, message_id, received_at};
-# after a release: released_at (and worker_done.report_path naming the copy,
-# when the report had to be taken out of the worktree). A sidecar without
-# dispatch_id is a dispatch that did not complete; it names whatever was
-# created so the caller can clean up.
+# after a reading: actual_model (see verify); after a release: released_at
+# (and worker_done.report_path naming the copy, when the report had to be
+# taken out of the worktree). A sidecar without dispatch_id is a dispatch that
+# did not complete; it names whatever was created so the caller can clean up.
 #
 # Exit codes:
 #   0  dispatched (stdout: the sidecar path); worker_done received (stdout:
-#      the report path); released; a headless executor exited 0
+#      the report path); released; verified (stdout: the route table and the
+#      check lines), whatever the verdicts; a headless executor exited 0
 #   2  release refused: the worker is not settled, or its report is not on disk
 #   5  the wait timed out
 #   6  a prerequisite is missing (node, the route's launcher, a headless
@@ -157,8 +188,9 @@
 #   8  the wait took mail of the Run that is no worker_done (stdout: each
 #      message as a line of JSON; the batch is kept in wait.json): handle it,
 #      then wait again
-#   64 bad usage, among it a route that cannot be read and a --run-dir inside
-#      the Spec worktree: nothing starts
+#   64 bad usage, among it a route that cannot be read, a --run-dir inside
+#      the Spec worktree and a verify run directory that is not there:
+#      nothing starts
 #   A headless dispatch exits with the executor's own exit code (codex-worker.sh
 #   and opus-review.sh document theirs).
 #
@@ -189,12 +221,16 @@ Usage: stage-dispatch.sh dispatch --stage implementation --brief <file>
                   [--cwd <dir>] [--timeout <seconds>] [--run <run id>] [--attempt <n>]
        stage-dispatch.sh wait --sidecar <file> [--timeout <seconds>]
        stage-dispatch.sh release --sidecar <file>
+       stage-dispatch.sh verify --run-dir <dir>
 
 dispatch starts one Stage on its route from the Stage route table and prints
          the sidecar path (interactive), or runs the headless executor and
          prints its report path.
 wait     blocks once for the dispatch's worker_done; prints the report path.
 release  worker-release, terminal close, worktree rm, once the worker is done.
+verify   prints the Stage route table and, per Orca worker of the Run's run
+         directory, its route model against the model it actually ran on
+         (read off its terminal, recorded in the sidecar); warns, never fails.
 USAGE
 }
 
@@ -894,6 +930,12 @@ cmd_release() {
     json_set "$sidecar" "worker_done.report_path=$kept" || die 6 "could not write the sidecar $sidecar"
   fi
 
+  # The model the worker actually ran on, read while its terminal still
+  # exists: the reports take it from the sidecar (verify). A reading that
+  # finds nothing is recorded as such; release goes on either way, since a
+  # mismatch is a warning a report carries, never a refusal.
+  ensure_model_recorded "$sidecar" "$dispatch_dir"
+
   orca_orchestration_worker_release "$dispatch_id" > "$dispatch_dir/worker-release.json" 2> "$dispatch_dir/worker-release.err" ||
     die 6 "orca orchestration worker-release failed for $dispatch_id: $(cat "$dispatch_dir/worker-release.err")"
   # Orca retains a terminal this module opened: close it here.
@@ -912,6 +954,210 @@ cmd_release() {
   return 0
 }
 
+# --- verify: the model each worker actually ran on ---------------------------------
+
+# The model a worker's TUI shows in its status line: the last line of the
+# rendered screen shaped `[<model>] │ …` (Claude Code's status line, as
+# docs/orca-smoke-2026-11-27.md 2.1 and G show it), or nothing when the screen
+# has none. The last such line, since the status line sits at the bottom of
+# the screen and a worker's own output may quote one.
+screen_model() { # terminal read --screen --json on stdin
+  node -e '
+    const fs = require("fs");
+    let root;
+    try { root = JSON.parse(fs.readFileSync(0, "utf8")); } catch { process.exit(2); }
+    const terminal = root.result?.terminal ?? root.terminal ?? root;
+    const tail = Array.isArray(terminal.tail) ? terminal.tail : String(terminal.tail ?? "").split("\n");
+    let model = "";
+    for (const line of tail) {
+      const match = /^\s*\[(.+?)\]\s*│/.exec(String(line ?? ""));
+      if (match) model = match[1];
+    }
+    process.stdout.write(model);
+  '
+}
+
+# The model Orca read off the worker's TUI, from the full worker-show record:
+# projection.provider.model, or nothing when Orca has none.
+provider_model() { # worker-show --full --json on stdin
+  node -e '
+    const fs = require("fs");
+    let root;
+    try { root = JSON.parse(fs.readFileSync(0, "utf8")); } catch { process.exit(2); }
+    const provider = root.result?.projection?.provider ?? root.projection?.provider;
+    const model = provider && typeof provider === "object" ? String(provider.model ?? "") : "";
+    process.stdout.write(model);
+  '
+}
+
+# One reading of the model a dispatch's worker actually runs on: the status
+# line of its terminal first, then, when the screen has none, the provider of
+# its full worker-show record. Sets OBSERVED to "<model><TAB>status-line" or
+# "<model><TAB>provider" and returns 0, or leaves it empty, sets OBSERVE_NOTE
+# to why, and returns 1 when neither names a model. An Orca that cannot answer
+# is a note, never a failure: the reading is for a report. Must be called
+# directly, not in $(...): the note would stay in the subshell.
+observe_model() { # sidecar dispatch_dir
+  local sidecar=$1 dispatch_dir=$2 terminal dispatch_id json model=
+  OBSERVED= OBSERVE_NOTE=
+  terminal=$(json_get "$sidecar" terminal) || terminal=
+  dispatch_id=$(json_get "$sidecar" dispatch_id) || dispatch_id=
+  if [ -n "$terminal" ]; then
+    if json=$(orca_terminal_read "$terminal" --screen 2>"$dispatch_dir/terminal-read.err"); then
+      model=$(printf '%s\n' "$json" | screen_model) || model=
+      [ -z "$model" ] || { OBSERVED="$model"$'\t'status-line; return 0; }
+    else
+      warn "could not read the screen of terminal $terminal: $(head -n 1 "$dispatch_dir/terminal-read.err")"
+    fi
+  fi
+  if [ -n "$dispatch_id" ]; then
+    if orca_orchestration_worker_show "$dispatch_id" --full > "$dispatch_dir/worker-show-full.json" \
+      2>"$dispatch_dir/worker-show-full.err"; then
+      model=$(provider_model < "$dispatch_dir/worker-show-full.json") || model=
+      [ -z "$model" ] || { OBSERVED="$model"$'\t'provider; return 0; }
+    else
+      warn "orca orchestration worker-show --full failed for $dispatch_id: $(head -n 1 "$dispatch_dir/worker-show-full.err")"
+    fi
+  fi
+  OBSERVE_NOTE='没读到终端状态行，worker-show --full 也没有 provider'
+  return 1
+}
+
+# Records one reading in the sidecar: actual_model {model, source, checked_at}
+# when a model was read, {model: null, note, checked_at} when none was.
+record_model() { # sidecar dispatch_dir
+  local sidecar=$1 dispatch_dir=$2
+  if observe_model "$sidecar" "$dispatch_dir"; then
+    json_set "$sidecar" \
+      "actual_model=@json:{\"model\":\"${OBSERVED%%$'\t'*}\",\"source\":\"${OBSERVED#*$'\t'}\",\"checked_at\":\"$(now_iso)\"}" ||
+      die 6 "could not write the sidecar $sidecar"
+  else
+    json_set "$sidecar" "actual_model=@json:{\"model\":null,\"note\":\"$OBSERVE_NOTE\",\"checked_at\":\"$(now_iso)\"}" ||
+      die 6 "could not write the sidecar $sidecar"
+  fi
+}
+
+# Takes a reading only when the sidecar has none: a model already recorded
+# (read off a TUI that was up at the time) is the better evidence and stays.
+ensure_model_recorded() { # sidecar dispatch_dir
+  json_get "$1" actual_model.model >/dev/null 2>&1 && return 0
+  record_model "$1" "$2"
+}
+
+# `<role> #<ticket>（第 <n> 次）` for a check line: implement #41, 修复, 解冲突 #41（第 2 次）.
+dispatch_label() { # role ticket attempt
+  local label=$1
+  case "$1" in
+    implement) label=实现 ;;
+    fix) label=修复 ;;
+    merge) label=解冲突 ;;
+  esac
+  [ -z "$2" ] || label="$label #$2"
+  [ -z "$3" ] || [ "$3" = 1 ] || label="${label}（第 $3 次）"
+  printf '%s' "$label"
+}
+
+# Prints the check line of one dispatch's sidecar: its route model against the
+# model recorded as actually run, read live first when none is recorded and
+# the dispatch still holds its terminal.
+verify_sidecar() { # sidecar
+  local sidecar=$1 form role ticket attempt route_model actual note dispatch_dir label
+  form=$(json_get "$sidecar" form) || form=
+  # A headless dispatch runs no Orca worker; its route is on its own result's
+  # first line.
+  [ "$form" = interactive ] || return 0
+  role=$(json_get "$sidecar" role) || role=
+  ticket=$(json_get "$sidecar" ticket) || ticket=
+  attempt=$(json_get "$sidecar" attempt) || attempt=1
+  route_model=$(json_get "$sidecar" route.model) || route_model='?'
+  label=$(dispatch_label "$role" "$ticket" "$attempt")
+  dispatch_dir=$(json_get "$sidecar" dispatch_dir) || dispatch_dir=$(dirname -- "$sidecar")
+  if ! json_get "$sidecar" dispatch_id >/dev/null 2>&1; then
+    printf '%s → %s / ? / 无法核对：派发没完成\n' "$label" "$route_model"
+    return 0
+  fi
+  actual=$(json_get "$sidecar" actual_model.model) || actual=
+  if [ -z "$actual" ]; then
+    if json_get "$sidecar" released_at >/dev/null 2>&1; then
+      # Released before a reading was taken, or with none found: the terminal
+      # is gone, so nothing can be read now.
+      note=$(json_get "$sidecar" actual_model.note) || note='释放前没读到'
+      printf '%s → %s / ? / 无法核对：%s\n' "$label" "$route_model" "$note"
+      return 0
+    fi
+    ensure_model_recorded "$sidecar" "$dispatch_dir"
+    actual=$(json_get "$sidecar" actual_model.model) || actual=
+  fi
+  if [ -z "$actual" ]; then
+    note=$(json_get "$sidecar" actual_model.note) || note='没读到终端状态行'
+    printf '%s → %s / ? / 无法核对：%s\n' "$label" "$route_model" "$note"
+    return 0
+  fi
+  # The GLM launchers pass glm-5.4 as glm-5.4[1m]; the status line shows the
+  # suffix and the route does not: the same model.
+  if [ "${actual%\[1m\]}" = "$route_model" ]; then
+    printf '%s → %s / %s / 一致\n' "$label" "$route_model" "$actual"
+  else
+    printf '%s → %s / %s / 警告：实际模型 %s 与路由 %s 不符\n' "$label" "$route_model" "$actual" "$actual" "$route_model"
+    warn "${label} 的实际模型 ${actual} 与路由 ${route_model} 不符（只警告，不拦落地）"
+  fi
+  return 0
+}
+
+cmd_verify() {
+  local run_dir=
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --run-dir) need_value "$@"; run_dir=$2; shift 2 ;;
+      -h|--help) usage; exit 0 ;;
+      *) usage_error "unknown argument: $1" ;;
+    esac
+  done
+  [ -n "$run_dir" ] || usage_error 'verify needs --run-dir (the Spec run directory)'
+  [ -d "$run_dir" ] || usage_error "run directory not found: $run_dir"
+  run_dir=$(cd -P "$run_dir" && pwd) || usage_error "run directory is not readable: $run_dir"
+
+  # The table as it stands now, by its own display command; its hints go to
+  # stderr as ever, and a table that cannot be read is one line in the report,
+  # not the end of it.
+  local route_err route_hint= route_table route_status=0
+  if route_err=$(mktemp "$run_dir/verify-route.XXXXXX"); then
+    route_table=$("$STAGE_ROUTE" 2>"$route_err") || route_status=$?
+    route_hint=$(head -n 1 "$route_err")
+    cat "$route_err" >&2
+    rm -f "$route_err"
+  else
+    route_table=$("$STAGE_ROUTE") || route_status=$?
+  fi
+  printf '%s\n' '路由表（当前值）：'
+  if [ "$route_status" -eq 0 ] && [ -n "$route_table" ]; then
+    printf '%s\n' "$route_table"
+  else
+    printf '（读取失败：%s）\n' "${route_hint:-stage-route 退出 $route_status}"
+  fi
+
+  # One line per Orca worker of the Run, in the order they were dispatched
+  # (the sidecar's started_at), so the report reads as the Run went.
+  printf '%s\n' '核对（派发 → 路由模型 / 实际模型 / 结论）：'
+  local sidecar form started order=() sorted
+  for sidecar in "$run_dir"/dispatch-*.json; do
+    [ -f "$sidecar" ] || continue
+    form=$(json_get "$sidecar" form) || form=
+    [ "$form" = interactive ] || continue
+    started=$(json_get "$sidecar" started_at) || started=
+    order+=("$started"$'\t'"$sidecar")
+  done
+  if [ "${#order[@]}" -eq 0 ]; then
+    printf '%s\n' '（本次 Run 没有派发 Orca worker）'
+    return 0
+  fi
+  sorted=$(printf '%s\n' "${order[@]}" | sort -t $'\t' -k1,1)
+  while IFS=$'\t' read -r started sidecar; do
+    verify_sidecar "$sidecar"
+  done <<< "$sorted"
+  return 0
+}
+
 # --- entry ------------------------------------------------------------------------
 
 [ $# -gt 0 ] || { usage >&2; exit 64; }
@@ -927,5 +1173,6 @@ case "$SUBCOMMAND" in
   dispatch) cmd_dispatch "$@" ;;
   wait) cmd_wait "$@" ;;
   release) cmd_release "$@" ;;
-  *) usage_error "unknown subcommand: $SUBCOMMAND (dispatch, wait or release)" ;;
+  verify) cmd_verify "$@" ;;
+  *) usage_error "unknown subcommand: $SUBCOMMAND (dispatch, wait, release or verify)" ;;
 esac

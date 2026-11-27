@@ -492,9 +492,26 @@ orca_orchestration_worker_stop() { # dispatch_id: stops that worker
   orca_run orchestration worker-stop --dispatch "$1" --json
 }
 
-orca_orchestration_worker_show() { # dispatch_id: prints `worker-show --json` (state, stage, liveness)
-  orca_require_value "${1:-}" 'a dispatch id' worker_show
-  orca_run orchestration worker-show --dispatch "$1" --json
+# --full asks for the whole record Orca holds instead of the concise view. It
+# is where the model of an adopted terminal can be read: the concise view has
+# no model, and the full record's projection.provider carries what Orca read
+# off the worker's TUI ({id, model}), or null once it could read nothing.
+orca_orchestration_worker_show() { # dispatch_id [--full]: prints `worker-show --json` (state, stage, liveness)
+  local dispatch=${1:-} full=0
+  orca_require_value "$dispatch" 'a dispatch id' worker_show
+  shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --full) full=1; shift ;;
+      *)
+        printf 'lib-orca: worker_show: unknown argument [%s] (the one option is --full)\n' "$1" >&2
+        exit 64
+        ;;
+    esac
+  done
+  local args=(orchestration worker-show --dispatch "$dispatch")
+  [ "$full" -eq 0 ] || args+=(--full)
+  orca_run "${args[@]}" --json
 }
 
 # Releases a settled worker: closes the agent terminal Orca opened and archives

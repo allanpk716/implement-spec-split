@@ -101,6 +101,12 @@ expect_not_has() {
 
 mkdir -p "$BIN"
 
+# The Stage route table of this test alone: completion-report.sh's --run-dir
+# block prints it through stage-dispatch.sh verify, which reads the real
+# stage-route.sh; an empty table is every stage on its default route.
+STAGE_ROUTE_FILE=$WORK/stage-route
+: > "$STAGE_ROUTE_FILE"
+
 cat > "$BIN/gh" <<'FAKE_GH'
 #!/usr/bin/env bash
 set -u
@@ -373,9 +379,24 @@ run_report() { # out stderr -- args...
     CR_GH_DATA="$GH_DATA" \
     COMPLETION_NOTIFY_CMD="$NOTIFY_CMD" \
     COMPLETION_NOTIFY_LOG="$NOTIFY_LOG" \
+    ISS_STAGE_ROUTE_FILE="$STAGE_ROUTE_FILE" \
       bash "$SCRIPT" "$@"
   ) > "$out" 2> "$err"
   RUN_EXIT=$?
+}
+
+# make_sidecar <file> <form> <role> <ticket> <route model> [actual model]
+#   A dispatch sidecar as stage-dispatch.sh leaves it: released, with the
+#   model read off the worker's terminal recorded (the real one's route is
+#   written by the module; here only what completion-report.sh reads). Each
+#   call starts a minute after the previous one, so check lines come in the
+#   order the dispatches were made.
+SIDECAR_N=0
+make_sidecar() {
+  local file=$1 form=$2 role=$3 ticket=$4 route=$5 actual=${6:-} actual_json=null
+  SIDECAR_N=$((SIDECAR_N + 1))
+  [ -z "$actual" ] || actual_json="{\"model\":\"$actual\",\"source\":\"status-line\",\"checked_at\":\"2026-11-25T10:00:00+0800\"}"
+  printf '%s\n' "{\"form\":\"$form\",\"role\":\"$role\",\"ticket\":$ticket,\"attempt\":1,\"started_at\":\"2026-11-25T10:0$SIDECAR_N:00+0800\",\"dispatch_id\":\"ctx_$role\",\"route\":{\"profile\":\"claude-glm\",\"model\":\"$route\",\"effort\":\"high\"},\"actual_model\":$actual_json,\"released_at\":\"2026-11-25T10:00:00+0800\"}" > "$file"
 }
 
 NOTIFY_CMD=$BIN/notify-ok
@@ -804,6 +825,53 @@ expect_same_file "$WORK/s12.expected" 'no-topic report lists specs, dependencies
 expect_has_count '#22' 1 'landed spec appears only in its conclusion' "$WORK/s12.out"
 expect_has_count '散票' 1 'exactly one loose-ticket line' "$WORK/s12.out"
 
+# Scenario 16: --run-dir names the Spec's run directory, and the report ends
+# with what stage-dispatch.sh verify prints for it: the Stage route table (six
+# stages, as the table's display command shows it) and one check line per
+# Orca worker — route model against the model read off its terminal — a
+# mismatch as a warning, never a failed report. Headless dispatches have no
+# line. Without --run-dir the report is as before (every scenario above).
+RUN_DIR_22=$WORK/runs/implement-spec-split-22-20261125-0900
+mkdir -p "$RUN_DIR_22"
+make_sidecar "$RUN_DIR_22/dispatch-implement-36.json" interactive implement 36 glm-5.4 'glm-5.4[1m]'
+make_sidecar "$RUN_DIR_22/dispatch-implement-37.json" interactive implement 37 glm-5.4 opus
+make_sidecar "$RUN_DIR_22/dispatch-fix.json" interactive fix null glm-5.4 glm-5.4
+make_sidecar "$RUN_DIR_22/dispatch-merge-38.json" interactive merge 38 glm-5.4
+make_sidecar "$RUN_DIR_22/dispatch-research.json" headless research 55 glm-5.4
+make_sidecar "$RUN_DIR_22/dispatch-review-36.json" headless review 36 opus
+run_report "$WORK/s16.out" "$WORK/s16.err" "$REPO" --spec 22 --run-dir "$RUN_DIR_22"
+expect_exit 0 'report with a run directory exits zero'
+{
+  cat "$WORK/s12.expected"
+  cat <<'EOF'
+   路由表（当前值）：
+   编排（orchestration）：claude-flash / glm-5.3-flash / 启动器默认（锁定，不可改）
+   讨论（design）：claude / opus / high（默认）
+   调研起草（research）：codex-glm / glm-5.4 / high（默认）
+   实现（implementation）：claude-glm / glm-5.4 / high（默认）
+   审查（review）：claude / opus / high（默认）
+   诊断（diagnosis）：claude / opus / high（默认）
+   核对（派发 → 路由模型 / 实际模型 / 结论）：
+   实现 #36 → glm-5.4 / glm-5.4[1m] / 一致
+   实现 #37 → glm-5.4 / opus / 警告：实际模型 opus 与路由 glm-5.4 不符
+   修复 → glm-5.4 / glm-5.4 / 一致
+   解冲突 #38 → glm-5.4 / ? / 无法核对：释放前没读到
+EOF
+} > "$WORK/s16.expected"
+expect_same_file "$WORK/s16.expected" 'report with a run directory ends with the route table and the check lines' "$WORK/s16.out"
+expect_file_has '实现 #37 的实际模型 opus 与路由 glm-5.4 不符' 'a mismatch in the check lines is warned on stderr too' "$WORK/s16.err"
+expect_has_count '#55' 0 'a headless dispatch gets no check line' "$WORK/s16.out"
+expect_has_count ' → ' 5 'exactly the four check lines and their heading carry the arrow' "$WORK/s16.out"
+expect_has_count 'dispatch-' 0 'no sidecar file name appears in the report' "$WORK/s16.out"
+run_report "$WORK/s17.out" "$WORK/s17.err" "$REPO" --spec 22 --run-dir "$WORK/no-such-run-dir"
+expect_exit 0 'report with a run directory that is not there still exits zero'
+{
+  cat "$WORK/s12.expected"
+  printf '%s\n' '   ⚠️ 路由表与模型核对（查询失败）'
+} > "$WORK/s17.expected"
+expect_same_file "$WORK/s17.expected" 'a run directory that is not there is one failed line, the report intact' "$WORK/s17.out"
+run_report "$WORK/s18.out" "$WORK/s18.err" "$REPO" --spec 22 --run-dir
+expect_exit 64 '--run-dir without a value exits 64'
 # Scenario 13: the landing ran before the Spec issue was closed; every ticket
 # is closed, so it still reads as landed and stays out of every other list.
 GH_I2=$WORK/gh-i2
