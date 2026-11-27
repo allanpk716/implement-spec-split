@@ -72,6 +72,23 @@ function commandLine(args = '') {
   });
 }
 
+// What an Orca worker-start session gets for its spec: the command line in
+// the `=== TASK ===` block after the worker preamble, with no <command-name>
+// tags (docs/orca-smoke-2026-11-27.md, item G).
+function taskLine(args = '') {
+  return JSON.stringify({
+    type: 'user',
+    message: {
+      role: 'user',
+      content:
+        'You are a dispatched worker; reply when the task is done.\n' +
+        '---\n' +
+        '=== TASK ===\n' +
+        `/implement-spec-split${args === '' ? '' : ` ${args}`}`,
+    },
+  });
+}
+
 function plainLine(text) {
   return JSON.stringify({
     type: 'user',
@@ -398,6 +415,55 @@ testCase('a session that never called the skill allows', () => {
   withRepo(({ work, root }) => {
     const transcriptPath = writeTranscript(root, [
       plainLine('just a normal session'),
+    ]);
+    assertAllow(
+      runHook(
+        hookPayload('git push origin HEAD:main', transcriptPath, work),
+        { LAND_PUSH_GUARD_OWNER_PID: OWNER_PID }
+      )
+    );
+  });
+});
+
+// ---- the === TASK === form an Orca worker-start session gets (US18) ----
+
+testCase('=== TASK === form: git push origin HEAD:main without the lock denies', () => {
+  withRepo(({ work, root }) => {
+    const transcriptPath = writeTranscript(root, [
+      taskLine('26 --auto-land --parallel 2'),
+    ]);
+    const reason = parseDeny(
+      runHook(
+        hookPayload('git push origin HEAD:main', transcriptPath, work),
+        { LAND_PUSH_GUARD_OWNER_PID: OWNER_PID }
+      )
+    );
+    assert.match(reason, /落地 push 必须先持有本仓库的 land 锁/);
+  });
+});
+
+testCase('=== TASK === form: a lock owned by this session allows', () => {
+  withRepo(({ work, root }) => {
+    const transcriptPath = writeTranscript(root, [taskLine('26 --auto-land')]);
+    writeOwner(work, {
+      pid: process.pid,
+      pid_start: pidStart(process.pid),
+      cwd: work,
+      acquired_at: '2026-11-25T00:00:00+0800',
+    });
+    assertAllow(
+      runHook(
+        hookPayload('git push origin HEAD:main', transcriptPath, work),
+        { LAND_PUSH_GUARD_OWNER_PID: OWNER_PID }
+      )
+    );
+  });
+});
+
+testCase('=== TASK === without a command line allows', () => {
+  withRepo(({ work, root }) => {
+    const transcriptPath = writeTranscript(root, [
+      plainLine('You are a dispatched worker.\n=== TASK ===\nFinish spec 26.'),
     ]);
     assertAllow(
       runHook(

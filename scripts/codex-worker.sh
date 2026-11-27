@@ -169,11 +169,13 @@ while [ $# -gt 0 ]; do
 done
 
 # A flash Orchestrator must not start External workers on its own: its
-# implementing roles are Orca workers the dispatch module starts (规格 #26). The one
-# opt-in is the step-2 exploration dispatch of /implement-spec-split, which sets
-# WORKER_ALLOW_FLASH=1 for that single call (2026-11-21; reworded 2026-11-28).
+# implementing roles are Orca workers the dispatch module starts (规格 #26). The
+# two opt-ins are the step-2 exploration dispatch of /implement-spec-split and
+# find-next's codex-worker steps (flash mode dispatches them all as --worker
+# codex), each setting WORKER_ALLOW_FLASH=1 for that single call (2026-11-21;
+# reworded 2026-11-28).
 if [ "${FLASH_ORCHESTRATOR:-}" = 1 ] && [ "${WORKER_ALLOW_FLASH:-}" != 1 ]; then
-  die "refusing to run in a flash session (FLASH_ORCHESTRATOR=1): implement Specs with /implement-spec-split <n>; only its step-2 exploration dispatch sets WORKER_ALLOW_FLASH=1"
+  die "refusing to run in a flash session (FLASH_ORCHESTRATOR=1): implement Specs with /implement-spec-split <n>; only its step-2 exploration dispatch and find-next's --worker codex dispatches set WORKER_ALLOW_FLASH=1"
 fi
 
 if $RESUME; then

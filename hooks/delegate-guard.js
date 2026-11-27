@@ -30,8 +30,13 @@ const {
 
 const LIMIT = 10;
 const TOOLS = new Set(['Edit', 'Write', 'NotebookEdit', 'Bash']);
+// The same pointers as subagent-guard's reason: since 规格 #26 an in-session
+// subagent is denied and codex-worker.sh refuses to start in a flash session,
+// so a reason naming either would send the model into a second denial.
 const FLASH_REASON =
-  'flash 会话不写源码：派 glm-5.4 子代理（或 codex worker）。';
+  'flash 会话不写源码：实现、fix、冲突解算经派发模块按「实现」路由派发' +
+  '（`<skill dir>/scripts/stage-dispatch.sh dispatch --stage implementation --brief <file>`，见 SKILL.md），' +
+  '审查走 `scripts/opus-review.sh`。';
 const BARE_CODEX_EXEC_REASON =
   '不要直接调 codex exec：它没有卡死检测（2026-11-22 曾挂 10 小时）。' +
   '用 ~/.claude/skills/implement-spec-split/scripts/codex-worker.sh；' +

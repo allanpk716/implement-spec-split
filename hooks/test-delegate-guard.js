@@ -329,10 +329,13 @@ testCase('flash mode Write one source line denies', home => {
       { FLASH_ORCHESTRATOR: '1' }
     )
   );
-  assert.match(
-    reason,
-    /flash 会话不写源码：派 glm-5\.4 子代理（或 codex worker）/
-  );
+  // The reason points at the dispatch module and opus-review.sh, the same two
+  // as subagent-guard's; it no longer names a subagent or codex worker, which
+  // a flash session would be denied a second time for.
+  assert.match(reason, /flash 会话不写源码：实现、fix、冲突解算经派发模块按「实现」路由派发/);
+  assert.match(reason, /stage-dispatch\.sh dispatch --stage implementation --brief <file>/);
+  assert.match(reason, /scripts\/opus-review\.sh/);
+  assert.doesNotMatch(reason, /glm-5\.4 子代理|codex worker/);
 });
 
 testCase('flash mode Edit one source line denies but documents allow', home => {

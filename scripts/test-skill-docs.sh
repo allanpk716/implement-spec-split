@@ -6,7 +6,10 @@
 # a later edit cannot quietly bring the backend switch, the progress tabs or
 # the retired wrappers back, or drop the one-command dispatch / wait / release /
 # merge-ticket path, the takeover steps or the worktree tree, without a test
-# going red.
+# going red. The cumulative review's settled points (MAINTAINING 第 51 条) are
+# pinned the same way: find-next's flash default, delegate-guard's flash
+# reason, the === TASK === form the guards read and the hooks README's
+# fail-open wording.
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -20,6 +23,9 @@ SKILL=$ROOT/SKILL.md
 BRIEF=$ROOT/find-next/templates/brief-implement.md
 HOOKS=$ROOT/hooks/README.md
 GLOSSARY=$ROOT/GLOSSARY.md
+FIND_NEXT=$ROOT/find-next/SKILL.md
+LIB_TRANSCRIPT=$ROOT/hooks/lib-transcript.js
+DELEGATE_GUARD=$ROOT/hooks/delegate-guard.js
 # What a user or a session reads as current wording. MAINTAINING's numbered
 # records, the ADRs and the smoke record keep the old names as history, and
 # docs/codex-backend.md keeps its experiment record, so none of them is listed.
@@ -42,7 +48,7 @@ without() { # text name file
   if grep -Fq -- "$1" "$3" 2>/dev/null; then bad "$2" "unexpected [$1] in ${3#$ROOT/}"; else ok "$2"; fi
 }
 
-for file in "$SKILL" "$BRIEF" "$HOOKS" "$GLOSSARY"; do
+for file in "$SKILL" "$BRIEF" "$HOOKS" "$GLOSSARY" "$FIND_NEXT" "$LIB_TRANSCRIPT" "$DELEGATE_GUARD"; do
   [ -f "$file" ] || { bad "file exists" "$file"; printf '\n%d passed, %d failed\n' "$PASSED" "$FAILED"; exit "$FAILED"; }
 done
 
@@ -115,6 +121,26 @@ has '## 精简启动的 worker' 'hooks README documents the lean start' "$HOOKS"
 has 'merge-ticket.sh' 'hooks README names the script gate' "$HOOKS"
 has '--bare' 'hooks README says --bare loads no hooks' "$HOOKS"
 has 'unattended-stop-guard' 'hooks README names the hooks a lean worker lacks' "$HOOKS"
+
+# --- what the cumulative review of 规格 #26 settled (MAINTAINING 第 51 条) -------
+
+# The three guards key on the command an Orca worker-start session gets: the
+# line after `=== TASK ===`, with no <command-name> tag (User Story 18).
+has '=== TASK ===' 'lib-transcript.js knows the Orca worker-start form of the command' "$LIB_TRANSCRIPT"
+# delegate-guard's flash reason points where subagent-guard's does: a subagent
+# and a bare codex worker are each denied a second time in a flash session.
+without '派 glm-5.4 子代理（或 codex worker）' 'delegate-guard flash reason no longer names a subagent or codex worker' "$DELEGATE_GUARD"
+has 'stage-dispatch.sh dispatch --stage implementation --brief <file>' 'delegate-guard flash reason names the dispatch module' "$DELEGATE_GUARD"
+has 'scripts/opus-review.sh' 'delegate-guard flash reason names opus-review.sh' "$DELEGATE_GUARD"
+without '`tool_input` 缺失或 hook 内部异常都 fail open' 'hooks README no longer calls a missing tool_input fail-open' "$HOOKS"
+# find-next in a flash session dispatches codex workers like every other
+# session: its in-session subagents are what subagent-guard denies.
+without '没给 `--worker` 时按 `--worker agent` 处理' 'find-next SKILL.md no longer defaults a flash session to --worker agent' "$FIND_NEXT"
+has '没给 `--worker` 时按 `--worker codex` 处理' 'find-next SKILL.md keeps codex as the flash default' "$FIND_NEXT"
+has '`--worker agent` 只留给非 flash 会话' 'find-next SKILL.md keeps --worker agent for non-flash sessions' "$FIND_NEXT"
+without '路由对那些运行无效' 'find-next SKILL.md no longer says the route table skips a flash run' "$FIND_NEXT"
+# A Run does not report into its wave's Orca Run.
+without "a Run reports into its wave's Orca Run" 'GLOSSARY no longer says a Run reports into the wave Orca Run' "$GLOSSARY"
 
 # --- what ticket #48 retired (规格 #26): the current wording no longer names it -----
 

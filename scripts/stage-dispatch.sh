@@ -153,7 +153,8 @@
 # warning on the line and on stderr and nothing else: verify exits 0 whatever
 # the verdicts, release releases a mismatching worker all the same, and no
 # report is held back by one. The effort is not verified: no status line
-# carries it.
+# carries it. The check lines are in dispatch order, by each sidecar's
+# started_at; a sidecar without one is checked all the same and listed first.
 #
 # Sidecar fields: version, stage, role, ticket, attempt, run_id, run_dir,
 # route {profile, model, effort}, form (interactive|headless), dispatch_dir,
@@ -168,6 +169,16 @@
 # (and worker_done.report_path naming the copy, when the report had to be
 # taken out of the worktree). A sidecar without dispatch_id is a dispatch that
 # did not complete; it names whatever was created so the caller can clean up.
+#
+# What a refused dispatch leaves behind depends on how far it got. The checks
+# that create nothing -- bad usage, a route that cannot be read, an
+# implementation route whose profile cannot run an interactive worker (64) or
+# whose launcher is not in PATH (6), a run directory or dispatch directory
+# that cannot be made (6) -- all run before the sidecar is written, so after
+# them nothing is left behind and the same name dispatches again as soon as
+# the route or PATH is fixed. From the sidecar on, every failure keeps it, so
+# what it names is cleaned up by hand (above) and the re-brief takes
+# --attempt 2.
 #
 # Exit codes:
 #   0  dispatched (stdout: the sidecar path); worker_done received (stdout:
@@ -287,8 +298,12 @@ json_get() {
 }
 
 # json_set FILE KEY=VALUE...: sets each (dotted) KEY of the JSON file, creating
-# the file; a VALUE written as @json:<json> is stored as JSON. The write is
-# atomic.
+# the file and every object on a dotted path; a VALUE is stored as the string
+# it is, or as JSON when written as @json:<json>. A field of an object is set
+# by its dotted key (route.model=glm-5.4), so a value with a quote or a
+# backslash in it stays a string: @json: is for fixed literals only (null,
+# true, a number), never for JSON with a value spliced in by hand, which one
+# quote in the value would break. The write is atomic.
 json_set() {
   node -e '
     const fs = require("fs");
@@ -545,7 +560,6 @@ cmd_dispatch() {
   local dispatch_dir=$run_dir/$name sidecar=$run_dir/dispatch-$name.json
   [ ! -e "$sidecar" ] ||
     usage_error "a dispatch named $name already has a sidecar ($sidecar); a re-brief takes --attempt <n> and never overwrites it"
-  mkdir -p "$dispatch_dir" || die 6 "could not create the dispatch directory: $dispatch_dir"
 
   local form=interactive
   [ "$stage" = implementation ] || form=headless
@@ -553,10 +567,18 @@ cmd_dispatch() {
   printf 'stage-dispatch: 本次派发路由：%s：%s / %s / %s（用户用 /grill-router 设置）\n' \
     "$(stage_label "$stage")" "$ROUTE_PROFILE" "$ROUTE_MODEL" "$ROUTE_EFFORT" >&2
 
+  # The checks that create nothing run before the dispatch directory and the
+  # sidecar exist (the header says why): a dispatch refused here leaves nothing
+  # behind, so the same name dispatches again once the route or PATH is fixed.
+  if [ "$form" = interactive ]; then
+    check_interactive_launcher
+  fi
+  mkdir -p "$dispatch_dir" || die 6 "could not create the dispatch directory: $dispatch_dir"
+
   # The sidecar as far as it is known before anything starts.
   json_set "$sidecar" "version=1" "stage=$stage" "role=$role_name" "ticket=@json:${ticket:-null}" \
     "attempt=$attempt" "run_id=$run_id" "run_dir=$run_dir" "form=$form" "dispatch_dir=$dispatch_dir" \
-    "route=@json:{\"profile\":\"$ROUTE_PROFILE\",\"model\":\"$ROUTE_MODEL\",\"effort\":\"$ROUTE_EFFORT\"}" \
+    "route.profile=$ROUTE_PROFILE" "route.model=$ROUTE_MODEL" "route.effort=$ROUTE_EFFORT" \
     "started_at=$(now_iso)" ||
     die 6 "could not write the sidecar $sidecar"
 
@@ -571,16 +593,13 @@ cmd_dispatch() {
 
 # --- interactive: child worktree, terminal, adoption -------------------------------
 
-run_interactive() { # sidecar dispatch_dir brief run_id parent_worktree repo base_branch ticket role mcp_config start_timeout_ms
-  local sidecar=$1 dispatch_dir=$2 brief=$3 run_id=$4 parent_worktree=$5 repo=$6
-  local base_branch=$7 ticket=$8 role=$9 mcp_config=${10} start_timeout_ms=${11}
-  local launcher=${LAUNCH_ARGS[0]:-} spec_n=${base_branch#spec-}
-  local worktree= branch= worktree_created=0 title= report=$dispatch_dir/report.md spec_file=$dispatch_dir/spec.md
-  local create_json= launch_json= worker_start_json= terminal= dispatch_id= task_id=
-  local permission_args lean_args=() bare=0 bare_note= launch_command=
-
-  # Only the claude profiles open an interactive session this module can adopt;
-  # the launcher is the profile's own.
+# The two checks an interactive dispatch can be refused by before anything is
+# made: only the claude profiles open an interactive session this module can
+# adopt (the launcher is the profile's own), and that launcher must be in
+# PATH. cmd_dispatch runs this before the sidecar exists, so neither refusal
+# leaves one behind.
+check_interactive_launcher() {
+  local launcher=${LAUNCH_ARGS[0]:-}
   case "$ROUTE_PROFILE" in
     claude|claude-glm|claude-flash) ;;
     *)
@@ -589,6 +608,15 @@ run_interactive() { # sidecar dispatch_dir brief run_id parent_worktree repo bas
   esac
   command -v "$launcher" >/dev/null 2>&1 ||
     die 6 "the implementation route is $ROUTE_PROFILE / $ROUTE_MODEL / $ROUTE_EFFORT, but its launcher '$launcher' was not found in PATH"
+}
+
+run_interactive() { # sidecar dispatch_dir brief run_id parent_worktree repo base_branch ticket role mcp_config start_timeout_ms
+  local sidecar=$1 dispatch_dir=$2 brief=$3 run_id=$4 parent_worktree=$5 repo=$6
+  local base_branch=$7 ticket=$8 role=$9 mcp_config=${10} start_timeout_ms=${11}
+  local launcher=${LAUNCH_ARGS[0]:-} spec_n=${base_branch#spec-}
+  local worktree= branch= worktree_created=0 title= report=$dispatch_dir/report.md spec_file=$dispatch_dir/spec.md
+  local create_json= launch_json= worker_start_json= terminal= dispatch_id= task_id=
+  local permission_args lean_args=() bare=0 bare_note= launch_command=
 
   # The lean start (精简启动) is the default for the implement and fix roles:
   # with a rules file they start bare; without one it is a normal start, and
@@ -1024,15 +1052,19 @@ observe_model() { # sidecar dispatch_dir
 }
 
 # Records one reading in the sidecar: actual_model {model, source, checked_at}
-# when a model was read, {model: null, note, checked_at} when none was.
+# when a model was read, {model: null, note, checked_at} when none was. The
+# object is emptied first (a fixed literal) and its fields set by their dotted
+# keys: the model comes off a screen, so it is stored as the string it is,
+# never spliced into @json: (a quote in it would break the sidecar).
 record_model() { # sidecar dispatch_dir
   local sidecar=$1 dispatch_dir=$2
   if observe_model "$sidecar" "$dispatch_dir"; then
-    json_set "$sidecar" \
-      "actual_model=@json:{\"model\":\"${OBSERVED%%$'\t'*}\",\"source\":\"${OBSERVED#*$'\t'}\",\"checked_at\":\"$(now_iso)\"}" ||
+    json_set "$sidecar" "actual_model=@json:{}" "actual_model.model=${OBSERVED%%$'\t'*}" \
+      "actual_model.source=${OBSERVED#*$'\t'}" "actual_model.checked_at=$(now_iso)" ||
       die 6 "could not write the sidecar $sidecar"
   else
-    json_set "$sidecar" "actual_model=@json:{\"model\":null,\"note\":\"$OBSERVE_NOTE\",\"checked_at\":\"$(now_iso)\"}" ||
+    json_set "$sidecar" "actual_model=@json:{}" "actual_model.model=@json:null" "actual_model.note=$OBSERVE_NOTE" \
+      "actual_model.checked_at=$(now_iso)" ||
       die 6 "could not write the sidecar $sidecar"
   fi
 }
@@ -1137,7 +1169,10 @@ cmd_verify() {
   fi
 
   # One line per Orca worker of the Run, in the order they were dispatched
-  # (the sidecar's started_at), so the report reads as the Run went.
+  # (the sidecar's started_at), so the report reads as the Run went. The rows
+  # are joined on the unit separator: a sidecar without started_at keeps its
+  # empty first column (a tab would collapse and put the path in the start
+  # time's place), sorts first and is checked like any other.
   printf '%s\n' '核对（派发 → 路由模型 / 实际模型 / 结论）：'
   local sidecar form started order=() sorted
   for sidecar in "$run_dir"/dispatch-*.json; do
@@ -1145,14 +1180,14 @@ cmd_verify() {
     form=$(json_get "$sidecar" form) || form=
     [ "$form" = interactive ] || continue
     started=$(json_get "$sidecar" started_at) || started=
-    order+=("$started"$'\t'"$sidecar")
+    order+=("$started"$'\x1f'"$sidecar")
   done
   if [ "${#order[@]}" -eq 0 ]; then
     printf '%s\n' '（本次 Run 没有派发 Orca worker）'
     return 0
   fi
-  sorted=$(printf '%s\n' "${order[@]}" | sort -t $'\t' -k1,1)
-  while IFS=$'\t' read -r started sidecar; do
+  sorted=$(printf '%s\n' "${order[@]}" | sort -t $'\x1f' -k1,1)
+  while IFS=$'\x1f' read -r started sidecar; do
     verify_sidecar "$sidecar"
   done <<< "$sorted"
   return 0

@@ -126,6 +126,15 @@ testCase('flash mode main thread without subagent_type denies', () => {
   );
 });
 
+testCase('flash mode main thread without tool_input denies', () => {
+  // A payload with no tool_input (or a null one) is the missing subagent_type
+  // case again: it reads as the general-purpose default, not as fail-open.
+  parseDeny(
+    runHook(hookPayload('Agent', undefined), { FLASH_ORCHESTRATOR: '1' })
+  );
+  parseDeny(runHook(hookPayload('Agent', null), { FLASH_ORCHESTRATOR: '1' }));
+});
+
 testCase('flash mode empty agent_id still denies', () => {
   // An empty agent_id is not a subagent; same rule as delegate-guard.
   parseDeny(

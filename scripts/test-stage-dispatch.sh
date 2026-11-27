@@ -522,6 +522,18 @@ expect_exit 6 'a route whose launcher is not installed exits 6'
 expect_file_has 'iss-missing-launcher' 'the missing launcher is named' "$RUN_STDERR"
 expect_file_has 'claude / opus / high' 'the missing launcher is reported against its route' "$RUN_STDERR"
 expect_file_without 'worktree' 'a missing launcher calls Orca not at all' "$ORCA_LOG"
+# The refusal created nothing, so it leaves no sidecar: once the launcher is
+# there the same name dispatches again, with no --attempt 2 and no clean-up.
+if [ -e "$RUN_DIR/dispatch-implement-41.json" ]; then
+  record FAIL 'a missing launcher leaves no sidecar behind' "$RUN_DIR/dispatch-implement-41.json"
+else
+  record PASS 'a missing launcher leaves no sidecar behind'
+fi
+DISPATCH_TEST_FAKE_LAUNCHER=claude
+run_module dispatch --stage implementation --brief "$WORK/brief-41.md" \
+  --run run_spec26 --run-dir "$RUN_DIR" --parent-worktree "$SPEC_WT" --base-branch spec-26 --ticket 41
+expect_exit 0 'the same ticket dispatches again once its launcher is there'
+expect_stdout "$RUN_DIR/dispatch-implement-41.json" 'the retry takes the name the refused dispatch would have had'
 
 # --- a missing prerequisite is exit 6, not a usage error -----------------------------
 # node, and a run directory or a dispatch directory that cannot be created,
@@ -701,7 +713,20 @@ expect_exit 64 'a codex-glm implementation route exits 64'
 expect_file_has 'codex-glm / glm-5.4 / high' 'the unusable route is named' "$RUN_STDERR"
 expect_file_has 'cannot run an interactive worker' 'the reason is given' "$RUN_STDERR"
 expect_file_without 'worktree' 'an unusable route calls Orca not at all' "$ORCA_LOG"
+# That refusal created nothing and left no sidecar, so once the route is put
+# back the same ticket dispatches again under the same name: no --attempt 2,
+# no clean-up (SKILL.md's "fix the route, then dispatch again" holds).
+if [ -e "$RUN_DIR/dispatch-implement-44.json" ]; then
+  record FAIL 'a refused route leaves no sidecar behind' "$RUN_DIR/dispatch-implement-44.json"
+else
+  record PASS 'a refused route leaves no sidecar behind'
+fi
 set_route implementation=claude-glm/glm-5.4/high
+run_module dispatch --stage implementation --brief "$WORK/brief-41.md" \
+  --run run_spec26 --run-dir "$RUN_DIR" --parent-worktree "$SPEC_WT" --base-branch spec-26 --ticket 44
+expect_exit 0 'the same ticket dispatches again once the route is put back'
+expect_stdout "$RUN_DIR/dispatch-implement-44.json" 'the retry takes the name the refused dispatch would have had'
+expect_json 1 'the retry is a first attempt, not a re-brief' "$RUN_DIR/dispatch-implement-44.json" attempt
 
 # The same dispatch name twice: the second is refused; --attempt gives it a
 # fresh name, and the first sidecar stays.
@@ -1653,6 +1678,53 @@ expect_file_has '实现 #45 → glm-5.4 / ? / 无法核对' 'a failed screen rea
 expect_file_has 'could not read the screen of terminal term_impl: fake orca: terminal read failed' \
   "Orca's own error is passed through on stderr" "$RUN_STDERR"
 ORCA_TEST_FAIL=
+
+# A model on the screen with a quote and a backslash in it: the reading is
+# stored as the string it is, so the sidecar stays JSON, the line is printed
+# and verify still exits 0 (a model hand-spliced into @json: broke the sidecar
+# and exited 6 here).
+ORCA_TEST_DISPATCH_ID=ctx_46
+dispatch_ticket 46
+node -e '
+  const fs = require("fs");
+  const [file, model] = process.argv.slice(1);
+  const tail = ["  ⏺ Done.", "", `  [${model}] │ spec-26-t41 git:(spec-26-t41)`, "  Context ░░░░ 0%"];
+  fs.writeFileSync(file, JSON.stringify({ok: true, result: {terminal: {handle: "term_impl", status: "running", source: "screen", truncated: false, tail}}}));
+' "$WORK/screen-quote.json" 'glm"5\.4'
+ORCA_TEST_READ_JSON=$WORK/screen-quote.json
+run_module verify --run-dir "$RUN_DIR"
+expect_exit 0 'verify exits 0 when the model on the screen has a quote and a backslash in it'
+expect_json 'glm"5\.4' 'a model with a quote and a backslash is recorded as read, the sidecar still JSON' \
+  "$RUN_DIR/dispatch-implement-46.json" actual_model.model
+expect_file_has '实现 #46 → glm-5.4 / glm"5\.4 / 警告：实际模型 glm"5\.4 与路由 glm-5.4 不符' \
+  'the check line names the model as read' "$RUN_STDOUT"
+if node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$RUN_DIR/dispatch-implement-46.json" 2>/dev/null; then
+  record PASS 'the sidecar with the quoted model parses as JSON'
+else
+  record FAIL 'the sidecar with the quoted model parses as JSON'
+fi
+
+# A sidecar without started_at keeps its empty column instead of having the
+# path read as its start time: it sorts first and is checked like the rest.
+ORCA_TEST_DISPATCH_ID=ctx_47
+dispatch_ticket 47
+write_screen "$WORK/screen-glm.json" 'glm-5.4[1m]'
+ORCA_TEST_READ_JSON=$WORK/screen-glm.json
+node -e '
+  const fs = require("fs");
+  const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  delete value.started_at;
+  fs.writeFileSync(process.argv[1], JSON.stringify(value, null, 2) + "\n");
+' "$RUN_DIR/dispatch-implement-47.json"
+run_module verify --run-dir "$RUN_DIR"
+expect_exit 0 'verify exits 0 with a sidecar that has no started_at'
+expect_file_has '实现 #47 → glm-5.4 / glm-5.4[1m] / 一致' 'a sidecar without started_at is still checked' "$RUN_STDOUT"
+if awk '/^实现 #47 / { a = NR } /^实现 #41 / { b = NR } END { exit (a && b && a < b) ? 0 : 1 }' "$RUN_STDOUT"; then
+  record PASS 'a sidecar without started_at is listed first'
+else
+  record FAIL 'a sidecar without started_at is listed first'
+fi
+ORCA_TEST_READ_JSON=$WORK/screen-none.json
 
 # --- release takes the reading before the terminal goes ------------------------------
 # The evidence lives only while the terminal does, so release reads the model

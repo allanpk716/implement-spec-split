@@ -67,9 +67,11 @@
 #   ISS_ORCA                the Orca executable (default `orca`), read by
 #                          scripts/lib-orca.sh; every Orca call goes through it
 #
-# Exit codes: 0 round finished (also when nothing was swept), 64 usage error,
-# 1 Orca or claim.sh could not be asked for some repository (nothing of it was
-# removed) or a removal failed.
+# Exit codes: 0 round finished (also when nothing was swept, and when a worker
+# could not be vouched for: only that worktree was kept; each worktree is
+# judged on its own), 64 usage error, 1 the worker list could not be trusted
+# for some repository (nothing of it was removed), claim.sh could not answer
+# for a candidate (only that candidate was kept), or a removal failed.
 
 set -u
 
@@ -213,8 +215,10 @@ origin_slug() { # path -> owner/name of origin, or nothing
 }
 
 # The candidates of one repository: git's worktrees plus Orca's entries for it,
-# joined on the real path. One row per worktree: path<TAB>branch<TAB>isMain
-# <TAB>orphan<TAB>exists<TAB>inOrca<TAB>here. A Ticket branch Orca lists with
+# joined on the real path. One row per worktree: path<US>branch<US>isMain
+# <US>orphan<US>exists<US>inOrca<US>here (US is the unit separator, \x1f: a
+# detached worktree has an empty branch column, which a tab would collapse and
+# so shift every flag one column left). A Ticket branch Orca lists with
 # no parent is an orphan; an Orca entry whose repoId is not the repository's
 # counts only when git already lists its path (then the repo id was not
 # available, and the path is the evidence).
@@ -260,7 +264,7 @@ candidates() { # repo id
     const here = process.env.HERE_WT ? real(process.env.HERE_WT) : "";
     for (const row of rows.values()) {
       const marks = [row.isMain, row.orphan, row.exists, row.inOrca, here && row.path === here ? 1 : 0];
-      process.stdout.write([row.path, row.branch, ...marks].join("\t") + "\n");
+      process.stdout.write([row.path, row.branch, ...marks].join("\x1f") + "\n");
     }
   ' "$WORK/worktrees.txt" "$WORK/orca-worktrees.json"
 }
@@ -400,7 +404,7 @@ sweep_repo() { # repo path orca repo id
     esac
     unsure="无法确认 worker 状态（${why}），不删"
   fi
-  while IFS=$'\t' read -r cpath cbranch cisMain corphan cexists corca chere; do
+  while IFS=$'\x1f' read -r cpath cbranch cisMain corphan cexists corca chere; do
     [ -n "$cpath" ] || continue
     if [ "$cisMain" = 1 ]; then
       emit "$repo" keep "$cpath" '主工作区，绝不删'

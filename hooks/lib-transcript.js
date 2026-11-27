@@ -1,10 +1,14 @@
 'use strict';
 
 // Shared transcript scanning for Claude Code PreToolUse hooks.
-// A transcript is JSONL with one JSON object per line. Slash-command calls are
-// user entries whose message content contains a <command-name> tag. Scanning is
-// chunked so a multi-megabyte transcript stays well under a second, and callers
-// fail open when the file is missing, unreadable, or contains a bad line.
+// A transcript is JSONL with one JSON object per line. An /implement-spec-split
+// call is a user entry whose message content either contains a <command-name>
+// tag (typed as a slash command) or carries the command line after an
+// `=== TASK ===` marker (an Orca worker-start session, whose preamble holds
+// the spec; the CLI does not expand a slash command mid-message). Scanning is
+// chunked so a multi-megabyte transcript stays well under a second, and
+// callers fail open when the file is missing, unreadable, or contains a bad
+// line.
 
 const fs = require('fs');
 const { StringDecoder } = require('string_decoder');
@@ -12,6 +16,8 @@ const { StringDecoder } = require('string_decoder');
 const COMMAND_NAME = '/implement-spec-split';
 const COMMAND_NAME_TAG = `<command-name>${COMMAND_NAME}</command-name>`;
 const COMMAND_MARKER = `${COMMAND_NAME}</command-name>`;
+const TASK_MARKER = '=== TASK ===';
+const TASK_COMMAND_LINE = new RegExp(`^${COMMAND_NAME}(?:\\s|$)`);
 const AUTO_LAND_FLAG = '--auto-land';
 const CHUNK_SIZE = 1024 * 1024;
 
@@ -94,24 +100,53 @@ function hasAutoLandFlag(args) {
   return args.split(/\s+/).some(token => token === AUTO_LAND_FLAG);
 }
 
-// From one transcript line, return the <command-args> of an
-// /implement-spec-split invocation, or null when the line is not one.
+// The command-args of an /implement-spec-split line placed after an
+// `=== TASK ===` marker that occupies a whole line, '' for a bare command, or
+// null when the text has none. The command must be the first non-blank line
+// after the marker, so a marker quoted in prose or a bare command line
+// without the marker does not count.
+function taskCommandArgs(text) {
+  const lines = text.split('\n');
+  for (let index = 0; index < lines.length; index += 1) {
+    if (lines[index].trim() !== TASK_MARKER) continue;
+    for (let next = index + 1; next < lines.length; next += 1) {
+      const line = lines[next].trim();
+      if (line === '') continue;
+      if (TASK_COMMAND_LINE.test(line)) {
+        return line.slice(COMMAND_NAME.length).trim();
+      }
+      break;
+    }
+  }
+  return null;
+}
+
+// From one transcript line, return the command-args of an
+// /implement-spec-split invocation, or null when the line is not one. The
+// <command-args> of a typed call decide; otherwise the `=== TASK ===` form.
 function commandArgsFromLine(line) {
-  if (!line.includes(COMMAND_MARKER)) return null;
+  if (!line.includes(COMMAND_MARKER) && !line.includes(TASK_MARKER)) {
+    return null;
+  }
   const text = userTextFromLine(line);
-  if (text === null || !text.includes(COMMAND_NAME_TAG)) return null;
-  const match = text.match(/<command-args>([\s\S]*?)<\/command-args>/);
-  if (match === null) return null;
-  return match[1];
+  if (text === null) return null;
+  if (text.includes(COMMAND_NAME_TAG)) {
+    const match = text.match(/<command-args>([\s\S]*?)<\/command-args>/);
+    if (match !== null) return match[1];
+  }
+  return taskCommandArgs(text);
 }
 
 // True when the line is a user entry that invokes /implement-spec-split.
 // Unlike commandArgsFromLine this does not require <command-args>, so a call
 // with no arguments still counts.
 function isCommandInvocationLine(line) {
-  if (!line.includes(COMMAND_MARKER)) return false;
+  if (!line.includes(COMMAND_MARKER) && !line.includes(TASK_MARKER)) {
+    return false;
+  }
   const text = userTextFromLine(line);
-  return text !== null && text.includes(COMMAND_NAME_TAG);
+  if (text === null) return false;
+  return text.includes(COMMAND_NAME_TAG) || taskCommandArgs(text) !== null;
 }
 
 // Read a JSONL transcript in chunks and call onLine for every complete line.
@@ -166,7 +201,8 @@ function scanTranscript(transcriptPath, onLine) {
   return true;
 }
 
-// Return the <command-args> of the last /implement-spec-split call, or null.
+// Return the command-args of the last /implement-spec-split call (typed or
+// `=== TASK ===` form, whichever came last), or null.
 function readLastCommandArgs(transcriptPath) {
   let lastArgs = null;
   scanTranscript(transcriptPath, line => {

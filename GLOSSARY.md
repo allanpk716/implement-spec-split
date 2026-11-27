@@ -124,7 +124,7 @@ A wayfinder Map ticket that has an Assignee and was updated within 3 days, while
 _Avoid_: stale claim (older than 3 days, decided by update time alone)
 
 **Run**:
-One invocation of the skill, implementing one Spec from start to finish; several Runs may work on different Specs at the same time. Not an Orca Run: a Run reports into its wave's Orca Run and creates one of its own for its Ticket workers.
+One invocation of the skill, implementing one Spec from start to finish; several Runs may work on different Specs at the same time. Not an Orca Run: its wave's Orca Run only starts a Run (and serves as the handle for taking a wave over); a Run does not report into it — whether a Run is done is read from `pipeline-status.sh` and the keeper — and it creates one Orca Run of its own for its Ticket workers. The dispatch a Run's start left in the wave's Orca Run never reports `worker_done`; Orca releases it once the terminal closes.
 
 **Orca Run**:
 An Orca orchestration Run, named by its id on every Orca orchestration call that acts on a Run and never inherited from the terminal (the calls that name none are the two kinds `lib-orca.sh` Rule 2 excepts: the ones addressing one dispatch by its id, `worker-stop` / `worker-show` / `worker-release`, and `worker-list`, which the keeper calls without a Run of its own): the one `launch-wave.sh` creates per wave for the Spec sessions it dispatches (kept in the Launch state as `run`), and the one each Spec session creates for the Ticket workers it dispatches.

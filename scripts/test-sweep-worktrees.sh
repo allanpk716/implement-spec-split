@@ -463,5 +463,25 @@ expect_line keep "$WT_22" "the worktree the sweep runs in is kept"
 expect_has '清扫命令所在' "and says so" "$OUT"
 expect_without "worktree rm --worktree path:$WT_22 " "run from inside a worktree removes nothing" "$ORCA_LOG"
 
+# --- an empty branch column keeps its place ------------------------------------
+# A detached worktree has no branch line in git's porcelain, so its branch
+# column is empty (Orca lists it the same way). The unit separator keeps the
+# flags behind it in their columns; a tab collapsed them, the main worktree's
+# isMain flag read as its branch and it was reported as a skip.
+new_fixture
+node -e '
+  const fs = require("fs");
+  const [file, main] = process.argv.slice(1);
+  const value = JSON.parse(fs.readFileSync(file, "utf8"));
+  for (const item of value.result.worktrees) if (item.path === main) item.branch = "";
+  fs.writeFileSync(file, JSON.stringify(value));
+' "$FIXTURE/orca-worktrees.json" "$REPO"
+git -C "$REPO" checkout --quiet --detach
+run_sweep "$WORK/detached.out" --dry-run
+git -C "$REPO" checkout --quiet main
+expect_exit 0 "a detached main worktree exits 0"
+expect_line keep "$REPO" "a detached main worktree is kept as the main one"
+expect_has '主工作区' "and says so" "$OUT"
+
 printf '\n%d passed, %d failed\n' "$PASSED" "$FAILED"
 [ "$FAILED" -eq 0 ]

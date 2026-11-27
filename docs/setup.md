@@ -114,7 +114,7 @@ spec 是一个 GitHub 父 issue，它的子 issue 就是 ticket，ticket 之间�
 **工作区三层与接管**
 
 - **侧栏是一棵可折叠的树**，不再有进度标签（规格 #26）：主会话 → 规格工作区 `spec-<n>`（分支 `spec-<n>`，从 `origin/main` 切出，由 find-next 的 launch-wave 建为主会话工作区的子工作区）→ 票工作区 `spec-<n>-t<m>`（分支 `spec-<n>-t<m>`，从集成分支 `spec-<n>` 切出，由派发模块建为规格工作区的子工作区），每张票的 worker 跑在标题为 `spec-<n> t<m>` 的终端里；fix 和冲突解算角色直接在规格工作区里跑。看一张票属于哪份规格、做到哪了，看侧栏就行。
-- **工作区由脚本删**：票合入后 `scripts/stage-dispatch.sh release` 连分支一起删掉票工作区；规格落地后 `scripts/close-self.sh` 先删完剩下的票工作区、再删规格工作区；停车的规格保留工作区；遗弃的由 keeper 每轮经 `scripts/sweep-worktrees.sh` 清扫。不要手工 `orca worktree rm` 还有票工作区的规格工作区——子工作区会变成孤儿（Orca 不级联也不拒绝）。
+- **工作区由脚本删**：票合入后 `scripts/stage-dispatch.sh release` 连分支一起删掉票工作区；规格落地后 `scripts/close-self.sh` 先删完剩下的票工作区、再删规格工作区；停车的规格保留工作区；遗弃的由 keeper 每轮经 `scripts/sweep-worktrees.sh` 清扫（只删干净且已并入 origin 的；有未落地提交的工作区不会被清扫，要人处理）。不要手工 `orca worktree rm` 还有票工作区的规格工作区——子工作区会变成孤儿（Orca 不级联也不拒绝）。
 - **每份规格一个 Orca Run**：规格会话在第 0 步 `orca orchestration run-create` 建自己那份（票的 worker 都向它汇报），启动这一波的 `launch-wave.sh --apply` 另建一份给这一波的规格会话。主会话、规格会话或任何协调终端关掉都不影响下层：worker 照常跑，`worker_done` 照常进 Run。在新终端里接管：
 
   ```bash
