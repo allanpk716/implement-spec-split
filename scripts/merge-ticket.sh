@@ -61,15 +61,16 @@
 #     hold the same content (the whole file compared, no version parsed).
 # CHANGELOG files and manifests such as pyproject.toml are not built in: the
 # first needs its entries parsed, the second changes for dependencies too.
-# Each side is measured as what it added since the base, not as what it
-# touched. The base is the first commit on the Ticket tip's first-parent chain
-# that the Integration branch already has (the Integration tip at dispatch
-# time; a merge-back does not move it, a rebase does); the Integration side is
-# the net diff from there to its tip, the Ticket side the net diff from
-# merge-base(Integration tip, Ticket tip) to the Ticket tip. So the check is
-# whether the merged result would hold the same counter twice, and it clears
-# once the Ticket side re-bumps: the old entry is gone from its net additions
-# and its version file no longer equals the Integration tip's.
+# A numbered directory is measured as what each side added since the base, not
+# as what it touched; a version file as what the two tips hold. The base is
+# the first commit on the Ticket tip's first-parent chain that the Integration
+# branch already has (the Integration tip at dispatch time; a merge-back does
+# not move it, a rebase does). For a numbered directory the Integration side
+# is the net diff from there to its tip, the Ticket side the net diff from
+# merge-base(Integration tip, Ticket tip) to the Ticket tip, so the check is
+# whether the merged result would hold the same number twice. Both clear once
+# the Ticket side re-bumps: the old entry is gone from its net additions, and
+# its version file no longer holds the Integration tip's content.
 #
 # The merge is `git merge --no-ff --no-edit`: every Ticket lands as a merge
 # commit whatever the two branches look like. On a conflict the conflicted
@@ -109,8 +110,9 @@ usage: $SCRIPT_NAME --worktree <integration worktree> --integration <branch>
 Merge the Ticket branch into the Integration branch in its worktree (a merge
 commit, --no-ff), then run the test command there through bash -c. Nothing is
 merged unless the Ticket branch has new commits, both worktrees are clean and
-no shared counter (a numbered directory's number, a version file) was added by
-both sides: that exits 6 and lists them. A Ticket branch already part of the
+no shared counter collides (both sides adding the same number of a numbered
+directory, or leaving a version file with the same content): that exits 6 and
+lists them. A Ticket branch already part of the
 Integration branch exits 5 (nothing to merge); a conflict aborts the merge and
 leaves the worktree as it was. --no-ticket-worktree lets --ticket be a ref
 nobody has checked out (step 9.1: origin/<main branch>) and skips the Ticket
