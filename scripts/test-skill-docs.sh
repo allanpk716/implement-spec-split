@@ -96,6 +96,33 @@ has 'new commits' 'the gate checks new commits' "$SKILL"
 has 'a clean tree' 'the gate checks a clean tree' "$SKILL"
 has "merger script's test run passes" 'the gate checks the merger script test run' "$SKILL"
 
+# --- SKILL.md: the merger's exit 6 is wired in (规格 #61 票 #74) -------------------
+
+# Step 5 dispatches a re-bump role at the conflict role's hook: the fix role
+# with the ticket number (named fix-<m>), sent to the ticket worktree by its
+# Brief because the module opens a fix role's terminal in the integration
+# worktree. The role reads the other side and merges nothing back; at most 2
+# rounds, then a park; the implementer is released before the re-bump role.
+has 'a worker is dispatched only on a conflict or a colliding shared counter' \
+  'SKILL.md step 5 dispatches a worker on a conflict or a colliding counter' "$SKILL"
+has "--ticket spec-<n>-t<m> --test '<the repo's test command>' [--counter <path>]..." \
+  'SKILL.md step 5 passes --counter to the merger' "$SKILL"
+has '`--role fix --ticket <m>`, one command as above, which the module names `fix-<m>`' \
+  'SKILL.md step 5 dispatches the re-bump role as fix with the ticket number' "$SKILL"
+has 'it works in the ticket worktree `<ticket worktree>` on branch `spec-<n>-t<m>` and changes nothing in the integration worktree' \
+  'SKILL.md step 5 re-bump Brief overrides the Task with the ticket worktree' "$SKILL"
+has 'the other side is read only (`git ls-tree spec-<n>:docs/adr/`, `git show spec-<n>:VERSION`)' \
+  'SKILL.md step 5 re-bump role reads the other side and merges nothing back' "$SKILL"
+has 'At most 2 re-bump rounds per ticket' 'SKILL.md step 5 caps the re-bump at 2 rounds' "$SKILL"
+has 'a third `6` parks with category `error`' 'SKILL.md step 5 parks on a third re-bump miss' "$SKILL"
+has 'release in this order: the implementer first' \
+  'SKILL.md step 5 releases the implementer before the re-bump role' "$SKILL"
+has '--watch <ticket worktree>=<its dispatch dir>' \
+  'SKILL.md step 5 watches the ticket worktree for the re-bump role' "$SKILL"
+has '`fix-<m>` for step 5' 'SKILL.md names the re-bump role fix-<m> in the run directory' "$SKILL"
+has "step 5's re-bump takes \`--ticket <m>\` and is named \`fix-<m>\`" \
+  'SKILL.md dispatch section lets fix take --ticket for a re-bump' "$SKILL"
+
 # --- SKILL.md: the three reports carry the route table and the check lines (票 #47)
 
 # The landing report: completion-report.sh with the run directory ends with
