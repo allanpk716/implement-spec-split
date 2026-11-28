@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Isolated integration tests for install.sh, the skill-symlink segment (规格 #58
-# 票 #63). Every run gets a scratch HOME and ISS_SKILLS_DIR, so the real
-# ~/.claude is never read or written; most cases run a copy of install.sh from a
-# scratch git checkout, so they control which skills exist and where. Only
-# outside behaviour is checked: stdout, the exit code, the links and where they
-# point.
+# Isolated integration tests for install.sh (规格 #58): the skill-symlink segment
+# (票 #63) and the local-config segment (票 #64). Every run gets a scratch HOME,
+# ISS_SKILLS_DIR and ISS_CLAUDE_SETTINGS, so the real ~/.claude is never read or
+# written; most cases run a copy of install.sh from a scratch git checkout, so
+# they control which skills exist and where. Only outside behaviour is checked:
+# stdout, the exit code, the links and where they point, settings.json and the
+# backups beside it.
 
 set -u
 
@@ -47,6 +48,9 @@ new_case() {
   CASE_HOME=$CASE_DIR/home
   CASE_SKILLS=$CASE_DIR/skills
   CASE_BIN=$CASE_DIR/bin
+  CASE_CLAUDE=$CASE_DIR/claude            # settings.json lives here, backups go beside it
+  CASE_SETTINGS=$CASE_CLAUDE/settings.json
+  EXTRA_ENV=
   mkdir -p "$CASE_HOME" "$CASE_BIN"
 }
 
@@ -82,21 +86,70 @@ EOF
 }
 
 # run_install <checkout> [args...]: runs <checkout>/install.sh with the scratch
-# HOME and ISS_SKILLS_DIR; stdout in install.out, stderr in install.err, the
-# status in RUN_EXIT.
+# HOME, ISS_SKILLS_DIR and ISS_CLAUDE_SETTINGS, CLAUDE_CONFIG_DIR unset so that
+# nothing can fall back to a real one; stdout in install.out, stderr in
+# install.err, the status in RUN_EXIT. EXTRA_ENV, when a case sets it, adds
+# space-separated VAR=value assignments (values without spaces): a fixture
+# expectation list or a fault.
 run_install() {
   local repo=$1
   shift
-  env HOME="$CASE_HOME" ISS_SKILLS_DIR="$CASE_SKILLS" PATH="$CASE_BIN:$PATH" \
+  env -u CLAUDE_CONFIG_DIR -u ISS_CONFIG_EXPECTATIONS_FILE -u ISS_INSTALL_FAULT ${EXTRA_ENV:-} \
+    HOME="$CASE_HOME" ISS_SKILLS_DIR="$CASE_SKILLS" ISS_CLAUDE_SETTINGS="$CASE_SETTINGS" PATH="$CASE_BIN:$PATH" \
     bash "$repo/install.sh" "$@" > "$CASE_DIR/install.out" 2> "$CASE_DIR/install.err"
   RUN_EXIT=$?
 }
 
-# The same without ISS_SKILLS_DIR: the default location is $HOME/.claude/skills.
+# The same without ISS_SKILLS_DIR and ISS_CLAUDE_SETTINGS: both default to the
+# HOME the process was given (the settings file to $CLAUDE_CONFIG_DIR instead
+# when EXTRA_ENV sets it), as doctor.sh locates it.
 run_install_default_location() { # checkout
-  env -u ISS_SKILLS_DIR HOME="$CASE_HOME" PATH="$CASE_BIN:$PATH" \
+  env -u ISS_SKILLS_DIR -u ISS_CLAUDE_SETTINGS -u CLAUDE_CONFIG_DIR -u ISS_CONFIG_EXPECTATIONS_FILE -u ISS_INSTALL_FAULT ${EXTRA_ENV:-} \
+    HOME="$CASE_HOME" PATH="$CASE_BIN:$PATH" \
     bash "$1/install.sh" > "$CASE_DIR/install.out" 2> "$CASE_DIR/install.err"
   RUN_EXIT=$?
+}
+
+# write_settings <matcher> [indent] [file]: a settings.json with the
+# delegate-guard PreToolUse hook registered under <matcher>, in the shape
+# hooks/README.md shows, between two unrelated settings that must survive a fix.
+# Two-space indent and the case's settings.json unless told otherwise.
+write_settings() {
+  local file=${3:-$CASE_SETTINGS}
+  mkdir -p "$(dirname -- "$file")"
+  MATCHER=$1 INDENT=${2:-'  '} node - > "$file" <<'NODE'
+process.stdout.write(JSON.stringify({
+  model: 'fixture-model',
+  hooks: {
+    PreToolUse: [{
+      matcher: process.env.MATCHER,
+      hooks: [{type: 'command', command: 'node "/fixture/hooks/delegate-guard.js"', timeout: 5}],
+    }],
+  },
+  permissions: {allow: ['Bash(ls:*)']},
+}, null, process.env.INDENT) + '\n');
+NODE
+}
+
+# write_expectations <file>: a fixture expectation list -- the real list's item
+# plus a loosen item (the matcher should no longer name NotebookEdit), which the
+# installer must never apply. v1's own list has no loosen item.
+write_expectations() {
+  cat > "$1" <<'JSON'
+[
+  {
+    "id": "delegate-guard-matcher",
+    "direction": "tighten",
+    "check": {"type": "preToolUseMatcher", "hook": "delegate-guard.js", "include": ["Edit", "Write", "Bash"]},
+    "fix": "append-matcher-tools"
+  },
+  {
+    "id": "delegate-guard-no-notebookedit",
+    "direction": "loosen",
+    "check": {"type": "preToolUseMatcher", "hook": "delegate-guard.js", "exclude": ["NotebookEdit"]}
+  }
+]
+JSON
 }
 
 # One line per entry of the scratch skills directory (type, name, link target),
@@ -170,10 +223,11 @@ json_brief() {
 }
 
 # expect_json <name> <js predicate over the parsed stdout `out`>; CASE_DIR,
-# CASE_SKILLS and REPO are passed in the environment.
+# CASE_SKILLS, CASE_SETTINGS and REPO are passed in the environment.
 expect_json() {
   local name=$1 js=$2
-  if OUT_FILE=$CASE_DIR/install.out JS="$js" CASE_DIR="$CASE_DIR" CASE_SKILLS="$CASE_SKILLS" REPO="${REPO:-}" node -e '
+  if OUT_FILE=$CASE_DIR/install.out JS="$js" CASE_DIR="$CASE_DIR" CASE_SKILLS="$CASE_SKILLS" \
+    CASE_SETTINGS="$CASE_SETTINGS" REPO="${REPO:-}" node -e '
     const out = JSON.parse(require("fs").readFileSync(process.env.OUT_FILE, "utf8"));
     process.exit(new Function("out", "return (" + process.env.JS + ")")(out) ? 0 : 1);
   ' 2>/dev/null; then
@@ -221,6 +275,101 @@ expect_entries() { # n name
   fi
 }
 
+# Byte for byte the same: settings.json before and after, or a backup and the
+# original.
+expect_same_file() { # a b name
+  if cmp -s "$1" "$2"; then
+    record PASS "$3"
+  else
+    record FAIL "$3" "$(head -c 200 "$1" | tr '\n' '|') vs $(head -c 200 "$2" | tr '\n' '|')"
+  fi
+}
+
+# expect_settings_at <file> <name> <js body of a function (orig, now, deepEqual)>:
+# the copy the case saved as settings.before (orig) and the settings file (now),
+# both parsed, go through the body, which must return; deepEqual compares
+# regardless of key order.
+expect_settings_at() {
+  local file=$1 name=$2 js=$3
+  if ORIG="$CASE_DIR/settings.before" NOW="$file" JS="$js" node -e '
+    const fs = require("fs");
+    const deepEqual = (a, b) => {
+      if (a === b) return true;
+      if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((x, i) => deepEqual(x, b[i]));
+      if (a && b && typeof a === "object" && typeof b === "object") {
+        const keys = Object.keys(a);
+        return keys.length === Object.keys(b).length && keys.every(k => Object.prototype.hasOwnProperty.call(b, k) && deepEqual(a[k], b[k]));
+      }
+      return false;
+    };
+    const orig = JSON.parse(fs.readFileSync(process.env.ORIG, "utf8"));
+    const now = JSON.parse(fs.readFileSync(process.env.NOW, "utf8"));
+    process.exit((0, eval("(function (orig, now, deepEqual) {" + process.env.JS + "})"))(orig, now, deepEqual) ? 0 : 1);
+  ' 2>"$CASE_DIR/expect.err"; then
+    record PASS "$name"
+  else
+    record FAIL "$name" "$(head -c 300 "$CASE_DIR/expect.err") $(head -c 300 "$file" | tr '\n' '|')"
+  fi
+}
+
+expect_settings() { # name <js body of a function (orig, now, deepEqual)>
+  expect_settings_at "$CASE_SETTINGS" "$1" "$2"
+}
+
+# expect_indent <n|tab> <name>: every line of settings.json starts with a whole
+# number of <n> spaces (never a tab), or with tabs only.
+expect_indent() {
+  if FILE="$CASE_SETTINGS" UNIT="$1" node -e '
+    const lines = require("fs").readFileSync(process.env.FILE, "utf8").split("\n").filter(Boolean);
+    const n = Number(process.env.UNIT);
+    const ok = process.env.UNIT === "tab"
+      ? lines.every(l => /^(\t*)\S/.test(l))
+      : lines.every(l => { const m = l.match(/^( *)/)[0].length; return m % n === 0 && !/^ *\t/.test(l); });
+    process.exit(ok && lines.some(l => /^\s/.test(l)) ? 0 : 1);
+  ' 2>/dev/null; then
+    record PASS "$2"
+  else
+    record FAIL "$2" "$(head -c 200 "$CASE_SETTINGS" | cat -t | tr '\n' '|')"
+  fi
+}
+
+# expect_backups <n> <name>: how many backup directories sit beside settings.json.
+expect_backups() {
+  local n
+  n=$(ls -d "$CASE_CLAUDE"/backups/install-* 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$n" -eq "$1" ]; then
+    record PASS "$2"
+  else
+    record FAIL "$2" "expected $1 backup directories, got $n"
+  fi
+}
+
+expect_no_backups() {
+  if [ -e "$CASE_CLAUDE/backups" ]; then
+    record FAIL "$1" "$(ls -A "$CASE_CLAUDE/backups" | tr '\n' ' ')"
+  else
+    record PASS "$1"
+  fi
+}
+
+# expect_backup_is <original> <name>: the one backup is a file named like
+# settings.json, byte for byte the original, in a directory named
+# install-<YYYYMMDD-HHMMSS>.
+expect_backup_is() {
+  local dir file
+  dir=$(ls -d "$CASE_CLAUDE"/backups/install-* 2>/dev/null | head -n 1)
+  file=$dir/settings.json
+  if [ -z "$dir" ] || [ ! -f "$file" ]; then
+    record FAIL "$2" "no backup file under $CASE_CLAUDE/backups"
+    return
+  fi
+  case "${dir##*/}" in
+    install-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+    *) record FAIL "$2" "odd backup directory name: ${dir##*/}"; return ;;
+  esac
+  expect_same_file "$file" "$1" "$2"
+}
+
 # 1. Fresh install from the real checkout: every directory git tracks with a
 # SKILL.md gets a link named after its frontmatter name, pointing into this
 # checkout. The expected set is read the same way, so a skill added later is
@@ -253,12 +402,15 @@ expect_entries "$COUNT" "fresh install leaves nothing but the links"
 # 2. The --json shape follows doctor.sh: one object with a checks array (one
 # row per skill) and a summary; every row is PASS/created and the links are on
 # disk. With ISS_SKILLS_DIR set, nothing lands under the scratch HOME's .claude.
+# No settings.json, so no config row; the settings file looked at and the (empty)
+# list of unexecuted loosenings are in the object all the same.
 new_case
 make_repo "$CASE_DIR/repo" find-next grill-router
 run_install "$REPO" --json
 expect_exit 0 "fixture install with --json exits 0"
 expect_lines 1 "--json prints exactly one line"
-expect_json "the object has the top-level keys in a fixed order" 'Object.keys(out).join(",") === "mode,windows,mainCheckout,skillsDir,checks,summary"'
+expect_json "the object has the top-level keys in a fixed order" 'Object.keys(out).join(",") === "mode,windows,mainCheckout,skillsDir,claudeSettings,checks,unexecutedLoosenings,summary"'
+expect_json "the settings file looked at is reported, and no loosening is listed" 'out.claudeSettings === process.env.CASE_SETTINGS && Array.isArray(out.unexecutedLoosenings) && out.unexecutedLoosenings.length === 0'
 expect_json "every check has the row keys in a fixed order" 'out.checks.every(c => Object.keys(c).join(",") === "group,level,status,changed,name,dir,link,target,message,hint")'
 expect_json "the summary has its keys in a fixed order" 'Object.keys(out.summary).join(",") === "pass,warn,fail,info,changed,drift"'
 expect_json "every row is PASS and created" 'out.checks.length === 3 && out.checks.every(c => c.group === "skills" && c.level === "PASS" && c.status === "created" && c.changed === true)'
@@ -535,7 +687,7 @@ if [ "$(cat "$CASE_DIR/install.out")" = "$INSTALLED" ]; then
 else
   record FAIL "two install --json runs on an installed state print the same object" "first=$INSTALLED second=$(cat "$CASE_DIR/install.out")"
 fi
-expect_json "the keys are the same as in the other modes" 'Object.keys(out).join(",") === "mode,windows,mainCheckout,skillsDir,checks,summary" && Object.keys(out.summary).join(",") === "pass,warn,fail,info,changed,drift" && out.checks.every(c => Object.keys(c).join(",") === "group,level,status,changed,name,dir,link,target,message,hint")'
+expect_json "the keys are the same as in the other modes" 'Object.keys(out).join(",") === "mode,windows,mainCheckout,skillsDir,claudeSettings,checks,unexecutedLoosenings,summary" && Object.keys(out.summary).join(",") === "pass,warn,fail,info,changed,drift" && out.checks.every(c => Object.keys(c).join(",") === "group,level,status,changed,name,dir,link,target,message,hint")'
 run_install "$REPO" --check --json
 expect_exit 0 "--check --json on an installed state exits 0"
 expect_json "no drift means exit 0 and an all-PASS summary" 'out.summary.drift === 0 && out.summary.fail === 0 && out.summary.warn === 0 && out.checks.every(c => c.level === "PASS")'
@@ -574,6 +726,13 @@ for FAKE in MINGW64_NT-10.0-19045 MSYS_NT-10.0-19045; do
   else
     record PASS "$FAKE: a directory at the name stays a directory"
   fi
+  # The config segment is node only: it runs on Windows too.
+  write_settings 'Edit|Write|NotebookEdit'
+  cp "$CASE_SETTINGS" "$CASE_DIR/settings.before"
+  run_install "$REPO" --json
+  expect_json "$FAKE: the config segment tightens the matcher all the same" 'out.checks.some(c => c.group === "config" && c.status === "tightened" && c.changed === true) && out.windows === true'
+  expect_settings "$FAKE: the matcher is fixed" 'return now.hooks.PreToolUse[0].matcher === "Edit|Write|NotebookEdit|Bash"'
+  expect_backups 1 "$FAKE: the backup is beside settings.json"
 done
 
 # 15. Without ISS_SKILLS_DIR the links go to ~/.claude/skills of the HOME the
@@ -657,6 +816,349 @@ expect_json "the nameless and the twin are FAIL rows and skipped, the rest linke
 expect_link "$CASE_SKILLS/find-next" "$REPO/find-next" "the first directory claiming a name gets the link"
 expect_missing "$CASE_SKILLS/nameless" "a nameless SKILL.md gets no link"
 expect_missing "$CASE_SKILLS/twin" "a twin gets no link"
+
+# 20. The config segment with the real expectation list (v1: the delegate-guard
+# PreToolUse matcher must cover Edit, Write and Bash), against this machine's
+# shape before #64: matcher Edit|Write|NotebookEdit. --check reports the missing
+# Bash as FAIL and writes nothing; the install backs settings.json up beside it,
+# appends Bash, keeps the indentation, changes nothing else in the file (compared
+# after parsing), prints one modification line, and a second run changes nothing
+# and makes no new backup.
+new_case
+make_repo "$CASE_DIR/repo" find-next
+write_settings 'Edit|Write|NotebookEdit'
+cp "$CASE_SETTINGS" "$CASE_DIR/settings.before"
+run_install "$REPO" --check
+expect_exit 1 "--check with the matcher lacking Bash exits 1"
+expect_out_has '[FAIL] delegate-guard hook 的 PreToolUse matcher "Edit|Write|NotebookEdit" 缺 Bash' "--check names the missing tool"
+expect_out_count 0 '已补为' "--check prints no modification line"
+expect_same_file "$CASE_SETTINGS" "$CASE_DIR/settings.before" "--check leaves settings.json alone"
+expect_no_backups "--check makes no backup"
+run_install "$REPO"
+expect_exit 0 "install with the matcher lacking Bash exits 0"
+expect_out_count 1 '已补为' "install prints one modification line for the matcher"
+expect_out_has '[PASS] delegate-guard hook 的 PreToolUse matcher "Edit|Write|NotebookEdit" 缺 Bash，已补为 "Edit|Write|NotebookEdit|Bash"' "the modification line names the old and the new matcher"
+expect_out_has 'PASS 3 / WARN 0 / FAIL 0 / 改动 3 处' "the summary counts the fix as a change"
+expect_settings "only the matcher differs from the original" 'orig.hooks.PreToolUse[0].matcher = "Edit|Write|NotebookEdit|Bash"; return deepEqual(orig, now)'
+expect_indent 2 "the indentation is kept"
+expect_backups 1 "one backup directory beside settings.json"
+expect_backup_is "$CASE_DIR/settings.before" "the backup is the original file"
+expect_out_has "原文件备份：$CASE_CLAUDE/backups/install-" "the modification line points at the backup"
+cp "$CASE_SETTINGS" "$CASE_DIR/settings.after"
+run_install "$REPO"
+expect_exit 0 "a second install exits 0"
+expect_same_file "$CASE_SETTINGS" "$CASE_DIR/settings.after" "a second install leaves settings.json as it is"
+expect_backups 1 "a second install makes no new backup"
+expect_out_count 0 '已补为' "a second install prints no modification line"
+run_install "$REPO" --check --json
+expect_exit 0 "--check after the fix exits 0"
+expect_json "after the fix the config row is PASS ok" 'JSON.stringify(out.checks.map(c => c.group + ":" + c.status)) === JSON.stringify(["skills:ok","skills:ok","config:ok"]) && out.claudeSettings === process.env.CASE_SETTINGS && out.unexecutedLoosenings.length === 0'
+
+# 21. Already satisfied: with Bash in the matcher (any position), a blank
+# matcher (every tool, as doctor.sh reads it) or no matcher key at all,
+# settings.json stays byte for byte, no backup appears, no modification line is
+# printed and the config row is PASS ok.
+new_case
+make_repo "$CASE_DIR/repo" find-next
+for MATCHER in 'Edit|Write|NotebookEdit|Bash' 'Bash|Edit|Write' ''; do
+  write_settings "$MATCHER"
+  cp "$CASE_SETTINGS" "$CASE_DIR/settings.before"
+  run_install "$REPO" --json
+  expect_exit 0 "matcher '$MATCHER' already covers Bash: exit 0"
+  expect_json "matcher '$MATCHER': the config row is PASS ok and nothing changed" 'out.checks.filter(c => c.group === "config").length === 1 && out.checks.some(c => c.group === "config" && c.status === "ok" && c.level === "PASS" && c.changed === false && c.name === "delegate-guard-matcher") && out.checks.filter(c => c.group === "config").every(c => !c.changed) && out.summary.drift === 0'
+  expect_same_file "$CASE_SETTINGS" "$CASE_DIR/settings.before" "matcher '$MATCHER': settings.json is byte for byte the same"
+  expect_no_backups "matcher '$MATCHER': no backup"
+done
+write_settings 'Edit|Write|NotebookEdit|Bash'
+node -e 'const fs = require("fs"); const o = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); delete o.hooks.PreToolUse[0].matcher; fs.writeFileSync(process.argv[1], JSON.stringify(o, null, 2) + "\n");' "$CASE_SETTINGS"
+cp "$CASE_SETTINGS" "$CASE_DIR/settings.before"
+run_install "$REPO"
+expect_exit 0 "a registration without a matcher key: exit 0"
+expect_out_count 0 '已补为' "a registration without a matcher key prints no modification line"
+expect_same_file "$CASE_SETTINGS" "$CASE_DIR/settings.before" "a registration without a matcher key: settings.json is byte for byte the same"
+expect_no_backups "a registration without a matcher key: no backup"
+
+# 22. What gets appended: the missing tools in the list's order, at the end of
+# the matcher; everything already there stays, NotebookEdit included.
+new_case
+make_repo "$CASE_DIR/repo" find-next
+for PAIR in 'Edit|Write => Edit|Write|Bash' 'Bash|Edit => Bash|Edit|Write' 'Edit => Edit|Write|Bash' 'Edit|Write|NotebookEdit => Edit|Write|NotebookEdit|Bash'; do
+  BEFORE=${PAIR%% => *}
+  AFTER=${PAIR##* => }
+  write_settings "$BEFORE"
+  cp "$CASE_SETTINGS" "$CASE_DIR/settings.before"
+  run_install "$REPO"
+  expect_exit 0 "'$BEFORE': exit 0"
+  expect_settings "'$BEFORE' becomes '$AFTER' and nothing else differs" "orig.hooks.PreToolUse[0].matcher = \"$AFTER\"; return deepEqual(orig, now)"
+  expect_out_has "已补为 \"$AFTER\"" "'$BEFORE': the modification line names the new matcher"
+done
+
+# 23. The file's shape is followed: four spaces stay four spaces, tabs stay
+# tabs, and a file without a trailing newline stays without one.
+new_case
+make_repo "$CASE_DIR/repo" find-next
+write_settings 'Edit|Write' '    '
+cp "$CASE_SETTINGS" "$CASE_DIR/settings.before"
+run_install "$REPO"
+expect_exit 0 "a file indented with four spaces exits 0"
+expect_indent 4 "four-space indentation is kept"
+expect_settings "four-space file: the matcher is fixed" 'return now.hooks.PreToolUse[0].matcher === "Edit|Write|Bash"'
+write_settings 'Edit|Write' "$(printf '\t')"
+run_install "$REPO"
+expect_exit 0 "a file indented with tabs exits 0"
+expect_indent tab "tab indentation is kept"
+expect_settings "tab file: the matcher is fixed" 'return now.hooks.PreToolUse[0].matcher === "Edit|Write|Bash"'
+write_settings 'Edit|Write' '    '
+printf '%s' "$(cat "$CASE_SETTINGS")" > "$CASE_SETTINGS"
+run_install "$REPO"
+expect_exit 0 "a file without a trailing newline exits 0"
+if [ -n "$(tail -c 1 "$CASE_SETTINGS")" ]; then
+  record PASS "no trailing newline is added"
+else
+  record FAIL "no trailing newline is added" "the file ends with a newline"
+fi
+expect_settings "no-newline file: the matcher is fixed" 'return now.hooks.PreToolUse[0].matcher === "Edit|Write|Bash"'
+
+# 24. No delegate-guard registration: not drift, not handled, not reported --
+# a settings.json with other hooks only, or a PreToolUse that is not an array.
+# Both are left as they are and no backup is made.
+new_case
+make_repo "$CASE_DIR/repo" find-next
+mkdir -p "$CASE_CLAUDE"
+printf '{\n  "hooks": {\n    "PreToolUse": [\n      {"matcher": "Agent|Task", "hooks": [{"type": "command", "command": "node \\"/fixture/hooks/subagent-guard.js\\""}]}\n    ],\n    "Stop": []\n  }\n}\n' > "$CASE_SETTINGS"
+cp "$CASE_SETTINGS" "$CASE_DIR/settings.before"
+run_install "$REPO" --json
+expect_exit 0 "other hooks only: exit 0"
+expect_json "other hooks only: no config row" 'out.checks.every(c => c.group === "skills") && out.summary.drift === 0'
+expect_same_file "$CASE_SETTINGS" "$CASE_DIR/settings.before" "other hooks only: settings.json is untouched"
+expect_no_backups "other hooks only: no backup"
+run_install "$REPO" --check
+expect_exit 0 "other hooks only: --check exits 0"
+expect_out_none 'delegate-guard' "other hooks only: --check prints nothing about delegate-guard"
+printf '{"hooks": {"PreToolUse": {"matcher": "Bash"}}}\n' > "$CASE_SETTINGS"
+cp "$CASE_SETTINGS" "$CASE_DIR/settings.before"
+run_install "$REPO" --json
+expect_json "PreToolUse not an array: no config row" 'out.checks.every(c => c.group === "skills")'
+expect_same_file "$CASE_SETTINGS" "$CASE_DIR/settings.before" "PreToolUse not an array: settings.json is untouched"
+
+# 24b. No settings.json at all: nothing is created (not the directory, not a
+# backup), no config row, and the human output still names the file looked at.
+new_case
+make_repo "$CASE_DIR/repo" find-next
+run_install "$REPO" --json
+expect_exit 0 "no settings.json: exit 0"
+expect_json "no settings.json: no config row, the path is still reported" 'out.checks.every(c => c.group === "skills") && out.claudeSettings === process.env.CASE_SETTINGS'
+if [ -e "$CASE_CLAUDE" ]; then
+  record FAIL "no settings.json: nothing is created" "$(ls -la "$CASE_CLAUDE" 2>&1 | head -c 200)"
+else
+  record PASS "no settings.json: nothing is created"
+fi
+run_install "$REPO" --check
+expect_out_has "配置文件：$CASE_SETTINGS" "the human output names the settings file it looked in"
+
+# 25. A loosen item (from a fixture: v1's list has none) is never applied. The
+# machine still names NotebookEdit and the repo would rather it did not: the
+# install changes nothing, makes no backup, lists the item under 未执行的放宽项
+# in human mode and in --json (its own array, plus a WARN row that counts as
+# drift), and exits 1. The tighten item in the same list is judged as usual; a
+# loosen item the machine already satisfies is PASS and not listed.
+new_case
+make_repo "$CASE_DIR/repo" find-next
+write_expectations "$CASE_DIR/expectations.json"
+write_settings 'Edit|Write|NotebookEdit|Bash'
+cp "$CASE_SETTINGS" "$CASE_DIR/settings.before"
+EXTRA_ENV="ISS_CONFIG_EXPECTATIONS_FILE=$CASE_DIR/expectations.json"
+run_install "$REPO"
+expect_exit 1 "an unexecuted loosen item leaves the exit code at 1"
+expect_same_file "$CASE_SETTINGS" "$CASE_DIR/settings.before" "a loosen item never modifies settings.json"
+expect_no_backups "a loosen item makes no backup"
+expect_out_has '未执行的放宽项' "human mode prints the 未执行的放宽项 section"
+expect_out_has '- 放宽项未执行：delegate-guard hook 的 PreToolUse matcher 含 NotebookEdit（仓库期望不含）' "the section names the loosen item"
+expect_out_has '[WARN] 放宽项未执行：delegate-guard hook 的 PreToolUse matcher' "the loosen item is one WARN line"
+expect_out_count 1 '[WARN]' "nothing else is a WARN"
+expect_out_has '[PASS] delegate-guard hook 的 PreToolUse matcher 已覆盖 Edit|Write|Bash' "the tighten item in the same list is judged as usual"
+expect_out_has 'PASS 3 / WARN 1 / FAIL 0 / 改动 2 处' "the summary counts the loosen item as drift and no change"
+run_install "$REPO" --json
+expect_json "the loosen item is a WARN row in checks, after the skill rows" 'JSON.stringify(out.checks.map(c => c.group + ":" + c.level + ":" + c.status + ":" + c.name)) === JSON.stringify(["skills:PASS:ok:implement-spec-split","skills:PASS:ok:find-next","config:PASS:ok:delegate-guard-matcher","config:WARN:loosen:delegate-guard-no-notebookedit"])'
+expect_json "the loosen item is in its own array, the same row" 'out.unexecutedLoosenings.length === 1 && out.unexecutedLoosenings[0].name === "delegate-guard-no-notebookedit" && out.unexecutedLoosenings[0].status === "loosen" && out.unexecutedLoosenings[0].level === "WARN" && out.unexecutedLoosenings[0].message.includes("NotebookEdit")'
+expect_json "the loosen row counts as drift, nothing changed" 'out.summary.warn === 1 && out.summary.drift === 1 && out.summary.changed === 0 && out.summary.pass === 3'
+expect_json "config rows have the same keys as skill rows and name the settings file" 'out.checks.filter(c => c.group === "config").every(c => Object.keys(c).join(",") === "group,level,status,changed,name,dir,link,target,message,hint" && c.link === process.env.CASE_SETTINGS && c.dir === "" && c.target === "" && c.changed === false)'
+expect_lines 1 "--json prints the loosenings inside the object, not as a section"
+write_settings 'Edit|Write|Bash'
+run_install "$REPO" --json
+expect_json "a satisfied loosen item is PASS ok and not listed" '!out.checks.some(c => c.status === "loosen") && out.checks.filter(c => c.group === "config").every(c => c.status === "ok" && c.level === "PASS") && out.unexecutedLoosenings.length === 0 && out.summary.drift === 0'
+run_install "$REPO"
+expect_exit 0 "a satisfied loosen item exits 0"
+expect_out_none '未执行的放宽项' "no section when no loosening is unexecuted"
+
+# 26. --check with a tighten item unmet and a loosen item unexecuted (fixture):
+# both are reported -- FAIL unmet and WARN loosen -- in human mode with the
+# section, and in --json; nothing is written and no backup is made. The install
+# that follows fixes the tighten item only.
+new_case
+make_repo "$CASE_DIR/repo" find-next
+write_expectations "$CASE_DIR/expectations.json"
+write_settings 'Edit|Write|NotebookEdit'
+cp "$CASE_SETTINGS" "$CASE_DIR/settings.before"
+EXTRA_ENV="ISS_CONFIG_EXPECTATIONS_FILE=$CASE_DIR/expectations.json"
+run_install "$REPO" --check
+expect_exit 1 "--check with an unmet tighten item exits 1"
+expect_out_has '[FAIL] delegate-guard hook 的 PreToolUse matcher "Edit|Write|NotebookEdit" 缺 Bash（期望覆盖 Edit|Write|Bash）' "--check reports the unmet tighten item"
+expect_out_has '[WARN] 放宽项未执行：delegate-guard hook 的 PreToolUse matcher 含 NotebookEdit（仓库期望不含） -> 安装脚本不改放宽项' "--check reports the unexecuted loosen item"
+expect_out_has '未执行的放宽项' "--check prints the 未执行的放宽项 section"
+expect_out_has 'PASS 0 / WARN 1 / FAIL 3 / 改动 0 处' "--check's summary counts the two missing links and the unmet tighten item"
+expect_same_file "$CASE_SETTINGS" "$CASE_DIR/settings.before" "--check leaves settings.json alone"
+expect_no_backups "--check makes no backup"
+run_install "$REPO" --check --json
+expect_json "--check --json reports both items" 'JSON.stringify(out.checks.filter(c => c.group === "config").map(c => c.level + ":" + c.status + ":" + c.name)) === JSON.stringify(["FAIL:unmet:delegate-guard-matcher","WARN:loosen:delegate-guard-no-notebookedit"]) && out.unexecutedLoosenings.length === 1 && out.summary.changed === 0 && out.mode === "check"'
+expect_json "the unmet tighten row's hint is to run the install" 'out.checks.find(c => c.status === "unmet").hint.includes(process.env.REPO + "/install.sh")'
+run_install "$REPO"
+expect_exit 1 "the install fixes the tighten item and still exits 1 for the loosen item"
+expect_settings "the tighten item is fixed" 'return now.hooks.PreToolUse[0].matcher === "Edit|Write|NotebookEdit|Bash"'
+expect_out_count 1 '已补为' "the install prints one modification line for the tighten item"
+expect_out_has '未执行的放宽项' "the install still lists the loosen item"
+expect_backups 1 "one backup for the tighten item"
+
+# 27. The written file does not parse (a fault the test switches on after the
+# write): the backup is put back, the row is FAIL, the exit code 1, no
+# modification line, and the backup itself stays for the record.
+new_case
+make_repo "$CASE_DIR/repo" find-next
+write_settings 'Edit|Write|NotebookEdit'
+cp "$CASE_SETTINGS" "$CASE_DIR/settings.before"
+EXTRA_ENV='ISS_INSTALL_FAULT=corrupt-settings'
+run_install "$REPO"
+expect_exit 1 "a settings.json that does not parse after the write exits 1"
+expect_out_has '[FAIL] delegate-guard hook 的 PreToolUse matcher "Edit|Write|NotebookEdit" 缺 Bash，改后的 settings.json 不是合法 JSON，已用备份还原' "the row says the backup was restored"
+expect_out_count 0 '已补为' "no modification line is printed"
+expect_out_count 0 '[PASS] delegate-guard' "the failed fix is not a PASS line"
+expect_same_file "$CASE_SETTINGS" "$CASE_DIR/settings.before" "the original is back byte for byte"
+expect_backups 1 "the backup stays"
+expect_backup_is "$CASE_DIR/settings.before" "the backup is the original file"
+run_install "$REPO" --check
+expect_exit 1 "--check after the restored file reports the matcher still lacking Bash"
+expect_out_count 1 '缺 Bash' "--check after the restore reports the unmet item once"
+
+# 28. A settings.json that is not JSON to begin with: not modified (no backup
+# either), one FAIL row in both modes, exit code 1 -- the items are not judged.
+new_case
+make_repo "$CASE_DIR/repo" find-next
+mkdir -p "$CASE_CLAUDE"
+printf '{"hooks": {\n' > "$CASE_SETTINGS"
+cp "$CASE_SETTINGS" "$CASE_DIR/settings.before"
+run_install "$REPO"
+expect_exit 1 "a settings.json that is not JSON exits 1"
+expect_out_has '[FAIL] settings.json 不是合法 JSON，未改' "the row says settings.json was left alone"
+expect_out_count 1 '[FAIL]' "one FAIL row for the file, none for an item"
+expect_same_file "$CASE_SETTINGS" "$CASE_DIR/settings.before" "an unparseable settings.json is not modified"
+expect_no_backups "an unparseable settings.json gets no backup"
+run_install "$REPO" --check --json
+expect_exit 1 "--check on an unparseable settings.json exits 1"
+expect_json "the unparseable file is one FAIL error row and nothing else from the config segment" 'JSON.stringify(out.checks.filter(c => c.group === "config").map(c => c.level + ":" + c.status)) === JSON.stringify(["FAIL:error"]) && out.summary.fail === 1 && out.summary.changed === 0'
+expect_json "the row names the file and how to go on" 'out.checks.filter(c => c.group === "config")[0].link === process.env.CASE_SETTINGS && out.checks.filter(c => c.group === "config")[0].hint.includes("install.sh")'
+
+# 29. Two delegate-guard registrations: judged by the first one, the one
+# doctor.sh judges; the fix goes to that one and the second is left as it is.
+new_case
+make_repo "$CASE_DIR/repo" find-next
+write_settings 'Edit|Write'
+node -e 'const fs = require("fs"); const o = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); o.hooks.PreToolUse.push({matcher: "Bash", hooks: [{type: "command", command: "node \"/fixture/hooks/delegate-guard.js\"", timeout: 5}]}); fs.writeFileSync(process.argv[1], JSON.stringify(o, null, 2) + "\n");' "$CASE_SETTINGS"
+cp "$CASE_SETTINGS" "$CASE_DIR/settings.before"
+run_install "$REPO"
+expect_exit 0 "two registrations: exit 0"
+expect_settings "the first registration is fixed, the second kept" 'return now.hooks.PreToolUse[0].matcher === "Edit|Write|Bash" && now.hooks.PreToolUse[1].matcher === "Bash" && deepEqual({h: [orig.hooks.PreToolUse[1]]}, {h: [now.hooks.PreToolUse[1]]})'
+
+# 30. Without ISS_CLAUDE_SETTINGS the settings file is
+# ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json of the HOME the process was
+# given (the file doctor.sh reads), and the backup goes beside it; nowhere else.
+new_case
+make_repo "$CASE_DIR/repo" find-next
+write_settings 'Edit|Write|NotebookEdit' '  ' "$CASE_HOME/.claude/settings.json"
+cp "$CASE_HOME/.claude/settings.json" "$CASE_DIR/settings.before"
+run_install_default_location "$REPO"
+expect_exit 0 "default settings location exits 0"
+expect_out_has "配置文件：$CASE_HOME/.claude/settings.json" "the default settings location is \$HOME/.claude/settings.json"
+expect_settings_at "$CASE_HOME/.claude/settings.json" "the default location is fixed" 'return now.hooks.PreToolUse[0].matcher === "Edit|Write|NotebookEdit|Bash"'
+DEFAULT_BACKUP=$(ls -d "$CASE_HOME/.claude/backups"/install-* 2>/dev/null | head -n 1)
+if [ -n "$DEFAULT_BACKUP" ] && cmp -s "$DEFAULT_BACKUP/settings.json" "$CASE_DIR/settings.before"; then
+  record PASS "the backup goes beside the default settings file"
+else
+  record FAIL "the backup goes beside the default settings file" "$(ls -la "$CASE_HOME/.claude/backups" 2>&1 | head -c 200)"
+fi
+if [ -e "$CASE_CLAUDE" ]; then
+  record FAIL "the default location does not look at the scratch ISS_CLAUDE_SETTINGS path" "$CASE_CLAUDE exists"
+else
+  record PASS "the default location does not look at the scratch ISS_CLAUDE_SETTINGS path"
+fi
+write_settings 'Edit|Write|NotebookEdit' '  ' "$CASE_DIR/cfg/settings.json"
+cp "$CASE_DIR/cfg/settings.json" "$CASE_DIR/settings.before"
+EXTRA_ENV="CLAUDE_CONFIG_DIR=$CASE_DIR/cfg"
+run_install_default_location "$REPO"
+expect_exit 0 "CLAUDE_CONFIG_DIR as the settings location exits 0"
+expect_out_has "配置文件：$CASE_DIR/cfg/settings.json" "CLAUDE_CONFIG_DIR is honoured, as doctor.sh honours it"
+expect_settings_at "$CASE_DIR/cfg/settings.json" "the settings file under CLAUDE_CONFIG_DIR is fixed" 'return now.hooks.PreToolUse[0].matcher === "Edit|Write|NotebookEdit|Bash"'
+
+# 31. No backup, no change: when the backup directory cannot be made (the
+# directory is read-only), settings.json is left alone and the row is FAIL.
+# Root writes anywhere, so the case is skipped there.
+new_case
+make_repo "$CASE_DIR/repo" find-next
+write_settings 'Edit|Write|NotebookEdit'
+cp "$CASE_SETTINGS" "$CASE_DIR/settings.before"
+if [ "$(id -u)" -eq 0 ]; then
+  record PASS "a settings directory that cannot hold a backup exits 1" "(skipped: root writes anywhere)"
+else
+  chmod a-w "$CASE_CLAUDE"
+  run_install "$REPO"
+  expect_exit 1 "a settings directory that cannot hold a backup exits 1"
+  expect_out_has '[FAIL] delegate-guard hook 的 PreToolUse matcher "Edit|Write|NotebookEdit" 缺 Bash，备份失败，未改' "the row says no backup could be made"
+  expect_same_file "$CASE_SETTINGS" "$CASE_DIR/settings.before" "settings.json is left alone without a backup"
+  chmod u+w "$CASE_CLAUDE"
+  expect_no_backups "nothing was made beside it"
+fi
+
+# 32. Items the script cannot act on (fixture) each get a FAIL row saying why
+# and do not stop the others: a wrong direction and an unknown check are
+# errors, a tighten item without a known fix is unmet and left alone, and the
+# well-formed item after them is still applied.
+new_case
+make_repo "$CASE_DIR/repo" find-next
+cat > "$CASE_DIR/expectations.json" <<'JSON'
+[
+  {"id": "bad-direction", "direction": "both", "check": {"type": "preToolUseMatcher", "hook": "delegate-guard.js", "include": ["Bash"]}},
+  {"id": "bad-check", "direction": "tighten", "check": {"type": "unknownCheck"}},
+  {"id": "no-fix", "direction": "tighten", "check": {"type": "preToolUseMatcher", "hook": "delegate-guard.js", "include": ["Bash"]}, "fix": "remove-something"},
+  {"id": "good", "direction": "tighten", "check": {"type": "preToolUseMatcher", "hook": "delegate-guard.js", "include": ["Bash"]}, "fix": "append-matcher-tools"}
+]
+JSON
+write_settings 'Edit|Write'
+cp "$CASE_SETTINGS" "$CASE_DIR/settings.before"
+EXTRA_ENV="ISS_CONFIG_EXPECTATIONS_FILE=$CASE_DIR/expectations.json"
+run_install "$REPO" --json
+expect_exit 1 "unrecognised items leave the exit code at 1"
+expect_json "each unrecognised item is its own FAIL row; the good one is applied" 'JSON.stringify(out.checks.filter(c => c.group === "config").map(c => c.level + ":" + c.status + ":" + c.name)) === JSON.stringify(["FAIL:error:bad-direction","FAIL:error:bad-check","FAIL:unmet:no-fix","PASS:tightened:good"])'
+expect_json "the rows say why" 'out.checks[2].message.includes("无法识别：direction") && out.checks[3].message.includes("无法识别：未知的检查方式") && out.checks[4].message.includes("没有自动修正方法（未知的修正方式）") && out.checks[4].changed === false'
+expect_settings "only the good item changed the file" 'orig.hooks.PreToolUse[0].matcher = "Edit|Write|Bash"; return deepEqual(orig, now)'
+expect_backups 1 "one backup, for the one applied item"
+
+# 33. An expectation list that cannot be read, or is not a JSON array, is a
+# cannot-run condition: exit 2 before anything is made.
+new_case
+make_repo "$CASE_DIR/repo" find-next
+EXTRA_ENV="ISS_CONFIG_EXPECTATIONS_FILE=$CASE_DIR/missing.json"
+run_install "$REPO"
+expect_exit 2 "an unreadable expectation list exits 2"
+expect_err_has 'cannot read the expectation list' "an unreadable expectation list is named on stderr"
+printf '{"id": "x"}\n' > "$CASE_DIR/expectations.json"
+EXTRA_ENV="ISS_CONFIG_EXPECTATIONS_FILE=$CASE_DIR/expectations.json"
+run_install "$REPO" --check
+expect_exit 2 "an expectation list that is not an array exits 2"
+expect_err_has 'not a JSON array' "an expectation list that is not an array is named on stderr"
+if [ -e "$CASE_SKILLS" ] || [ -e "$CASE_CLAUDE" ]; then
+  record FAIL "a bad expectation list makes nothing" "$(ls -la "$CASE_SKILLS" "$CASE_CLAUDE" 2>&1 | head -c 200)"
+else
+  record PASS "a bad expectation list makes nothing"
+fi
 
 # MAINTAINING registers the test in its self-test list.
 if grep -Fq 'bash scripts/test-install.sh' "$MAINTAINING"; then
