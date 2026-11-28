@@ -132,6 +132,14 @@ has "--ticket origin/<main branch> --no-ticket-worktree --test '<the repo's test
 without 'the main merge is the plain git merge' 'SKILL.md step 9.1 no longer merges main by hand' "$SKILL"
 has 'this is not a test pass' 'SKILL.md step 9.1 reads exit 5 as nothing to do, not a test pass' "$SKILL"
 has '`--role fix` without `--ticket`' 'SKILL.md step 9.1 dispatches the re-bump role as fix without a ticket' "$SKILL"
+# Every round of that re-bump takes the next free --attempt: step 8's fix role
+# may already hold the bare name `fix`, and the module refuses a second
+# dispatch under a name that has a sidecar (exit 64), so a first round sent
+# as `--role fix` alone would never start (规格 #61 review, Standards 1).
+has 'every round takes the next free `--attempt <n>`' \
+  'SKILL.md step 9.1 re-bump rounds each take the next free attempt' "$SKILL"
+without 'each later round as `--attempt <n>`' \
+  'SKILL.md step 9.1 no longer leaves the first re-bump round without an attempt' "$SKILL"
 has 'git ls-tree origin/<main branch>:docs/adr/' 'SKILL.md step 9.1 re-bump role reads main only' "$SKILL"
 has 'the re-bump commits and the conflict resolution together' \
   'SKILL.md reviews the step 9.1 re-bump and the conflict resolution once' "$SKILL"
