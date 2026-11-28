@@ -210,7 +210,7 @@ Run 状态：从 command-args 取第一个数字参数作为 `<n>`，再从 `ISS
 
 两条规则：
 
-- **规则 A（自关）**：`phase` 为 `done`、`waiting` 或 `parked`，且 transcript 里没有任何 Bash tool_use 的 command 包含 `close-self.sh` 时，block。理由提醒先确认落地/停车报告评论已发出，最后一条命令运行 `<skill dir>/scripts/close-self.sh`（落地后加 `--remove-worktree <集成 worktree>`，停车不加），见 SKILL.md 第 10 步。
+- **规则 A（自关）**：`phase` 为 `done`、`waiting` 或 `parked`，且 transcript 里没有任何 Bash tool_use 的 command 包含 `close-self.sh` 时，block。理由提醒先确认落地/停车报告评论已发出，最后一条命令运行 `<skill dir>/scripts/close-self.sh --run-dir <Spec Run root>`（落地后加 `--remove-worktree <集成 worktree>`，停车不加；`--run-dir` 两种情况都带，不带它不释放票工作区），见 SKILL.md 第 10 步。
 - **规则 B（问人）**：`phase` 不是 `parked`、`done`、`waiting`，且最后一条 assistant 消息的文本（取最后一个 text block 的最后 300 个字符）以 `？` / `?` 结尾，或包含 `请确认`、`等你`、`需要你`、`要不要`、`是否继续`、`你来决定`、`请选择`、`回复我` 时，block。理由告诉模型：可自动采纳的按推荐做，合并冲突交 merger + Opus 审查，真要人决定的写停车报告后停车并自关；只是在等后台任务就继续等通知，不要问人。
 
 `phase` 为 `split`、`implement`、`integrate`、`review`、`land` 且最后一条消息不是在问人时放行，所以等后台任务通知时正常结束一轮不会被拦。

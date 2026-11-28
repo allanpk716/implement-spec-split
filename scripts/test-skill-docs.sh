@@ -80,6 +80,14 @@ has '## 护栏' 'SKILL.md copies the guardrails into the Brief' "$SKILL"
 has 'read_only_violation' 'SKILL.md gates the exploration on the read-only check' "$SKILL"
 has 'never optional' 'the exploration is no longer optional' "$SKILL"
 has 'close-self.sh' 'SKILL.md still closes the session with close-self' "$SKILL"
+# Step 10 carries the run directory in both forms (MAINTAINING 第 52 条, 做错 3):
+# close-self.sh releases no Ticket worktree without --run-dir, so a landing or
+# a parking that drops it leaves them behind for Recovery. Each code span is
+# pinned as a whole, so neither form can lose the flag on its own.
+has '`<skill dir>/scripts/close-self.sh --run-dir <Spec Run root> --remove-worktree <integration worktree>`' \
+  'SKILL.md step 10 closes a landed Run with the run directory' "$SKILL"
+has '`<skill dir>/scripts/close-self.sh --run-dir <Spec Run root>`' \
+  'SKILL.md step 10 closes a parked Run with the run directory' "$SKILL"
 # Step 7 in a non-flash session is unchanged: the code-review skill on REVIEW_MODEL.
 has 'mattpocock-skills:code-review' 'step 7 still calls the code-review skill' "$SKILL"
 has 'model: REVIEW_MODEL' 'step 7 still sets the review model' "$SKILL"
@@ -125,6 +133,8 @@ has '## 精简启动的 worker' 'hooks README documents the lean start' "$HOOKS"
 has 'merge-ticket.sh' 'hooks README names the script gate' "$HOOKS"
 has '--bare' 'hooks README says --bare loads no hooks' "$HOOKS"
 has 'unattended-stop-guard' 'hooks README names the hooks a lean worker lacks' "$HOOKS"
+# Rule A's reminder is step 10's sentence again: it carries the run directory too.
+has 'close-self.sh --run-dir <Spec Run root>' 'hooks README rule A closes with the run directory' "$HOOKS"
 
 # --- what the cumulative review of 规格 #26 settled (MAINTAINING 第 51 条) -------
 

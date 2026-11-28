@@ -308,6 +308,7 @@ testCase('done without close-self blocks with the self-close reason', () => {
       );
       assert.match(reason, /phase=done/);
       assert.match(reason, /close-self\.sh/);
+      assert.match(reason, /--run-dir <Spec Run root>/);
       assert.match(reason, /--remove-worktree <集成 worktree>/);
       assert.match(reason, /SKILL\.md 第 10 步/);
       assert.ok(reason.includes(path.join(skillDir, 'scripts', 'close-self.sh')));
