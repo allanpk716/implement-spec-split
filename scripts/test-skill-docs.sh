@@ -39,7 +39,10 @@
 # until the landing (the review's 未核实与提醒).
 # The second review fix of 规格 #58 (r2) pins, group by group: no document still
 # says find-next stops at a question round (Standards 2 — both setup guides,
-# grill-map's hand-over and find-next's usage bullet).
+# grill-map's hand-over and find-next's usage bullet); find-next step 3's ops
+# dispatch names codex-worker.sh instead of a retired "Ops tickets codex
+# backend" and calls the worker it starts a worker, not an implementer
+# (Standards 4 — the same wording in brief-task.md).
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -304,14 +307,19 @@ without '并继续遵守单次 3 轮上限' 'find-next step 8 no longer names th
 # --mcp ssh-manager for a remote server, the guardrails copied verbatim, only the
 # Brief's scope, the result written back to the task ticket's Resolution. A
 # prototype's reaction is not decided. A loosening ticket is triaged as a single
-# decision whose outcome is never the loosening itself.
+# decision whose outcome is never the loosening itself. (2026-11-28, the second
+# review fix of 规格 #58: that dispatch follows codex-worker.sh's own writable
+# form, since the root SKILL.md's Ops tickets section names no codex backend any
+# more — 规格 #26 left only the dispatch module's --mcp-config there — and the
+# worker it starts is a worker, not an "implementer": GLOSSARY's implementing
+# roles are Orca workers only. Same wording in brief-task.md.)
 has '3. **决策、迷雾、task 与 prototype 票（worker 准备，一轮拍板）**' 'find-next step 3 feeds the decision round' "$FIND_NEXT"
 has '决策题带推荐就进第 6 步拍板轮：按推荐写 Resolution 评论、关票、更新地图，标「自动拍板（可推翻）」' \
   'find-next step 3 sends a decision ticket with a recommendation to the round' "$FIND_NEXT"
 has '我按它的固定两节读：`## 需要本人做的`' 'find-next step 3 reads the human-only section by name' "$FIND_NEXT"
 has '`## 运维步骤（带护栏，主会话派实现者执行）`（每步含执行方式' 'find-next step 3 reads the ops-steps section by name' "$FIND_NEXT"
 has '**运维步骤的非只读派发**（find-next 的第一种非只读派发' 'find-next step 3 names the ops dispatch as its first writable one' "$FIND_NEXT"
-has '沿用 implement-spec-split Ops tickets 的 codex 后端写法' 'find-next step 3 follows the Ops tickets codex backend' "$FIND_NEXT"
+has '沿用 `codex-worker.sh` 的写法' 'find-next step 3 follows the codex-worker.sh convention' "$FIND_NEXT"
 has '--run-dir <运行目录>/task-<票号>/ops --time-limit 2400 --idle-timeout 600' 'find-next step 3 dispatches the ops worker without --read-only' "$FIND_NEXT"
 has '的步骤必传 `--mcp ssh-manager`' 'find-next step 3 passes ssh-manager MCP for remote steps' "$FIND_NEXT"
 has '以及**原文照抄**的护栏，只允许改 Brief 写明的范围' 'find-next step 3 copies the guardrails verbatim into the Brief' "$FIND_NEXT"
@@ -624,6 +632,22 @@ without '只有真要人决定的事才停车' 'find-next usage no longer parks 
 has 'Opus 审查里的取舍不因是取舍而停车' 'find-next usage says a review trade-off never parks' "$FIND_NEXT"
 has '只有要本人身份或凭据的事（停车类别 `auth`）、或列出的选项里没有可逆的（`error`）才停车' \
   'find-next usage names the two reasons that still park' "$FIND_NEXT"
+
+# --- the ops dispatch of find-next step 3 names codex-worker.sh, and a worker is a worker (规格 #58 复审 Standards 判断项 4) ---
+
+# The sentence was copied from ticket #69's body: "the Ops tickets codex backend
+# of implement-spec-split" is a pointer to something the root SKILL.md no longer
+# has (规格 #26 left only the dispatch module's --mcp-config in its Ops tickets
+# section; the codex backend lives on in MAINTAINING 第 36 条 as history), and it
+# called the External worker codex-worker.sh starts an "implementer", which
+# GLOSSARY reserves for Orca workers. The dash after it already said what is
+# done, so nobody got lost; the pointer and the term are corrected anyway.
+TASK_TEMPLATE=$ROOT/find-next/templates/brief-task.md
+without 'Ops tickets 的 codex 后端写法' 'find-next step 3 no longer points at a retired Ops tickets codex backend' "$FIND_NEXT"
+without '各派一个实现者 worker 执行它的整节步骤' 'find-next step 3 does not call the codex-worker.sh worker an implementer' "$FIND_NEXT"
+has '每张 task 票各派一个 worker 执行它的整节步骤' 'find-next step 3 dispatches one worker per task ticket' "$FIND_NEXT"
+without '运维步骤由主会话派实现者执行' 'brief-task does not call the codex-worker.sh worker an implementer' "$TASK_TEMPLATE"
+has '运维步骤由主会话派 worker 执行：`codex-worker.sh` 不带 `--read-only`' 'brief-task names codex-worker.sh as the worker of the ops steps' "$TASK_TEMPLATE"
 
 printf '\n%d passed, %d failed\n' "$PASSED" "$FAILED"
 exit "$FAILED"

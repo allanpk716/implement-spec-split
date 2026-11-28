@@ -40,7 +40,7 @@ task 票 #<票号>「<票标题>」已在前沿。你要先判断它的每一步
 - AFK 完成：写 `<运行目录>/resolution.md`，包含 `## Resolution 草稿`、依据（文件/命令输出/issue 评论）、地图索引行草稿。
 - 有需要人做的步骤或运维步骤：写 `<运行目录>/human-checklist.md`，固定两节，没有内容的节写「无」、不省略节标题：
   - `## 需要本人做的`：每条包含动作、入口/命令、需要回传的结果、预计影响。
-  - `## 运维步骤（带护栏，主会话派实现者执行）`：每步包含执行方式（在本机执行 / 经 ssh-manager 执行 / Orca 操作序列）、具体动作、预期证据、护栏、放宽项（没有写「无」）。运维步骤由主会话派实现者执行：`codex-worker.sh` 不带 `--read-only`、按需 `--mcp ssh-manager`、护栏原文照抄进 Brief，结果写回 task 票的 Resolution；派发规则写在 `find-next/SKILL.md`，这里只点名。
+  - `## 运维步骤（带护栏，主会话派实现者执行）`：每步包含执行方式（在本机执行 / 经 ssh-manager 执行 / Orca 操作序列）、具体动作、预期证据、护栏、放宽项（没有写「无」）。运维步骤由主会话派 worker 执行：`codex-worker.sh` 不带 `--read-only`、按需 `--mcp ssh-manager`、护栏原文照抄进 Brief，结果写回 task 票的 Resolution；派发规则写在 `find-next/SKILL.md`，这里只点名。
 - 最终回复不超过 12 行，说明 AFK/HITL 的分类、完成情况、结果文件路径。wrapper 会把最终回复存成 `result.md`；不要自己写 `result.md`。
 
 ## 环境约束（找文件与子进程）

@@ -190,7 +190,7 @@ flash 模式下，本节所有原本由主会话审读或复核的结论都按�
 
    task / prototype 需要操作远程服务器时，给上面的 codex 命令传 `--mcp ssh-manager`。
 
-   **运维步骤的非只读派发**（find-next 的第一种非只读派发，task 票自己的 worker 按 Brief 允许范围改文件不算）：`human-checklist.md` 的 `## 运维步骤…` 一节不为空时，沿用 implement-spec-split Ops tickets 的 codex 后端写法——每张 task 票各派一个实现者 worker 执行它的整节步骤，子目录 `task-<票号>/ops/`（嵌在票的子目录下，`run-state.sh` 才不会把它当成该票的重试目录）：
+   **运维步骤的非只读派发**（find-next 的第一种非只读派发，task 票自己的 worker 按 Brief 允许范围改文件不算）：`human-checklist.md` 的 `## 运维步骤…` 一节不为空时，沿用 `codex-worker.sh` 的写法——每张 task 票各派一个 worker 执行它的整节步骤，子目录 `task-<票号>/ops/`（嵌在票的子目录下，`run-state.sh` 才不会把它当成该票的重试目录）：
 
    ```bash
    ~/.claude/skills/implement-spec-split/scripts/codex-worker.sh --cwd <仓库> --brief <运行目录>/task-<票号>/ops/brief.md \
