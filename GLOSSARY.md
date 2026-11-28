@@ -9,7 +9,7 @@ The main agent running in the user's Claude Code session; it owns the task graph
 _Avoid_: coordinator, lead
 
 **In-session subagent**:
-A subagent spawned by the Orchestrator inside the Claude Code session, with its model chosen by name (sonnet, opus, haiku, fable). Since 规格 #26 only the code-review subagents of a non-flash session are In-session subagents: the implementing roles are always Orca workers dispatched by `scripts/stage-dispatch.sh`.
+A subagent spawned by the Orchestrator inside the Claude Code session, with its model chosen by name (sonnet, opus, haiku, fable) or pinned by the session's settings. Since 规格 #26 the implementing roles are never In-session subagents: they are always Orca workers dispatched by `scripts/stage-dispatch.sh`. The review subagents are: the code-review subagents of a non-flash session, and since 票 #84 the read-only (`Explore`) review subagents of a flash session whose review Stage route is GLM and whose subagents are pinned to the route's model — the only case `scripts/opus-review.sh --where` says in-session.
 _Avoid_: native subagent, Claude subagent
 
 **External worker**:
@@ -40,15 +40,15 @@ _Avoid_: implement model (ambiguous with harness-specific settings such as `GLM_
 The four roles a Run dispatches through the dispatch module (`scripts/stage-dispatch.sh`), each on its Stage route (规格 #26): the step-2 exploration — headless, a `--read-only` dispatch whose executor is `codex-worker.sh`, on the 调研起草 route — and, on the 实现 route as Orca workers, a Ticket's implementer, the fix role and the conflict role. Not review, and not a merger: merging is `scripts/merge-ticket.sh`, a script, and only a conflict dispatches the conflict role.
 
 **Review roles**:
-The Standards and Spec reviewers of `mattpocock-skills:code-review`; always In-session subagents on a strong model (non-flash sessions only; in Flash mode every review runs out-of-session via `opus-review.sh`).
+The Standards and Spec reviewers of `mattpocock-skills:code-review`; In-session subagents on a strong model in a non-flash session, and in a flash session wherever the review Stage route puts them (票 #84): out of session, as the two subagents of the headless process `opus-review.sh` starts (an official route, or a session whose subagents are not pinned to the route's model), or read-only In-session subagents (`Explore`) of the flash session itself, on a GLM route with `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. On either side of a flash session the subagent model is the review route's model, never one the session picks.
 
 **Design session**:
 A separate Claude Code session that the Orchestrator opens through Orca for a design discussion (grill-with-docs, a wayfinder grilling ticket); the user talks to it directly, and it carries the discussion through to-spec before handing control back. It runs the design Stage route: an Orca terminal started on the routed Launcher profile with its model and effort (the official subscription's Opus by default), with the same handoff whatever the route.
 _Avoid_: Opus session, grill session, hop
 
 **Opus review**:
-A non-interactive judgment pass run outside the Orchestrator's session that reads a diff or draft and returns findings for the Orchestrator to act on. It runs on the review or diagnosis Stage route (the official subscription's Opus by default, otherwise the routed Launcher profile, model and effort), and the findings file's first line names the route.
-_Avoid_: strong-model review (ambiguous in a GLM session, where "opus" maps to GLM)
+A judgment pass that reads a diff or draft and returns findings for the Orchestrator to act on; the name stays from when it was always Opus. It runs on the review or diagnosis Stage route (the official subscription's Opus by default, otherwise the routed Launcher profile, model and effort), and the findings file's first line names the route. Where it runs is the route's decision too (票 #84): out of session, non-interactive, through `scripts/opus-review.sh`, unless `opus-review.sh --where` says in-session for this session (a GLM route and subagents pinned to its model), in which case it runs as read-only In-session subagents of the flash session and `opus-review.sh --stamp` writes the findings under the same first line, marked `（会话内子代理）` and `（强度未生效）`.
+_Avoid_: strong-model review (ambiguous in a GLM session, where "opus" maps to GLM); calling it "Opus 审核中" when the route is not Opus
 
 **Judgment model**:
 The model that stands in for Opus wherever a judgment is made: every Opus review, and each Design session. It is Opus, or the substitute the user routes the review, diagnosis and design Stages to with `/grill-router` (today glm-5.4). The Stage routes replaced the two-role switch that used to set it: each dispatch reads its Stage's route, so a session that is already executing changes model at its next review or new Design session.
@@ -59,7 +59,7 @@ One of the six kinds of work the pipeline routes to an executor: orchestration, 
 _Avoid_: phase, step (Steps are the numbered instructions inside a skill)
 
 **Stage route**:
-The executor assigned to one Stage: a Launcher profile, a model and a reasoning effort, optionally with an expiry after which the Stage returns to its default. Only combinations that have passed a smoke test may be routed. The user sets all routes with one command (`/grill-router`); it replaces the Judgment model and Worker model switches.
+The executor assigned to one Stage: a Launcher profile, a model and a reasoning effort, optionally with an expiry after which the Stage returns to its default. Only combinations that have passed a smoke test may be routed. The user sets all routes with one command (`/grill-router`); it replaces the Judgment model and Worker model switches. Since 票 #84 a review or diagnosis route also decides where that review runs: an official `claude` route always out of session; a GLM route in session when the session pins its subagents to the route's model (`CLAUDE_CODE_SUBAGENT_MODEL` with its `[1m]` suffix aside equal to the route's model, and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` — the flash session's settings), otherwise out of session. `scripts/opus-review.sh --where` decides from the table and the session's environment and prints the verdict with one line of reason; a session never decides it itself.
 _Avoid_: model switch, model mapping
 
 **Launcher profile**:

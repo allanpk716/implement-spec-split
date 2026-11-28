@@ -644,6 +644,381 @@ expect_rc "a route that prints nothing is a usage error" 64 "$RUN_RC"
 check "the empty route read is reported" grep -Fq 'printed nothing' "$WORK/run.err"
 check "an empty route calls neither model" bash -c "test ! -e '$FAKE_CLAUDE_LOG' && test ! -e '$FAKE_GLM_LOG'"
 
+# --- Where a review runs (票 #84) ------------------------------------------------
+# opus-review.sh --where decides, from the Stage route and the session's
+# environment alone, where a review runs: the verdict on stdout, one line for
+# the user on stderr, and no launcher started. The session's subagent model is
+# CLAUDE_CODE_SUBAGENT_MODEL with its [1m] suffix aside, and only
+# CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1 counts as forced. The suite's own
+# environment has the force set to a model name, which is not 1: out.
+where_review() { # kind, in the environment the caller set
+  rm -f "$FAKE_GLM_LOG" "$FAKE_CLAUDE_LOG"
+  "$REVIEW" --where --kind "$1" >"$WORK/where.out" 2>"$WORK/where.err"
+  RUN_RC=$?
+}
+expect_where() { # description verdict
+  expect_rc "$1 exits 0" 0 "$RUN_RC"
+  check "$1 prints $2 on stdout" test "$(cat "$WORK/where.out")" = "$2"
+}
+in_session_env() {
+  export CLAUDE_CODE_SUBAGENT_MODEL='glm-5.4[1m]' CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1
+}
+export FAKE_CLAUDE_LOG="$WORK/where-claude.log" FAKE_GLM_LOG="$WORK/where-glm.log"
+
+"$ROUTE" use review=claude/opus/high >/dev/null 2>&1
+in_session_env
+where_review code
+expect_where "the official review route" out-of-session
+check "the official route's line names the route and says out-of-session" \
+  grep -Fq '审查中（claude / opus，出会话）：审查路由 claude / opus / high 是官方模型' "$WORK/where.err"
+check "the official route's line is one line" test "$(wc -l < "$WORK/where.err" | tr -d ' ')" = 1
+check "--where starts no launcher" bash -c "test ! -e '$FAKE_CLAUDE_LOG' && test ! -e '$FAKE_GLM_LOG'"
+
+"$ROUTE" use review=claude-glm/glm-5.4/medium >/dev/null 2>&1
+where_review code
+expect_where "a GLM route with the session's subagents forced onto its model" in-session
+check "the in-session line names the route and says in-session" \
+  grep -Fq '审查中（claude-glm / glm-5.4，会话内）：审查路由 claude-glm / glm-5.4 / medium 是 GLM' "$WORK/where.err"
+check "the in-session line is one line" test "$(wc -l < "$WORK/where.err" | tr -d ' ')" = 1
+check "--where starts no launcher on a GLM route" bash -c "test ! -e '$FAKE_CLAUDE_LOG' && test ! -e '$FAKE_GLM_LOG'"
+check "--where names no official Opus on a GLM route" bash -c "! grep -Fq 'Opus' '$WORK/where.err'"
+
+# The [1m] suffix is the launcher's marker, not part of the model: the same
+# model named without it compares equal.
+export CLAUDE_CODE_SUBAGENT_MODEL='glm-5.4'
+where_review draft
+expect_where "a GLM route with the same model named without [1m]" in-session
+check "draft reads the review stage" bash -c "head -n 1 '$WORK/where.err' | grep -q '^审查中（claude-glm'"
+
+export CLAUDE_CODE_SUBAGENT_MODEL='glm-5.4[1m]' CLAUDE_CODE_SUBAGENT_MODEL_FORCE=glm-5.4
+where_review code
+expect_where "a GLM route without CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1" out-of-session
+check "the unforced line names the force variable" grep -Fq 'CLAUDE_CODE_SUBAGENT_MODEL_FORCE 不是 1' "$WORK/where.err"
+check "the unforced line still names the GLM route" grep -Fq '审查中（claude-glm / glm-5.4，出会话）' "$WORK/where.err"
+export CLAUDE_CODE_SUBAGENT_MODEL_FORCE=true
+where_review code
+expect_where "a GLM route with the force set to true rather than 1" out-of-session
+unset CLAUDE_CODE_SUBAGENT_MODEL_FORCE
+where_review code
+expect_where "a GLM route with the force unset" out-of-session
+
+export CLAUDE_CODE_SUBAGENT_MODEL='glm-5.3-flash[1m]' CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1
+where_review code
+expect_where "a GLM route with the subagents forced onto another model" out-of-session
+check "the mismatch line names the subagent model and the route's" bash -c \
+  "grep -Fq '被强制跑 glm-5.3-flash（CLAUDE_CODE_SUBAGENT_MODEL=glm-5.3-flash[1m]）' '$WORK/where.err' && grep -Fq '与路由模型不一致' '$WORK/where.err'"
+check "the mismatch line says the route is never switched quietly" grep -Fq '路由不能被悄悄换掉' "$WORK/where.err"
+
+unset CLAUDE_CODE_SUBAGENT_MODEL
+where_review code
+expect_where "a GLM route with no CLAUDE_CODE_SUBAGENT_MODEL at all" out-of-session
+check "the no-model line names the variable" grep -Fq '没有设 CLAUDE_CODE_SUBAGENT_MODEL' "$WORK/where.err"
+in_session_env
+
+# diagnose reads the diagnosis stage, and says 诊断中.
+"$ROUTE" use diagnosis=claude/opus/high >/dev/null 2>&1
+where_review diagnose
+expect_where "diagnose on the official diagnosis route" out-of-session
+check "diagnose's line says 诊断中 and names the official route" \
+  grep -Fq '诊断中（claude / opus，出会话）：诊断路由 claude / opus / high' "$WORK/where.err"
+"$ROUTE" use diagnosis=claude-glm/glm-5.4/low >/dev/null 2>&1
+where_review diagnose
+expect_where "diagnose on a GLM diagnosis route with forced subagents" in-session
+check "diagnose's in-session line names the diagnosis route" \
+  grep -Fq '诊断中（claude-glm / glm-5.4，会话内）：诊断路由 claude-glm / glm-5.4 / low' "$WORK/where.err"
+"$ROUTE" use diagnosis=claude/opus/high >/dev/null 2>&1
+
+where_review nonsense
+expect_rc "--where with an unknown kind is a usage error" 64 "$RUN_RC"
+"$REVIEW" --where --kind code --input main >"$WORK/where.out" 2>"$WORK/where.err"
+expect_rc "--where takes --kind alone (--input)" 64 "$?"
+"$REVIEW" --where --kind code --out "$WORK/where-findings.md" >"$WORK/where.out" 2>"$WORK/where.err"
+expect_rc "--where takes --kind alone (--out)" 64 "$?"
+check "--where with --out writes no findings" test ! -e "$WORK/where-findings.md"
+"$REVIEW" --where --stamp --kind code >"$WORK/where.out" 2>"$WORK/where.err"
+expect_rc "--where cannot be combined with --stamp" 64 "$?"
+"$NO_ROUTE/opus-review.sh" --where --kind draft >"$WORK/where.out" 2>"$WORK/where.err"
+expect_rc "--where on a route that cannot be read is a usage error" 64 "$?"
+check "an unreadable route prints no verdict" test ! -s "$WORK/where.out"
+check "an unreadable route is reported" grep -Fq 'printed nothing' "$WORK/where.err"
+
+# --- The in-session form: --prompt and --stamp (票 #84) -------------------------
+# Both exist only where --where says in-session; on any other verdict they
+# refuse with 64 and write nothing. --prompt prints the review's text, --stamp
+# writes the findings from stdin under the route line with its two marks.
+prompt_review() { # kind input out
+  "$REVIEW" --prompt --kind "$1" --input "$2" --out "$3" --cwd "$REPO" >"$WORK/prompt.out" 2>"$WORK/prompt.err"
+  RUN_RC=$?
+}
+stamp_review() { # kind stdin-file out. A redirection, never a pipe: a function
+  # in a pipeline runs in a subshell under bash 3.2, and RUN_RC would not
+  # reach the caller.
+  "$REVIEW" --stamp --kind "$1" --out "$3" <"$2" >"$WORK/stamp.out" 2>"$WORK/stamp.err"
+  RUN_RC=$?
+}
+# The last argument the fake claude got: the prompt of an out-of-session pass.
+last_prompt() {
+  awk '/^ARG\t/ { start = NR } { line[NR] = $0 } END { for (i = start; i <= NR; i++) print line[i] }' "$1" |
+    sed "1s/^ARG\t//"
+}
+no_launcher_called() {
+  bash -c "test ! -e '$FAKE_CLAUDE_LOG' && test ! -e '$FAKE_GLM_LOG'"
+}
+no_temp_left() { # the findings path --stamp was given
+  bash -c "! ls '$1'.* >/dev/null 2>&1"
+}
+only_rejected_left() { # the findings path --stamp was given: the refused findings are the one file left
+  bash -c "[ \"\$(ls '$1'.* 2>/dev/null)\" = '$1.rejected' ]"
+}
+repair_prompt_review() { # kind out
+  "$REVIEW" --repair-prompt --kind "$1" --out "$2" --cwd "$REPO" >"$WORK/repair.out" 2>"$WORK/repair.err"
+  RUN_RC=$?
+}
+
+"$ROUTE" use review=claude/opus/high >/dev/null 2>&1
+in_session_env
+rm -f "$FAKE_CLAUDE_LOG" "$FAKE_GLM_LOG"
+prompt_review draft "$WORK/draft.md" "$WORK/p-official.md"
+expect_rc "--prompt on the official route is refused" 64 "$RUN_RC"
+check "a refused --prompt prints no text" test ! -s "$WORK/prompt.out"
+check "a refused --prompt names the route and out-of-session" grep -Fq '审查中（claude / opus，出会话）' "$WORK/prompt.err"
+printf 'findings\n' > "$WORK/in-body-plain.md"
+stamp_review draft "$WORK/in-body-plain.md" "$WORK/p-official.md"
+expect_rc "--stamp on the official route is refused" 64 "$RUN_RC"
+check "a refused --stamp names the route" grep -Fq '审查中（claude / opus，出会话）' "$WORK/stamp.err"
+check "a refused --stamp writes no findings" test ! -e "$WORK/p-official.md"
+check "the official route's refusals start no launcher" no_launcher_called
+
+"$ROUTE" use review=claude-glm/glm-5.4/medium >/dev/null 2>&1
+export CLAUDE_CODE_SUBAGENT_MODEL='glm-5.4[1m]' CLAUDE_CODE_SUBAGENT_MODEL_FORCE=glm-5.4
+prompt_review draft "$WORK/draft.md" "$WORK/p-unforced.md"
+expect_rc "--prompt without the force is refused" 64 "$RUN_RC"
+stamp_review draft "$WORK/in-body-plain.md" "$WORK/p-unforced.md"
+expect_rc "--stamp without the force is refused" 64 "$RUN_RC"
+check "a refused --stamp on a GLM route writes no findings" test ! -e "$WORK/p-unforced.md"
+check "a refused --stamp says nothing was written" grep -Fq 'nothing written' "$WORK/stamp.err"
+
+in_session_env
+prompt_review draft "$WORK/draft.md" "$WORK/in-draft.md"
+expect_rc "--prompt for a draft in session prints the text" 0 "$RUN_RC"
+check "--prompt prints nothing on stderr in session" test ! -s "$WORK/prompt.err"
+check "the in-session draft text starts with the subagent's line naming the route model" bash -c \
+  "head -n 1 '$WORK/prompt.out' | grep -Fq 'You are a review running as a read-only subagent of the calling session, on glm-5.4'"
+check "the in-session draft text does not say the review runs outside the session" \
+  bash -c "! grep -Fq 'outside the calling session' '$WORK/prompt.out'"
+check "the in-session draft text is the out-of-session prompt under another first line" \
+  cmp -s <(tail -n +2 "$WORK/prompt.out") <(last_prompt "$WORK/draft-env-args.log" | tail -n +2)
+check "the in-session draft text requires human-tradeoff findings" grep -Fq '需要人取舍' "$WORK/prompt.out"
+check "the in-session draft text asks whether the recommendation can be auto-applied" grep -Fq '可自动采纳：否' "$WORK/prompt.out"
+check "--prompt starts no launcher" no_launcher_called
+"$ROUTE" use diagnosis=claude-glm/glm-5.4/low >/dev/null 2>&1
+prompt_review diagnose "$WORK/failure.md" "$WORK/in-diagnose-prompt.md"
+expect_rc "--prompt for diagnose in session prints the text" 0 "$RUN_RC"
+check "the in-session diagnose text is the out-of-session prompt under another first line" \
+  cmp -s <(tail -n +2 "$WORK/prompt.out") <(last_prompt "$WORK/diagnose-env-args.log" | tail -n +2)
+check "the in-session diagnose text names the diagnosis model" \
+  bash -c "head -n 1 '$WORK/prompt.out' | grep -Fq \"the user's diagnosis route names\""
+"$ROUTE" use diagnosis=claude/opus/high >/dev/null 2>&1
+
+prompt_review code main "$WORK/in-code.md"
+expect_rc "--prompt for code in session prints the procedure" 0 "$RUN_RC"
+check "the code text names the repository and the fixed point" bash -c \
+  "grep -Fq 'Repository: $REPO' '$WORK/prompt.out' && grep -Fq 'Review fixed point: main' '$WORK/prompt.out'"
+check "the code text keeps the two axes apart and aggregates them" bash -c \
+  "grep -Fq 'Standards axis brief' '$WORK/prompt.out' && grep -Fq 'Spec axis brief' '$WORK/prompt.out' && grep -Fq 'Aggregate brief' '$WORK/prompt.out' && grep -Fq 'do not merge or rerank' '$WORK/prompt.out'"
+check "the code text spawns Explore subagents and no other type" bash -c \
+  "grep -Fq 'subagent_type Explore' '$WORK/prompt.out' && ! grep -Fq 'subagent_type general-purpose' '$WORK/prompt.out'"
+check "the code text passes no model" grep -Fq 'no model is passed on any Agent call' "$WORK/prompt.out"
+check "the code text names the skill whose process it restates" grep -Fq 'mattpocock-skills:code-review' "$WORK/prompt.out"
+check "the code text carries the smell baseline" bash -c \
+  "grep -Fq 'Mysterious Name' '$WORK/prompt.out' && grep -Fq 'Refused Bequest' '$WORK/prompt.out'"
+check "the aggregate brief carries the tradeoff rules" bash -c \
+  "grep -Fq '推荐：<option>' '$WORK/prompt.out' && grep -Fq '可自动采纳：否' '$WORK/prompt.out'"
+check "the code text pipes the findings into --stamp with the same --out" \
+  grep -Fq -- "$REVIEW --stamp --kind code --out '$WORK/in-code.md'" "$WORK/prompt.out"
+check "the code text does not say the review runs outside the session" \
+  bash -c "! grep -Fq 'outside the calling session' '$WORK/prompt.out'"
+check "--prompt for code starts no launcher" no_launcher_called
+
+"$REVIEW" --prompt --kind draft --out "$WORK/p-usage.md" --cwd "$REPO" >"$WORK/prompt.out" 2>"$WORK/prompt.err"
+expect_rc "--prompt without --input is a usage error" 64 "$?"
+"$REVIEW" --prompt --kind draft --input "$WORK/draft.md" --out "$WORK/p-usage.md" --timeout 5 --cwd "$REPO" >"$WORK/prompt.out" 2>"$WORK/prompt.err"
+expect_rc "--prompt takes no --timeout" 64 "$?"
+"$REVIEW" --prompt --kind draft --input "$WORK/no-such-draft.md" --out "$WORK/p-usage.md" --cwd "$REPO" >"$WORK/prompt.out" 2>"$WORK/prompt.err"
+expect_rc "--prompt needs an existing --input file" 64 "$?"
+check "a misused --prompt writes no findings" test ! -e "$WORK/p-usage.md"
+
+rm -f "$WORK/in-stamped.md"
+printf '%s\n' '## 需要人取舍' '1. 是否删除旧表' '   A. 删除' '   B. 保留' \
+  '   推荐：A — 旧表已无引用' '   可自动采纳：是' > "$WORK/in-body-full.md"
+stamp_review draft "$WORK/in-body-full.md" "$WORK/in-stamped.md"
+expect_rc "--stamp writes findings with complete marks" 0 "$RUN_RC"
+check "the stamped first line is the route line with the two marks" \
+  bash -c "head -n 1 '$WORK/in-stamped.md' | grep -Eq '^路由：审查（review）claude-glm / glm-5.4 / medium（强度未生效）· [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} [+-][0-9]{4}（会话内子代理）\$'"
+check "the stamped route line is followed by a blank line" \
+  bash -c "test \"\$(sed -n 2p '$WORK/in-stamped.md')\" = ''"
+check "the stamped findings are kept verbatim after the route line" cmp -s <(tail -n +3 "$WORK/in-stamped.md") "$WORK/expected-fullmarks.md"
+check "--stamp prints nothing on stdout" test ! -s "$WORK/stamp.out"
+check "--stamp starts no launcher" no_launcher_called
+check "--stamp leaves no temporary file behind" no_temp_left "$WORK/in-stamped.md"
+
+rm -f "$WORK/in-missing.md" "$WORK/in-missing.md.rejected"
+printf '%s\n' '## 需要人取舍' '1. 是否删除旧表' '   A. 删除' > "$WORK/in-body-missing.md"
+stamp_review draft "$WORK/in-body-missing.md" "$WORK/in-missing.md"
+expect_rc "--stamp with a missing mark exits 7" 7 "$RUN_RC"
+check "the missing mark is listed on stderr" grep -Fq '1. 是否删除旧表' "$WORK/stamp.err"
+check "a 7 from --stamp writes no findings" test ! -e "$WORK/in-missing.md"
+check "a 7 from --stamp leaves only the refused findings behind" only_rejected_left "$WORK/in-missing.md"
+check "the refused findings are kept verbatim as <out>.rejected" cmp -s "$WORK/in-missing.md.rejected" "$WORK/in-body-missing.md"
+check "the 7 names where the refused findings are kept" grep -Fq "kept as $WORK/in-missing.md.rejected" "$WORK/stamp.err"
+
+# --repair-prompt: the out-of-session repair prompt under the in-session
+# first line, built from the findings --stamp refused.
+repair_prompt_review draft "$WORK/in-missing.md"
+expect_rc "--repair-prompt after a 7 prints the brief" 0 "$RUN_RC"
+check "--repair-prompt prints nothing on stderr after a 7" test ! -s "$WORK/repair.err"
+check "the repair brief's first line names the repair, the session and the route model" bash -c \
+  "head -n 1 '$WORK/repair.out' | grep -Fq 'the same review, asked to repair your own previous output, running as a read-only subagent of the calling session on glm-5.4'"
+check "the repair brief does not call the review an Opus one" bash -c "! grep -Fq 'Opus review' '$WORK/repair.out'"
+check "the repair brief carries the refused findings" grep -Fq '1. 是否删除旧表' "$WORK/repair.out"
+check "the repair brief names the marks to add" grep -Fq '可自动采纳：否 — <why>' "$WORK/repair.out"
+check "the repair brief asks for the complete corrected response" grep -Fq 'Output the complete corrected response.' "$WORK/repair.out"
+check "--repair-prompt starts no launcher" no_launcher_called
+check "--repair-prompt writes nothing next to the findings file" only_rejected_left "$WORK/in-missing.md"
+
+# The same body out of session, for the cmp: its repair pass's prompt is the
+# in-session brief under another first line.
+printf '%s\n' '## 需要人取舍' '1. 是否删除旧表' '   A. 删除' '   B. 保留' > "$WORK/in-body-missingmarks.md"
+"$ROUTE" use review=claude/opus/high >/dev/null 2>&1
+export FAKE_CLAUDE_LOG="$WORK/in-repair-cmp.log" FAKE_CLAUDE_SCENARIO=missingmarks FAKE_CLAUDE_SCENARIO_2=fullmarks
+reset_calls
+run_review --kind draft --input "$WORK/draft.md" --out "$WORK/in-repair-cmp.md" --cwd "$REPO" --timeout 5
+expect_rc "the out-of-session repair for the cmp succeeds" 0 "$RUN_RC"
+check "the out-of-session repair for the cmp ran two passes" test "$(call_count)" = 2
+export FAKE_CLAUDE_LOG="$WORK/where-claude.log" FAKE_CLAUDE_SCENARIO=ok FAKE_CLAUDE_SCENARIO_2=
+"$ROUTE" use review=claude-glm/glm-5.4/medium >/dev/null 2>&1
+rm -f "$WORK/in-cmp.md" "$WORK/in-cmp.md.rejected"
+stamp_review draft "$WORK/in-body-missingmarks.md" "$WORK/in-cmp.md"
+expect_rc "the cmp body is refused with 7" 7 "$RUN_RC"
+repair_prompt_review draft "$WORK/in-cmp.md"
+check "the in-session repair brief is the out-of-session repair prompt under another first line" \
+  cmp -s <(tail -n +2 "$WORK/repair.out") <(last_prompt "$WORK/in-repair-cmp.log" | tail -n +2)
+rm -f "$WORK/in-cmp.md.rejected"
+
+# Once a repair was asked for (<out>.rejected exists), a --stamp applies the
+# out-of-session repair retry's checks too: a repair may add lines, never take
+# the items away.
+printf 'repaired without the section\n' > "$WORK/in-body-repaired-dropped.md"
+stamp_review draft "$WORK/in-body-repaired-dropped.md" "$WORK/in-missing.md"
+expect_rc "a re-stamp whose repair dropped the section exits 7" 7 "$RUN_RC"
+check "the dropped section is reported" grep -Fq 'dropped ## 需要人取舍' "$WORK/stamp.err"
+check "a dropped-section re-stamp writes no findings" test ! -e "$WORK/in-missing.md"
+check "the dropped repair is what is kept as the refused findings" cmp -s "$WORK/in-missing.md.rejected" "$WORK/in-body-repaired-dropped.md"
+repair_prompt_review draft "$WORK/in-missing.md"
+expect_rc "--repair-prompt after the section was dropped exits 64" 64 "$RUN_RC"
+check "--repair-prompt says there is nothing left to repair" grep -Fq 'nothing to repair' "$WORK/repair.err"
+check "a refused --repair-prompt prints no text" test ! -s "$WORK/repair.out"
+
+printf '## 需要人取舍\n无\n' > "$WORK/in-body-none.md"
+stamp_review draft "$WORK/in-body-none.md" "$WORK/in-missing.md"
+expect_rc "a re-stamp whose repair turned the section into 无 exits 7" 7 "$RUN_RC"
+check "the 无 repair is reported" grep -Fq 'turned ## 需要人取舍 into 无' "$WORK/stamp.err"
+check "a 无 re-stamp writes no findings" test ! -e "$WORK/in-missing.md"
+
+stamp_review draft "$WORK/in-body-missing.md" "$WORK/in-missing.md"
+expect_rc "a re-stamp that still lacks the marks exits 7" 7 "$RUN_RC"
+check "the still-missing marks are reported as such" grep -Fq 'still lack 推荐：/可自动采纳： lines after one repair' "$WORK/stamp.err"
+check "the still-missing item is listed on stderr" grep -Fq '1. 是否删除旧表' "$WORK/stamp.err"
+check "a still-missing re-stamp writes no findings" test ! -e "$WORK/in-missing.md"
+
+stamp_review draft "$WORK/in-body-full.md" "$WORK/in-missing.md"
+expect_rc "a re-stamp with the marks repaired writes the findings" 0 "$RUN_RC"
+check "the repaired findings are written verbatim after the route line" cmp -s <(tail -n +3 "$WORK/in-missing.md") "$WORK/expected-fullmarks.md"
+check "a successful re-stamp removes the refused findings" test ! -e "$WORK/in-missing.md.rejected"
+check "a successful re-stamp leaves no temporary file behind" no_temp_left "$WORK/in-missing.md"
+repair_prompt_review draft "$WORK/in-missing.md"
+expect_rc "--repair-prompt after a successful --stamp exits 64" 64 "$RUN_RC"
+
+# Without a repair asked for, the first --stamp checks what the out-of-session
+# first pass checks: a section that is absent or says 无 passes.
+rm -f "$WORK/in-nosection.md" "$WORK/in-nosection.md.rejected"
+stamp_review draft "$WORK/in-body-plain.md" "$WORK/in-nosection.md"
+expect_rc "a first --stamp of findings without the section writes them, as out of session" 0 "$RUN_RC"
+check "findings without the section are written verbatim after the route line" cmp -s <(tail -n +3 "$WORK/in-nosection.md") "$WORK/in-body-plain.md"
+"$REVIEW" --repair-prompt --kind draft --out "$WORK/in-nosection.md" --cwd "$REPO" >"$WORK/repair.out" 2>"$WORK/repair.err"
+expect_rc "--repair-prompt with no refused findings exits 64" 64 "$?"
+check "it names the refused file that does not exist" grep -Fq "$WORK/in-nosection.md.rejected does not exist" "$WORK/repair.err"
+
+stamp_review draft "$WORK/in-body-none.md" "$WORK/in-none.md"
+expect_rc "--stamp with a 无 section writes the findings" 0 "$RUN_RC"
+check "a 无 section is written verbatim after the route line" cmp -s <(tail -n +3 "$WORK/in-none.md") "$WORK/marks-none-expected.md"
+
+: > "$WORK/in-body-empty.md"
+stamp_review code "$WORK/in-body-empty.md" "$WORK/in-empty.md"
+expect_rc "--stamp with no findings on stdin exits 6" 6 "$RUN_RC"
+check "empty stdin writes no findings" test ! -e "$WORK/in-empty.md"
+printf ' \t\n' > "$WORK/in-body-ws.md"
+stamp_review code "$WORK/in-body-ws.md" "$WORK/in-ws.md"
+expect_rc "--stamp with whitespace only on stdin exits 6" 6 "$RUN_RC"
+check "whitespace stdin writes no findings" test ! -e "$WORK/in-ws.md"
+check "whitespace stdin leaves no temporary file behind" no_temp_left "$WORK/in-ws.md"
+stamp_review code "$WORK/in-stamped.md" "$WORK/in-double.md"
+expect_rc "--stamp of findings that already carry a route line exits 64" 64 "$RUN_RC"
+check "a double stamp is reported as a mistake of the caller" grep -Fq 'already start with a 路由： line, so that file was stamped already' "$WORK/stamp.err"
+check "a double stamp writes nothing" no_temp_left "$WORK/in-double.md"
+
+"$ROUTE" use diagnosis=claude-glm/glm-5.4/low >/dev/null 2>&1
+stamp_review diagnose "$WORK/in-body-full.md" "$WORK/in-diagnose.md"
+expect_rc "--stamp for diagnose in session writes the findings" 0 "$RUN_RC"
+check "the stamped diagnose first line names the diagnosis route with the two marks" \
+  bash -c "head -n 1 '$WORK/in-diagnose.md' | grep -Eq '^路由：诊断（diagnosis）claude-glm / glm-5.4 / low（强度未生效）· [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9:]{8} [+-][0-9]{4}（会话内子代理）\$'"
+"$ROUTE" use diagnosis=claude/opus/high >/dev/null 2>&1
+
+"$REVIEW" --stamp --kind draft --cwd "$REPO" >"$WORK/stamp.out" 2>"$WORK/stamp.err"
+expect_rc "--stamp without --out is a usage error" 64 "$?"
+"$REVIEW" --stamp --kind draft --out "$WORK/s-usage.md" --input "$WORK/draft.md" --cwd "$REPO" >"$WORK/stamp.out" 2>"$WORK/stamp.err"
+expect_rc "--stamp takes no --input" 64 "$?"
+"$REVIEW" --stamp --kind draft --out "$WORK/s-usage.md" --timeout 5 --cwd "$REPO" >"$WORK/stamp.out" 2>"$WORK/stamp.err"
+expect_rc "--stamp takes no --timeout" 64 "$?"
+"$REVIEW" --stamp --kind nonsense --out "$WORK/s-usage.md" --cwd "$REPO" >"$WORK/stamp.out" 2>"$WORK/stamp.err"
+expect_rc "--stamp with an unknown kind is a usage error" 64 "$?"
+"$NO_ROUTE/opus-review.sh" --stamp --kind draft --out "$WORK/s-usage.md" --cwd "$REPO" <"$WORK/in-body-plain.md" >"$WORK/stamp.out" 2>"$WORK/stamp.err"
+expect_rc "--stamp on a route that cannot be read is a usage error" 64 "$?"
+check "a misused --stamp writes no findings" test ! -e "$WORK/s-usage.md"
+
+"$REVIEW" --repair-prompt --kind draft --out "$WORK/r-usage.md" --input "$WORK/draft.md" --cwd "$REPO" >"$WORK/repair.out" 2>"$WORK/repair.err"
+expect_rc "--repair-prompt takes no --input" 64 "$?"
+"$REVIEW" --repair-prompt --kind draft --out "$WORK/r-usage.md" --timeout 5 --cwd "$REPO" >"$WORK/repair.out" 2>"$WORK/repair.err"
+expect_rc "--repair-prompt takes no --timeout" 64 "$?"
+"$REVIEW" --repair-prompt --kind draft --cwd "$REPO" >"$WORK/repair.out" 2>"$WORK/repair.err"
+expect_rc "--repair-prompt without --out is a usage error" 64 "$?"
+"$REVIEW" --repair-prompt --where --kind draft --cwd "$REPO" >"$WORK/repair.out" 2>"$WORK/repair.err"
+expect_rc "--repair-prompt cannot be combined with --where" 64 "$?"
+"$ROUTE" use review=claude/opus/high >/dev/null 2>&1
+"$REVIEW" --repair-prompt --kind draft --out "$WORK/in-missing.md" --cwd "$REPO" >"$WORK/repair.out" 2>"$WORK/repair.err"
+expect_rc "--repair-prompt on the official route is refused" 64 "$?"
+check "a refused --repair-prompt names the route and out-of-session" grep -Fq '审查中（claude / opus，出会话）' "$WORK/repair.err"
+check "a refused --repair-prompt prints no text" test ! -s "$WORK/repair.out"
+"$ROUTE" use review=claude-glm/glm-5.4/medium >/dev/null 2>&1
+"$NO_ROUTE/opus-review.sh" --repair-prompt --kind draft --out "$WORK/r-usage.md" --cwd "$REPO" >"$WORK/repair.out" 2>"$WORK/repair.err"
+expect_rc "--repair-prompt on a route that cannot be read is a usage error" 64 "$?"
+check "a misused --repair-prompt writes nothing" no_temp_left "$WORK/r-usage.md"
+
+# The plain command never decides on its own: with everything that makes a
+# review in-session, it still runs the headless launcher, as before.
+"$ROUTE" use review=claude-glm/glm-5.4/medium >/dev/null 2>&1
+export FAKE_CLAUDE_SCENARIO=ok FAKE_CLAUDE_LOG="$WORK/plain-claude.log" FAKE_GLM_LOG="$WORK/plain-glm.log"
+run_review --kind draft --input "$WORK/draft.md" --out "$WORK/plain-findings.md" --cwd "$REPO" --timeout 5
+expect_rc "the plain command still runs out of session when --where would say in-session" 0 "$RUN_RC"
+check "the plain command called the GLM launcher" test -e "$FAKE_GLM_LOG"
+check "the plain command's findings carry no in-session mark" bash -c "! grep -Fq '会话内子代理' '$WORK/plain-findings.md'"
+check "the plain command's findings carry no effort mark" bash -c "! grep -Fq '强度未生效' '$WORK/plain-findings.md'"
+check "the plain command's first line is the unchanged route line" \
+  bash -c "head -n 1 '$WORK/plain-findings.md' | grep -Eq '^路由：审查（review）claude-glm / glm-5.4 / medium · [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9:]{8} [+-][0-9]{4}\$'"
+"$ROUTE" use review=claude/opus/high >/dev/null 2>&1
+export CLAUDE_CODE_SUBAGENT_MODEL="glm-5.4" CLAUDE_CODE_SUBAGENT_MODEL_FORCE="glm-5.4"
+export FAKE_CLAUDE_LOG="$WORK/doc-claude.log" FAKE_GLM_LOG="$WORK/doc-glm.log"
+
 EXIT_CODE_SENTENCE='退出码为 3（额度或 429）时按 quota 停车，其余非 0 退出码仍按原规则停车并说明（退出码含义见 scripts/opus-review.sh 头注释）'
 check "SKILL delegates exit codes to the wrapper header" \
   grep -Fq "$EXIT_CODE_SENTENCE" "$HERE/../SKILL.md"
@@ -671,6 +1046,61 @@ for doc in SKILL.md find-next/SKILL.md; do
   check "$doc no longer names the 判断模型： first line" \
     bash -c "! grep -Fq '判断模型：' '$HERE/../$doc'"
 done
+
+# --- the route decides where a review runs, and names it (票 #84) ---------------
+
+check "the wrapper header documents the three forms" bash -c \
+  "grep -Fq -- '--where --kind code|draft|diagnose' '$HERE/opus-review.sh' && grep -Fq -- '--prompt --kind code' '$HERE/opus-review.sh' && grep -Fq -- '--stamp --kind code|draft|diagnose' '$HERE/opus-review.sh'"
+check "the wrapper header documents the in-session first line" \
+  grep -Fq '（强度未生效）· 2026-11-28 16:30:00 +0800（会话内子代理）' "$HERE/opus-review.sh"
+check "the wrapper header documents that only the force set to 1 counts" \
+  grep -Fq 'CLAUDE_CODE_SUBAGENT_MODEL_FORCE is not exactly 1' "$HERE/opus-review.sh"
+check "the wrapper header names the subagent type the hook allows" \
+  grep -Fq 'hooks/subagent-guard.js' "$HERE/opus-review.sh"
+for doc in SKILL.md find-next/SKILL.md; do
+  check "$doc asks --where before a flash-mode review" bash -c "grep -Fq 'opus-review.sh --where --kind' '$HERE/../$doc'"
+  check "$doc names --prompt and --stamp" \
+    bash -c "grep -Fq 'opus-review.sh --prompt' '$HERE/../$doc' && grep -Fq 'opus-review.sh --stamp' '$HERE/../$doc'"
+  check "$doc relays the route-named status line" grep -Fq '审查中（' "$HERE/../$doc"
+  check "$doc names the in-session marks of the findings' first line" \
+    bash -c "grep -Fq '（会话内子代理）' '$HERE/../$doc' && grep -Fq '强度未生效' '$HERE/../$doc'"
+  check "$doc no longer calls the route-run review an Opus review" bash -c \
+    "! grep -Eq 'Opus review (errors|不可用)|another Opus review|当轮 Opus review|合成 Opus review|Opus 审核中|Opus 的标记' '$HERE/../$doc'"
+done
+check "SKILL.md keeps the rule that an official route is never reviewed in session" \
+  bash -c "grep -Fq 'mattpocock-skills:code-review' '$HERE/../SKILL.md' && grep -Fq 'model: REVIEW_MODEL' '$HERE/../SKILL.md'"
+check "MAINTAINING 第 24 条 carries the 2026-11-28 note on GLM routes" \
+  grep -Fq '2026-11-28 注，票 #84：用户把审查路由设为 GLM' "$HERE/../MAINTAINING.md"
+check "ADR 0004 carries the 2026-11-28 note on where a review runs" \
+  grep -Fq '2026-11-28 注，票 #84' "$HERE/../docs/adr/0004-stage-routes-on-orca.md"
+check "GLOSSARY's Stage route says the route also decides where a review runs" \
+  grep -Fq 'opus-review.sh --where' "$HERE/../GLOSSARY.md"
+
+# --- what a refused --stamp leaves behind, and the repair brief (票 #84, r2) ---
+
+check "the wrapper header documents where refused findings are kept" grep -Fq '<out>.rejected' "$HERE/opus-review.sh"
+check "the wrapper header documents --repair-prompt" \
+  grep -Fq -- '--repair-prompt --kind code|draft|diagnose' "$HERE/opus-review.sh"
+check "the exit-code table documents 64 for findings already stamped" \
+  grep -Fq 'call given findings that already start with a 路由： line' "$HERE/opus-review.sh"
+check "the exit-code table documents the re-stamp checks under code 7" \
+  grep -Fq 'repair that dropped the section or turned it into' "$HERE/opus-review.sh"
+for doc in SKILL.md find-next/SKILL.md; do
+  check "$doc names --repair-prompt" grep -Fq 'opus-review.sh --repair-prompt' "$HERE/../$doc"
+  check "$doc names where the refused findings are kept" grep -Fq '.rejected' "$HERE/../$doc"
+done
+check "SKILL.md's in-session step 4 asks the wrapper for the repair brief" \
+  grep -Fq 'opus-review.sh --repair-prompt --kind <kind> --out <findings file>' "$HERE/../SKILL.md"
+check "find-next's flash section asks the wrapper for the repair brief" \
+  grep -Fq 'opus-review.sh --repair-prompt --kind draft --out <同一个 findings 文件>' "$HERE/../find-next/SKILL.md"
+check "MAINTAINING's flash design point carries the 2026-11-28 note on GLM routes" \
+  grep -Fq '（2026-11-28 注，票 #84：用户把审查路由明确设为 GLM 时' "$HERE/../MAINTAINING.md"
+check "MAINTAINING 第 29 条 no longer says flash follows only Opus's marks" \
+  bash -c "! grep -Fq '只照 Opus 的标记执行' '$HERE/../MAINTAINING.md' && grep -Fq '只照审查 findings 的标记执行' '$HERE/../MAINTAINING.md'"
+check "ADR 0001 carries the 2026-11-28 note on a GLM review route" \
+  grep -Fq '2026-11-28 注，票 #84' "$HERE/../docs/adr/0001-cheap-orchestrator-default-deny.md"
+check "GLOSSARY's Review roles say the subagent model is the review route's" \
+  grep -Fq 'the subagent model is the review route' "$HERE/../GLOSSARY.md"
 
 if [ "$FAIL" -gt 0 ]; then
   echo "Artifacts: $WORK"
