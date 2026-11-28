@@ -72,4 +72,4 @@ This reports state, recent commands and edits, time since the last progress even
 - Do not resume a timed-out worker unless it made progress, and resume it at most once.
 - Do not automatically switch from GLM to Claude after auth, quota, or transient errors; ask the user.
 - Do not ask Codex workers to delete directories recursively; their command policy may reject it.
-- Ask the user before pushing, closing issues, or publishing anything.
+- Confirmations stay only in a Run that keeps them: one started by typing `/implement-spec-split <n>` without `--auto-land`, or a Run of a batch started with `--no-auto-land`. There, ask the user before pushing, closing issues, or publishing anything. An unattended Run that `launch-wave.sh` started — the default, with `--auto-land` — does not ask: it lands, closes its tickets and starts the next wave by itself.

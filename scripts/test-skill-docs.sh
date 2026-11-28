@@ -64,7 +64,9 @@
 # hands-on bullet of step 8 sits at the level of the two rules above it, the
 # parking report's 现状 paragraph says like its lead-in that the supervisor
 # reads the first section, and an ops step's rollback line names this machine
-# next to the remote host.
+# next to the remote host; and two documents older than 规格 #58 that its rules
+# had turned into wrong sentences (主审补记 10、11): README's find-next bullets
+# on task and loose tickets, and docs/ai-agents.md's "ask first" rule.
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -797,6 +799,32 @@ without '远端改了什么、怎么回滚' 'find-next: the rollback line of an 
 count_at_least '远端或本机改了什么、怎么回滚' 2 'find-next: both sentences on an ops step result name this machine too' "$FIND_NEXT"
 without '远端改了什么、怎么回滚' 'Brief template: the rollback line no longer names the remote host alone' "$BRIEF"
 has '报告里写清远端或本机改了什么、怎么回滚' 'Brief template: the rollback line of the ops section names this machine too' "$BRIEF"
+
+# --- README's find-next bullets and docs/ai-agents.md's last rule follow the rules of 规格 #58 (r3: 主审补记 10、11) ---
+
+# Two README sentences, older than 规格 #58, had been turned into wrong ones by
+# its rules: the rest of a task ticket is no longer a checklist for the user —
+# its steps go to a worker, the ops ones behind guardrails, and only identity,
+# credentials or a physical action stay with the user — and the combined round
+# is a decision round that reports and waits for no reply, after which the
+# tracker is written. The intent is the same as the group above that keeps the
+# user documents from calling the decision round a question round.
+without 'a checklist for the rest' 'README no longer makes the rest of a task ticket a checklist for the user' "$ROOT/README.md"
+has 'its steps go to a worker, the ops ones behind guardrails; only what needs your own identity, credentials or physical action becomes a checklist for you' \
+  'README: the steps of a task ticket go to a worker, only identity, credentials or a physical action to the user' "$ROOT/README.md"
+without 'all tracker writes wait for the combined round' 'README no longer says the tracker writes wait for the combined round' "$ROOT/README.md"
+has 'decided in the combined decision round — a report that waits for no reply — and written to the tracker only after it has decided them' \
+  'README: loose-ticket choices are decided by the round, which reports and waits for no reply' "$ROOT/README.md"
+# docs/ai-agents.md still told every agent to ask before pushing, closing or
+# publishing, while unattended landing — which asks nobody — has been the
+# default since 规格 #58. The rule now names the Runs that keep their
+# confirmations.
+without '- Ask the user before pushing, closing issues, or publishing anything.' \
+  'docs/ai-agents.md no longer tells every Run to ask before pushing' "$ROOT/docs/ai-agents.md"
+has 'one started by typing `/implement-spec-split <n>` without `--auto-land`, or a Run of a batch started with `--no-auto-land`' \
+  'docs/ai-agents.md keeps the confirmations to a typed Run and a --no-auto-land batch' "$ROOT/docs/ai-agents.md"
+has 'An unattended Run that `launch-wave.sh` started — the default, with `--auto-land` — does not ask' \
+  'docs/ai-agents.md says an unattended Run started by launch-wave does not ask' "$ROOT/docs/ai-agents.md"
 
 printf '\n%d passed, %d failed\n' "$PASSED" "$FAILED"
 exit "$FAILED"
