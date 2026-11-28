@@ -95,6 +95,7 @@
 #      (`<counter>\t<side>\t<commit> <subject>\t<paths>`, one line per side)
 #      for the Brief of the worker that re-bumps the Ticket side. Rerun after
 #      the re-bump; a rerun that still exits 6 means the re-bump did not clear
+#      it; the round cap is the caller's (SKILL.md steps 5 / 9.1)
 #  64  bad usage
 
 set -u
