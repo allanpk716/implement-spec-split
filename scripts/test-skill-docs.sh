@@ -20,6 +20,11 @@
 # trade-off is never parked on (a recommendation is applied, anything else takes
 # the reversibility rule), the category table is down to quota / transient /
 # auth / error, and the hooks README's rule B says the same.
+# The review fix of 规格 #58 adds two groups: the supervisor leaves an error
+# park alone (做错 4 — relayed to the user, never decided or resumed) and no
+# decision point of find-next picks an option that loosens a safety boundary
+# (做错 3 — step 6, the selecting Opus review of the flash mode and the
+# supervisor each carry the rule).
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -56,6 +61,12 @@ has() { # text name file
 
 without() { # text name file
   if grep -Fq -- "$1" "$3" 2>/dev/null; then bad "$2" "unexpected [$1] in ${3#$ROOT/}"; else ok "$2"; fi
+}
+
+count_at_least() { # text n name file -- a rule several places must each carry
+  local n
+  n=$(grep -Fo -- "$1" "$4" 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$n" -ge "$2" ]; then ok "$3"; else bad "$3" "expected at least $2 occurrences of [$1] in ${4#$ROOT/}, found $n"; fi
 }
 
 for file in "$SKILL" "$BRIEF" "$HOOKS" "$GLOSSARY" "$FIND_NEXT" "$LIB_TRANSCRIPT" "$DELEGATE_GUARD"; do
@@ -331,6 +342,33 @@ has 'flash 不自己选' 'flash mode does not choose itself' "$FIND_NEXT"
 has '再交给**一次** Opus review' 'flash mode hands the reversibility choice to one more Opus review' "$FIND_NEXT"
 has '拍板轮与「展开」' 'flash mode names the decision round' "$FIND_NEXT"
 without '本步只直接转述选择题' 'flash mode no longer describes step 6 as relaying questions' "$FIND_NEXT"
+
+# --- no decision point of find-next picks a loosening option (规格 #58 审查做错 3) ---
+
+# The root SKILL.md's step 8 never takes an option that loosens a safety
+# boundary (the pins under 票 #70 above); find-next's three decision points did
+# not say so. So an item the draft review had marked 可自动采纳：否 went to the
+# reversibility choice with "loosen the guardrail" as its smallest option, and a
+# worker's recommendation to loosen was adopted as it stood. Each of the three
+# carries the rule now: such an option is never picked, recommendation or not,
+# and an item that offers nothing else is not decided — it goes to 要你做 and is
+# recorded under 未执行的放宽项. The three sites are pinned one by one and the
+# rule's wording is counted, so no site can lose it on its own.
+LOOSENING_RULE='放宽安全边界的选项一律不选，推荐是它的也不采纳'
+has '时优先用它。放宽安全边界的选项一律不选，推荐是它的也不采纳；除它之外没有可选项的条目不拍板、列入「要你做」并记进「未执行的放宽项」' \
+  'find-next step 6 picks no loosening option' "$FIND_NEXT"
+has '要本人身份或凭据的不选；放宽安全边界的选项一律不选，推荐是它的也不采纳；除它之外没有可选项的写『推荐：无』' \
+  'flash mode writes the rule into the input of the selecting Opus review' "$FIND_NEXT"
+has '口径同第 6 步，放宽安全边界的选项 flash 也不选' 'flash mode adopts no loosening recommendation either' "$FIND_NEXT"
+has '这条不拍板，列为「要你做」。放宽安全边界的选项一律不选，推荐是它的也不采纳；除它之外没有可选项的条目不拍板' \
+  'the supervisor picks no loosening option' "$FIND_NEXT"
+count_at_least "$LOOSENING_RULE" 3 'the rule stands at all three decision points of find-next' "$FIND_NEXT"
+has '和拍板轮里因选项全是放宽安全边界而没拍板的条目，单列「未执行的放宽项」' \
+  'find-next step 11 records the refused loosenings of the round' "$FIND_NEXT"
+has '因选项全是放宽安全边界而没拍板的条目另列「未执行的放宽项」' \
+  'ALL_DONE records the refused loosenings of the supervision' "$FIND_NEXT"
+has 'no decision round ever picks such an option' 'GLOSSARY: the Loosening entry covers every decision round' "$GLOSSARY"
+has "not find-next's decision round or its Supervisor" 'GLOSSARY: the Loosening entry names find-next and the Supervisor' "$GLOSSARY"
 
 # --- the Ticket Brief template --------------------------------------------------
 
