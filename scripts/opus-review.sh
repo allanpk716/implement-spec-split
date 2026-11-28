@@ -91,7 +91,9 @@
 # out-of-session pass applies to its own output, and exits 7 without writing
 # --out when they fail. The first --stamp at an --out checks what the
 # out-of-session first pass checks: every item has its 推荐： and 可自动采纳：
-# lines (a section that is absent or says 无 passes, as there). What it refuses
+# lines (an item is a numbered line, a title or a top-level bullet together
+# with the option and mark lines under it, indented or written flat; a
+# section that is absent or says 无 passes, as there). What it refuses
 # is kept next to --out as <out>.rejected, the trace of a refused review and
 # what --repair-prompt is built from; a --stamp that writes --out removes it.
 # While <out>.rejected exists a repair was asked for, and a --stamp checks
@@ -239,7 +241,10 @@ if [ -z "$TIMEOUT" ]; then
     TIMEOUT=1200
   fi
 fi
-[ -z "$TAKES_INPUT" ] || [ -n "$INPUT" ] || die "--input is required"
+# A form that takes an input and was given none is a usage error.
+if [ -n "$TAKES_INPUT" ] && [ -z "$INPUT" ]; then
+  die "--input is required"
+fi
 [ "$MODE" = where ] || [ -n "$OUT" ] || die "--out is required"
 [[ "$TIMEOUT" =~ ^[0-9]+$ ]] || die "--timeout must be a positive integer (got $TIMEOUT)"
 [ "$TIMEOUT" -gt 0 ] || die "--timeout must be a positive integer (got $TIMEOUT)"
@@ -423,18 +428,38 @@ $MARK_RULES
   esac
 }
 
-# Prints the top-level items of the “## 需要人取舍” section that lack a
-# `推荐：` line or a `可自动采纳：是|否` line. Prints nothing when the section
-# is absent or only says 无; prints NONE when it exists but has no real item.
+# Prints the items of the “## 需要人取舍” section that lack a `推荐：` line or
+# a `可自动采纳：是|否` line. Prints nothing when the section is absent or only
+# says 无; prints NONE when it exists but has no real item.
+#
+# An item opens at a line the margin marks as one and ends where the next
+# opens: a numbered line, a title (a line that is all bold, with or without a
+# bullet), or a bulleted line at the left margin that follows an item already
+# carrying both marks. Everything until then is the item's — options and
+# marks, indented under it or written flat at the left margin under its title
+# — so an option line never counts as an item of its own. Free text above the
+# items is a preamble and is not reported. A flat list with neither numbers,
+# bold titles nor complete marks between two items cannot be split, and is
+# read as one item.
 missing_tradeoff_marks() {
   awk '
-    function flush() {
-      if (item != "" && !(has_rec && has_auto)) {
+    # Prints the open item when it lacks a mark (unless told not to), then
+    # forgets it.
+    function close_item(report) {
+      if (report && item != "" && !(has_rec && has_auto)) {
         gsub(/[\r\t]+/, " ", item)
         print item
       }
+      item = ""; has_rec = 0; has_auto = 0; from_text = 0; seen_body = 0
     }
-    BEGIN { insec = 0; item = ""; has_rec = 0; has_auto = 0; meaningful = 0; saw_item = 0 }
+    # Opens the item of a line that opens one.
+    function open_item(text) {
+      item = text
+      has_rec = (text ~ /推荐[*]*[：:]/)
+      has_auto = (text ~ /可自动采纳[*]*[：:][*[:space:]]*(是|否)/)
+      saw_item = 1; from_text = 0; seen_body = 0
+    }
+    BEGIN { insec = 0; item = ""; has_rec = 0; has_auto = 0; meaningful = 0; saw_item = 0; from_text = 0; seen_body = 0 }
     /^##[[:space:]]+需要人取舍[[:space:]]*$/ { insec = 1; next }
     insec && (/^##[[:space:]]/ || /^#[[:space:]]/) { insec = 0 }
     insec {
@@ -444,32 +469,52 @@ missing_tradeoff_marks() {
       if (line ~ /^###[#]*[[:space:]]/) next
       if (line ~ /^[[:space:]]*(无|（无）|\(无\)|none|NONE|None|n\/a|N\/A|-|—|没有)[[:space:]]*$/) next
       meaningful = 1
-      if (line ~ /^[[:space:]]*([0-9]+[.、)]|[-*+])[[:space:]]+/ && line !~ /^[[:space:]]/) {
-        # Free text before the first list item is a preamble, not an item;
-        # drop it instead of reporting it as an unmarked item.
-        if (saw_item) flush()
-        item = line
-        has_rec = (line ~ /推荐[*]*[：:]/)
-        has_auto = (line ~ /可自动采纳[*]*[：:][*[:space:]]*(是|否)/)
-        saw_item = 1
+      is_rec = (line ~ /推荐[*]*[：:]/)
+      is_auto = (line ~ /可自动采纳[*]*[：:][*[:space:]]*(是|否)/)
+      numbered = (line ~ /^[0-9]+[.、)]([^0-9A-Za-z]|$)/)
+      bullet = (line ~ /^[-*+][[:space:]]+/)
+      # A title: a line that is all bold, with or without a bullet, and
+      # neither a mark nor a lettered option such as **A. …**.
+      title = (!is_rec && !is_auto && line !~ /\*\*[A-Za-z][.、:：)]/ &&
+        (line ~ /^\*\*[^*]+\*\*[[:space:]]*$/ || (bullet && line ~ /^[-*+][[:space:]]+\*\*[^*]+\*\*[[:space:]]*$/)))
+      if (numbered || title) {
+        # A numbered line or a title always opens an item. Free text that
+        # never gained a line of its own was the preamble above the items:
+        # dropped, not reported.
+        close_item(!(from_text && !seen_body))
+        if (title) { item = line; saw_item = 1; from_text = 1 }
+        else open_item(line)
         next
       }
-      if (item == "") item = line
-      if (line ~ /推荐[*]*[：:]/) has_rec = 1
-      if (line ~ /可自动采纳[*]*[：:][*[:space:]]*(是|否)/) has_auto = 1
+      if (bullet && (!saw_item || (has_rec && has_auto))) {
+        # A bulleted line at the left margin opens an item when nothing is
+        # open or the open item has both marks; otherwise it falls through as
+        # a line of the open item, an option or a mark written flat under
+        # its title.
+        if (saw_item) close_item(1)
+        open_item(line)
+        next
+      }
+      # Any other line belongs to the open item: its marks count, and a line
+      # of its own makes free text an item.
+      if (item == "") { item = line; from_text = 1 }
+      else seen_body = 1
+      if (is_rec) has_rec = 1
+      if (is_auto) has_auto = 1
     }
     END {
       if (insec && meaningful == 0) { print "NONE"; exit }
-      flush()
+      close_item(1)
     }
   ' "$1"
 }
 
-# The prompt of the repair pass: $1 its first line, which says who repairs and
-# where; $2 the file of the findings to repair; $3 the items that lack their
-# lines. The findings are passed through verbatim (no expansion), so findings
-# containing `$`, backticks or backslashes cannot turn into commands here.
-repair_prompt() {
+# Prints the prompt of the repair pass: $1 its first line, which says who
+# repairs and where; $2 the file of the findings to repair; $3 the items that
+# lack their lines. The findings are passed through verbatim (no expansion),
+# so findings containing `$`, backticks or backslashes cannot turn into
+# commands here.
+print_repair_prompt() {
   local reviewer_line=$1 original=$2 missing=$3
   printf '%s\n' "$reviewer_line"
   printf '%s\n' ''
@@ -489,7 +534,12 @@ repair_prompt() {
 # its three subagents. mattpocock-skills:code-review's process is restated
 # here because a subagent cannot load the skill itself, and the axes are kept
 # apart and judged by a subagent each, as out of session; the session only
-# passes text on and pipes the result into --stamp.
+# passes text on and pipes the result into --stamp. The Standards and Spec
+# briefs and the smell baseline are the upstream skill's own words, kept
+# verbatim: scripts/test-opus-review.sh compares them with the upstream file
+# (~/.claude/plugins/marketplaces/mattpocock/skills/engineering/code-review/
+# SKILL.md) wherever it is installed, so that the two forms of review do not
+# drift apart. Update them together.
 insession_code_text() {
   local text stamp_command
   case "$OUT" in
@@ -517,24 +567,24 @@ Every subagent:
 - Return the findings themselves, suitable for an Orchestrator to act on, without conversational wrapper text.
 
 Standards axis brief:
-First confirm the fixed point and run the diff command above. Search the repository for every file that documents how code should be written; when CODING_STANDARDS.md or CONTRIBUTING.md exists it must be on your list. Then report, per file or hunk where relevant, (a) every place the diff violates a documented standard: cite the standard (file and the rule); and (b) any smell from the baseline below that you spot: name it and quote the hunk. Distinguish hard violations from judgement calls: a documented-standard breach can be hard, a baseline smell is always a judgement call, and a documented repository standard overrides the baseline. Skip anything tooling already enforces. Under 400 words.
+First confirm the fixed point and run the diff command above. Search the repository for every file that documents how code should be written; when CODING_STANDARDS.md or CONTRIBUTING.md exists it must be on your list. The brief of the axis, as the skill words it: Report, per file/hunk where relevant, (a) every place the diff violates a documented standard: cite the standard (file + the rule); and (b) any baseline smell you spot: name it and quote the hunk. Distinguish hard violations from judgement calls: documented-standard breaches can be hard, but baseline smells are always judgement calls, and a documented repo standard overrides the baseline. Skip anything tooling enforces. Under 400 words.
 
-Smell baseline (Fowler, Refactoring ch. 3), each smell what it is → how to fix:
-- Mysterious Name: a function, variable, or type whose name doesn't reveal what it does or holds. → rename it; if no honest name comes, the design's murky.
-- Duplicated Code: the same logic shape appears in more than one hunk or file in the change. → extract the shared shape, call it from both.
-- Feature Envy: a method that reaches into another object's data more than its own. → move the method onto the data it envies.
-- Data Clumps: the same few fields or params keep travelling together (a type wanting to be born). → bundle them into one type, pass that.
-- Primitive Obsession: a primitive or string standing in for a domain concept that deserves its own type. → give the concept its own small type.
-- Repeated Switches: the same switch/if-cascade on the same type recurs across the change. → replace with polymorphism, or one map both sites share.
-- Shotgun Surgery: one logical change forces scattered edits across many files in the diff. → gather what changes together into one module.
-- Divergent Change: one file or module is edited for several unrelated reasons. → split so each module changes for one reason.
-- Speculative Generality: abstraction, parameters, or hooks added for needs the spec doesn't have. → delete it; inline back until a real need shows.
-- Message Chains: long a.b().c().d() navigation the caller shouldn't depend on. → hide the walk behind one method on the first object.
-- Middle Man: a class or function that mostly just delegates onward. → cut it, call the real target direct.
-- Refused Bequest: a subclass or implementer that ignores or overrides most of what it inherits. → drop the inheritance, use composition.
+Smell baseline (Fowler, Refactoring ch. 3), the skill's own list; a documented repository standard overrides it:
+- **Mysterious Name**: a function, variable, or type whose name doesn't reveal what it does or holds. → rename it; if no honest name comes, the design's murky.
+- **Duplicated Code**: the same logic shape appears in more than one hunk or file in the change. → extract the shared shape, call it from both.
+- **Feature Envy**: a method that reaches into another object's data more than its own. → move the method onto the data it envies.
+- **Data Clumps**: the same few fields or params keep travelling together (a type wanting to be born). → bundle them into one type, pass that.
+- **Primitive Obsession**: a primitive or string standing in for a domain concept that deserves its own type. → give the concept its own small type.
+- **Repeated Switches**: the same `switch`/`if`-cascade on the same type recurs across the change. → replace with polymorphism, or one map both sites share.
+- **Shotgun Surgery**: one logical change forces scattered edits across many files in the diff. → gather what changes together into one module.
+- **Divergent Change**: one file or module is edited for several unrelated reasons. → split so each module changes for one reason.
+- **Speculative Generality**: abstraction, parameters, or hooks added for needs the spec doesn't have. → delete it; inline back until a real need shows.
+- **Message Chains**: long `a.b().c().d()` navigation the caller shouldn't depend on. → hide the walk behind one method on the first object.
+- **Middle Man**: a class or function that mostly just delegates onward. → cut it, call the real target direct.
+- **Refused Bequest**: a subclass or implementer that ignores or overrides most of what it inherits. → drop the inheritance, use composition.
 
 Spec axis brief:
-First confirm the fixed point and run the diff command above. Find the originating spec in this order: issue references in the commit messages (#123, Closes #45), read with gh issue view; then a spec file under docs/, specs/ or .scratch/ matching the branch name or feature. If nothing is found, report "no spec available" instead of guessing. Then report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding. Under 400 words.
+First confirm the fixed point and run the diff command above. Find the originating spec in this order: issue references in the commit messages (#123, Closes #45), read with gh issue view; then a spec file under docs/, specs/ or .scratch/ matching the branch name or feature. If nothing is found, report "no spec available" instead of guessing. The brief of the axis, as the skill words it: Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding. Under 400 words.
 
 Aggregate brief:
 You are the same review, aggregating its two axes; you add no finding of your own. Present the two axis reports under `## Standards` and `## Spec`, verbatim or lightly cleaned, and do not merge or rerank findings across the two axes: they are deliberately separate. End that part with a one-line summary: total findings per axis and the worst issue within each axis, never a single winner across axes. When the Spec axis reported no spec available, say so under `## Spec`.
@@ -551,6 +601,46 @@ TEXT
   text=${text//@STAMP@/$stamp_command}
   text=${text//@MARKS@/$MARK_RULES}
   printf '%s\n' "$text"
+}
+
+# Writes a findings file: its first line, the route that produced it, then a
+# blank line, then the findings of $2, into $1. $3 is the first line's printf
+# format over the stage label, the route's profile, model and effort, and the
+# time: the plain route line out of session, the one with the two marks of the
+# header in session. The file is written whole, through a temporary file next
+# to it, or not at all: exits 6 when it cannot be written.
+write_first_line() {
+  local out=$1 body=$2 format=$3 tmp
+  tmp=$(mktemp "$out.tmp.XXXXXX") || exit 6
+  { printf "$format" \
+      "$STAGE_LABEL" "$ROUTE_PROFILE" "$ROUTE_MODEL" "$ROUTE_EFFORT" "$(date '+%Y-%m-%d %H:%M:%S %z')"
+    cat "$body"
+  } > "$tmp" || { rm -f "$tmp"; exit 6; }
+  if ! mv -f "$tmp" "$out"; then
+    rm -f "$tmp"
+    echo "opus-review: cannot write findings to $out" >&2
+    exit 6
+  fi
+}
+
+# The checks a repair must pass, the same for the out-of-session repair retry
+# and for a --stamp that follows a repair: the repair may add the missing
+# lines, never take the items away. $1 is the file of the repaired findings
+# and $2 the function that refuses on the caller's behalf — it takes the
+# message and, when there are items, their list, says why on stderr and exits
+# 7. Prints nothing and returns when the repair passes.
+restamp_recheck() {
+  local file=$1 refuse=$2 still_missing
+  still_missing=$(missing_tradeoff_marks "$file")
+  if ! grep -Eq '^##[[:space:]]+需要人取舍[[:space:]]*$' "$file"; then
+    "$refuse" "the repair retry dropped ## 需要人取舍; refusing to accept it"
+  fi
+  if [ "$still_missing" = NONE ]; then
+    "$refuse" "the repair retry turned ## 需要人取舍 into 无; refusing to drop the items"
+  fi
+  if [ -n "$still_missing" ]; then
+    "$refuse" "需要人取舍 items still lack 推荐：/可自动采纳： lines after one repair retry:" "$still_missing"
+  fi
 }
 
 # --stamp: the findings on stdin, checked the way the out-of-session pass
@@ -571,43 +661,28 @@ stamp_findings() {
     echo "opus-review: the findings on stdin already start with a 路由： line, so that file was stamped already; --stamp writes that line itself: give it the review's findings alone (nothing written)" >&2
     exit 64
   fi
-  # A repair was asked for at this --out when an earlier --stamp left the
-  # findings it refused there. From then on the repair may add lines, never
-  # take the items away: the checks of the out-of-session repair retry.
+  # restamp: an earlier --stamp left the findings it refused at this --out,
+  # so a repair was asked for, and what arrives now is that repair, held to
+  # the stricter standard of the out-of-session repair retry.
   [ -f "$OUT.rejected" ] && restamp=true
   missing=$(missing_tradeoff_marks "$BODY_TMP")
-  if $restamp && ! grep -Eq '^##[[:space:]]+需要人取舍[[:space:]]*$' "$BODY_TMP"; then
-    refuse_findings "the repair dropped ## 需要人取舍, which the findings refused earlier still have; refusing to accept it"
+  if $restamp; then
+    restamp_recheck "$BODY_TMP" refuse_findings
   fi
-  if $restamp && [ "$missing" = NONE ]; then
-    refuse_findings "the repair turned ## 需要人取舍 into 无; refusing to drop the items"
-  fi
+  # What is left is the check of the first pass: every item carries its lines.
+  # No retry here: a subagent that has returned cannot be asked again, so the
+  # session asks --repair-prompt for the brief and stamps again.
   case "$missing" in
     ''|NONE) ;;
     *)
-      if $restamp; then
-        refuse_findings "需要人取舍 items still lack 推荐：/可自动采纳： lines after one repair:" "$missing"
-      else
-        # No retry here: a subagent that has returned cannot be asked again, so
-        # the session asks --repair-prompt for the brief and stamps again.
-        refuse_findings "需要人取舍 items lack 推荐：/可自动采纳： lines; have them repaired once (--repair-prompt) and stamp again:" "$missing"
-      fi
+      refuse_findings "需要人取舍 items lack 推荐：/可自动采纳： lines; have them repaired once (--repair-prompt) and stamp again:" "$missing"
       ;;
   esac
-  PROVENANCE_TMP=$(mktemp "$OUT.tmp.XXXXXX") || exit 6
   # The in-session first line: the same route line, with the two marks the
   # header names. No effort can be set on a subagent, so the route's did not
   # apply and the line says so.
-  { printf '路由：%s%s / %s / %s（强度未生效）· %s（会话内子代理）\n\n' \
-      "$STAGE_LABEL" "$ROUTE_PROFILE" "$ROUTE_MODEL" "$ROUTE_EFFORT" "$(date '+%Y-%m-%d %H:%M:%S %z')"
-    cat "$BODY_TMP"
-  } > "$PROVENANCE_TMP" || { rm -f "$PROVENANCE_TMP"; exit 6; }
+  write_first_line "$OUT" "$BODY_TMP" '路由：%s%s / %s / %s（强度未生效）· %s（会话内子代理）\n\n'
   rm -f "$BODY_TMP"; BODY_TMP=""
-  if ! mv -f "$PROVENANCE_TMP" "$OUT"; then
-    rm -f "$PROVENANCE_TMP"
-    echo "opus-review: cannot write findings to $OUT" >&2
-    exit 6
-  fi
   rm -f "$OUT.rejected"
   exit 0
 }
@@ -626,11 +701,21 @@ refuse_findings() {
   exit 7
 }
 
+# What the out-of-session pass does with a repair retry that failed those
+# checks: says why on stderr, drops the retry's files and exits 7. The
+# counterpart of refuse_findings, which keeps what it refused.
+refuse_retry() {
+  echo "opus-review: $1" >&2
+  [ -z "${2:-}" ] || printf '%s\n' "$2" >&2
+  rm -f "$RETRY_TMP" "$RETRY_ERR"
+  exit 7
+}
+
 # --repair-prompt: the brief of the repair of what the last --stamp at --out
 # refused, those findings kept as $OUT.rejected. The out-of-session repair
 # prompt under the in-session first line; the items are read from the refused
 # findings again, the way --stamp found them.
-repair_prompt_text() {
+repair_prompt_mode() {
   local missing
   [ -f "$OUT.rejected" ] || die "nothing to repair: no --stamp at --out $OUT exited 7, so $OUT.rejected does not exist"
   [ -r "$OUT.rejected" ] || die "the refused findings are not readable: $OUT.rejected"
@@ -639,7 +724,7 @@ repair_prompt_text() {
     '') die "nothing to repair: the refused findings in $OUT.rejected have no 需要人取舍 section" ;;
     NONE) die "nothing to repair: the refused findings in $OUT.rejected say 无 under 需要人取舍" ;;
   esac
-  repair_prompt "You are the same review, asked to repair your own previous output, running as a read-only subagent of the calling session on $ROUTE_MODEL, the model the user's $STAGE route names in place of Opus." \
+  print_repair_prompt "You are the same review, asked to repair your own previous output, running as a read-only subagent of the calling session on $ROUTE_MODEL, the model the user's $STAGE route names in place of Opus." \
     "$OUT.rejected" "$missing"
 }
 
@@ -653,11 +738,14 @@ if [ "$MODE" = prompt ]; then
   exit 0
 fi
 if [ "$MODE" = repair-prompt ]; then
-  repair_prompt_text
+  repair_prompt_mode
   exit 0
 fi
 if [ "$MODE" = stamp ]; then
   stamp_findings
+  # stamp_findings exits on every path of its own; this is for the day it
+  # returns instead.
+  exit $?
 fi
 
 # Only the claude profiles start a headless Claude Code review: the review and
@@ -861,7 +949,7 @@ case "$MISSING_MARKS" in
   *)
     echo "opus-review: 需要人取舍 items lack 推荐：/可自动采纳： lines; asking the same model to repair them once:" >&2
     printf '%s\n' "$MISSING_MARKS" >&2
-    RETRY_PROMPT=$(repair_prompt 'You are the same Opus review, asked to repair your own previous output.' "$OUTPUT_TMP" "$MISSING_MARKS")
+    RETRY_PROMPT=$(print_repair_prompt 'You are the same Opus review, asked to repair your own previous output.' "$OUTPUT_TMP" "$MISSING_MARKS")
     RETRY_TMP=$(mktemp "$OUT.repair.XXXXXX") || exit 6
     RETRY_ERR=$(mktemp "$OUT.repair.stderr.XXXXXX") || exit 6
     run_claude_pass "$RETRY_PROMPT" "$RETRY_TMP" "$RETRY_ERR"
@@ -875,23 +963,8 @@ case "$MISSING_MARKS" in
       rm -f "$RETRY_TMP" "$RETRY_ERR"
       exit 6
     fi
-    STILL_MISSING=$(missing_tradeoff_marks "$RETRY_TMP")
-    if ! grep -Eq '^##[[:space:]]+需要人取舍[[:space:]]*$' "$RETRY_TMP"; then
-      echo "opus-review: the repair retry dropped ## 需要人取舍; refusing to accept it" >&2
-      rm -f "$RETRY_TMP" "$RETRY_ERR"
-      exit 7
-    fi
-    if [ "$STILL_MISSING" = NONE ]; then
-      echo "opus-review: the repair retry turned ## 需要人取舍 into 无; refusing to drop the items" >&2
-      rm -f "$RETRY_TMP" "$RETRY_ERR"
-      exit 7
-    fi
-    if [ -n "$STILL_MISSING" ]; then
-      echo "opus-review: 需要人取舍 items still lack 推荐：/可自动采纳： lines after one repair retry:" >&2
-      printf '%s\n' "$STILL_MISSING" >&2
-      rm -f "$RETRY_TMP" "$RETRY_ERR"
-      exit 7
-    fi
+    # The repair may add lines, never take the items away.
+    restamp_recheck "$RETRY_TMP" refuse_retry
     if ! mv -f "$RETRY_TMP" "$OUTPUT_TMP"; then
       echo "opus-review: cannot keep the repaired findings" >&2
       rm -f "$RETRY_TMP" "$RETRY_ERR"
@@ -905,16 +978,7 @@ esac
 # route other than the official Opus one is not the review the Orchestrator
 # expects, and on the default route the same line is what lets a report tell
 # the two apart.
-PROVENANCE_TMP=$(mktemp "$OUT.tmp.XXXXXX") || exit 6
-{ printf '路由：%s%s / %s / %s · %s\n\n' \
-    "$STAGE_LABEL" "$ROUTE_PROFILE" "$ROUTE_MODEL" "$ROUTE_EFFORT" "$(date '+%Y-%m-%d %H:%M:%S %z')"
-  cat "$OUTPUT_TMP"
-} > "$PROVENANCE_TMP" || { rm -f "$PROVENANCE_TMP"; exit 6; }
-mv -f "$PROVENANCE_TMP" "$OUTPUT_TMP" || { rm -f "$PROVENANCE_TMP"; exit 6; }
-
-if ! mv -f "$OUTPUT_TMP" "$OUT"; then
-  echo "opus-review: cannot write findings to $OUT" >&2
-  exit 6
-fi
+write_first_line "$OUT" "$OUTPUT_TMP" '路由：%s%s / %s / %s · %s\n\n'
+rm -f "$OUTPUT_TMP"
 OUTPUT_TMP=""
 exit 0

@@ -5,7 +5,7 @@ A skill that implements a spec's tickets with a cheap model doing the coding and
 ## Roles and where they run
 
 **Orchestrator**:
-The main agent running in the user's Claude Code session; it owns the task graph and verification. On a cheap model it executes and relays only, and hands every judgment call to a stronger model (Opus review, a Design session, or the user).
+The main agent running in the user's Claude Code session; it owns the task graph and verification. On a cheap model it executes and relays only, and hands every judgment call to a stronger model (a 审查（review）, a Design session, or the user).
 _Avoid_: coordinator, lead
 
 **In-session subagent**:
@@ -46,12 +46,16 @@ The Standards and Spec reviewers of `mattpocock-skills:code-review`; In-session 
 A separate Claude Code session that the Orchestrator opens through Orca for a design discussion (grill-with-docs, a wayfinder grilling ticket); the user talks to it directly, and it carries the discussion through to-spec before handing control back. It runs the design Stage route: an Orca terminal started on the routed Launcher profile with its model and effort (the official subscription's Opus by default), with the same handoff whatever the route.
 _Avoid_: Opus session, grill session, hop
 
+**审查（review）**:
+A judgment pass that reads a diff or draft and returns findings for the Orchestrator to act on; in English prose, a review. Named Opus review until 票 #84 (2026-11-28), from the time it was always Opus. It runs on the review or diagnosis Stage route (the official subscription's Opus by default, otherwise the routed Launcher profile, model and effort), and the findings file's first line names the route. Where it runs is the route's decision too (票 #84): out of session, non-interactive, through `scripts/opus-review.sh`, unless `opus-review.sh --where` says in-session for this session (a GLM route and subagents pinned to its model), in which case it runs as read-only In-session subagents of the flash session and `opus-review.sh --stamp` writes the findings under the same first line, marked `（会话内子代理）` and `（强度未生效）`.
+_Avoid_: Opus review (retired 票 #84; the review runs on whatever the route names, Opus only by default), strong-model review (ambiguous in a GLM session, where "opus" maps to GLM); calling it "Opus 审核中" when the route is not Opus
+
 **Opus review**:
-A judgment pass that reads a diff or draft and returns findings for the Orchestrator to act on; the name stays from when it was always Opus. It runs on the review or diagnosis Stage route (the official subscription's Opus by default, otherwise the routed Launcher profile, model and effort), and the findings file's first line names the route. Where it runs is the route's decision too (票 #84): out of session, non-interactive, through `scripts/opus-review.sh`, unless `opus-review.sh --where` says in-session for this session (a GLM route and subagents pinned to its model), in which case it runs as read-only In-session subagents of the flash session and `opus-review.sh --stamp` writes the findings under the same first line, marked `（会话内子代理）` and `（强度未生效）`.
-_Avoid_: strong-model review (ambiguous in a GLM session, where "opus" maps to GLM); calling it "Opus 审核中" when the route is not Opus
+Retired (票 #84, 2026-11-28): the judgment pass now called 审查（review）, which runs on the review or diagnosis Stage route whatever the model; the name stayed from when the review was always Opus.
+_Avoid_: using it for a review on a route that is not Opus; say 审查（review）
 
 **Judgment model**:
-The model that stands in for Opus wherever a judgment is made: every Opus review, and each Design session. It is Opus, or the substitute the user routes the review, diagnosis and design Stages to with `/grill-router` (today glm-5.4). The Stage routes replaced the two-role switch that used to set it: each dispatch reads its Stage's route, so a session that is already executing changes model at its next review or new Design session.
+The model that stands in for Opus wherever a judgment is made: every 审查（review）, and each Design session. It is Opus, or the substitute the user routes the review, diagnosis and design Stages to with `/grill-router` (today glm-5.4). The Stage routes replaced the two-role switch that used to set it: each dispatch reads its Stage's route, so a session that is already executing changes model at its next review or new Design session.
 _Avoid_: strong model, fallback model (the route is the user's decision, never an automatic downgrade)
 
 **Stage**:

@@ -4,15 +4,16 @@
 
 ## 设计要点（不要改回去）
 
-1. **每个子代理都要显式传 `model`。** 原版的子代理都继承会话模型，这也是做这个技能的原因。别让任何一步依赖继承，会话本身可能是任何模型。
+1. **每个子代理都要显式传 `model`。** 原版的子代理都继承会话模型，这也是做这个技能的原因。别让任何一步依赖继承，会话本身可能是任何模型。（2026-11-28 注，票 #84：唯一的例外是 flash 会话的会话内审查子代理——它们有意不传 `model`、继承会话模型：`opus-review.sh --where` 已核实本会话的 `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` 把每个子代理钉在审查路由的模型上，而 GLM 路由下 `REVIEW_MODEL` 指向的模型不可用；官方路由照旧出会话，不在此列。）
 2. **不要调用原版 `implement-spec`。**
    - 原版设了 `disable-model-invocation: true`，模型用 Skill 工具调用它会失败。
    - 就算能调，它会自己跑 review，而那次 review 用的是继承来的会话模型。
    - 所以 `SKILL.md` 自己写全了全部步骤，同步上游时要把变化手动搬进来。
 3. **review 必须写全名 `mattpocock-skills:code-review`。**
    - Claude Code 有个同名的内置技能 `code-review`。它不会开 Standards 和 Spec 两个子代理，也就没法给它们指定 Opus。
-   - 只写 `code-review` 可能调错技能，Opus review 就落空了。
+   - 只写 `code-review` 可能调错技能，审查（review）就落空了。
    - 同理，`tdd` 写成全名 `mattpocock-skills:tdd`。
+   - （2026-11-28 注，票 #84：会话内形态是有意的例外——flash 会话在会话内审查时不按全名调这个技能，而是把 Standards / Spec 两轴的简报复述给只读子代理（子代理自己装不了技能）；简报与 smell baseline 取上游技能文件的原文，`scripts/test-opus-review.sh` 在本机装了上游时逐字比对。出会话形态仍按全名调用。）
 4. **编排的主代理跑在会话模型上。** 只有子代理的模型由本技能决定。主代理要判断 review 意见属于设计层面还是机械修复，所以会话不建议用太弱的模型。
 5. **draft PR 流程。** 如果 tracker 靠 PR 关单，第一次合并后开 draft PR，最后标成可以 review。原版有这一步，最早的 split 版漏了，后来补回。
 6. **找 spec（第 0 步）。** 原版没有这一步，是本技能加的。现在用 `scripts/pipeline-status.sh` 按 to-spec 模板标题 `## Problem Statement` 和 wayfinder 地图结构识别 Spec / Ticket，再保留旧的“开着父 issue + 未完成子票”形状；不要改回依赖标题里的“规格：”字样。原因是单票规格的正文只引用地图实现票（例如“实现票：#58”），实现票自己没有子票，旧的父 issue 查询会把它漏掉。
@@ -403,7 +404,7 @@
 
   模型与思考强度来自阶段路由表（`scripts/stage-route.sh`），自测按三条规则把本机真实的路由表隔开：给了 `--model` 就测这个模型，并把 `ISS_STAGE_ROUTE_FILE` 指到 `/dev/null`（一张没有任何行的表，所有阶段按默认；否则非默认路由会压过显式 `--model`）；没给 `--model` 就测「实现」阶段的实际路由且不隔离，所以第 0 步的 L1 预检索的就是 worker 真正会跑的模型和强度；V1、V2、V3 一律与真实路由表隔离，V1 末尾的路由用例每次调用把 `ISS_STAGE_ROUTE_FILE` 指到临时文件，测非默认路由压过 `--model` / `--thinking`、带 `--read-only` 读「调研起草」、到期 / 未知组合 / 损坏文件回默认并带上路由表的提示、复位后 `--model` 重新生效、Resume 沿用第一段的模型和强度、codex-glm 跑不了的路由和读表失败都以用法错误退出且不启动 codex、本机 worker 目录缺模型只加提示不拦；L1 开跑前恢复入口处的隔离状态，整套跑一遍时 L1 仍按前两条规则走。改了 `codex-worker.sh` 或 `progress.sh`，或者升级了 codex，都要把 V1、V2、V3 全部重跑一遍。跑技能时，第 0 步会跑 L1（命令不带 `--model`）。
 - **codex worker home 生成**：`bash scripts/test-setup-worker-home.sh`。用临时目录里的假源 home 测配置键/表过滤、`model_catalog_json` 改写、文件复制、权限、幂等备份和输出不泄漏配置值，不访问网络、不碰真实 `~/.codex`。
-- **Opus review 入口**：`bash scripts/test-opus-review.sh`。用临时 HOME/PATH 里的假 `claude`、假 `claude-glm` 和指向临时文件的 `ISS_STAGE_ROUTE_FILE`（路由经 `stage-route.sh use` 设置）测三类 prompt、GLM 代理环境变量清理、路由表驱动（默认路由走官方 `claude` 且带 `--model opus --effort high`；审查切成 `claude-glm / glm-5.4 / medium` 后经假 `claude-glm` 执行并带 `--model glm-5.4[1m] --effort medium`，两个审查轴子代理钉 `opus`（Agent 工具只收别名，GLM 启动器自己映射到 GLM；不钉路由的模型名）；`draft` 读「审查」、`diagnose` 读「诊断」，只动讨论或诊断不影响审查；到期回默认；路由表读不出来退出码 64 且不启动任何启动器；缺启动器退出 6；补标两趟走同一启动器、额度错误不回落到官方 claude）、findings 首行每次写本次路由（阶段、档案、模型、思考强度、时间）、只读工具白名单、findings 原子写入、认证/额度/超时/其他错误的不同退出码、超时进程树回收，以及 `## 需要人取舍` 的标记校验（缺标 → 同模型补标一次、补标仍失败退出码 7 并列出条目、标记齐全不重试、「无」和没有这一节都通过），不访问网络、不花 Opus 额度。
+- **审查（review）入口**：`bash scripts/test-opus-review.sh`（2026-11-28 前叫「Opus review 入口」，词头随票 #84 退役）。用临时 HOME/PATH 里的假 `claude`、假 `claude-glm` 和指向临时文件的 `ISS_STAGE_ROUTE_FILE`（路由经 `stage-route.sh use` 设置）测三类 prompt、GLM 代理环境变量清理、路由表驱动（默认路由走官方 `claude` 且带 `--model opus --effort high`；审查切成 `claude-glm / glm-5.4 / medium` 后经假 `claude-glm` 执行并带 `--model glm-5.4[1m] --effort medium`，两个审查轴子代理钉 `opus`（Agent 工具只收别名，GLM 启动器自己映射到 GLM；不钉路由的模型名）；`draft` 读「审查」、`diagnose` 读「诊断」，只动讨论或诊断不影响审查；到期回默认；路由表读不出来退出码 64 且不启动任何启动器；缺启动器退出 6；补标两趟走同一启动器、额度错误不回落到官方 claude）、findings 首行每次写本次路由（阶段、档案、模型、思考强度、时间）、只读工具白名单、findings 原子写入、认证/额度/超时/其他错误的不同退出码、超时进程树回收，以及 `## 需要人取舍` 的标记校验（缺标 → 同模型补标一次、补标仍失败退出码 7 并列出条目、标记齐全不重试、「无」和没有这一节都通过；条目按编号行 / 粗体标题 / 顶格项目符号切分，选项和标记缩进或顶格平铺都算同一条目的行——粗体标题下顶格 `- A：` / `- 推荐：` / `- 可自动采纳：` 的 8 条一次通过、不重试，真缺标记的那条仍 7 且点名的是标题而不是带标记的行），不访问网络、不花 Opus 额度。会话内四形态（票 #84）：`--where` 的判定（官方路由出会话；GLM 路由且子代理强制到路由模型时会话内；`[1m]` 后缀不算模型名；没设 / force 不是 1 / 模型不一致都出会话）与 stderr 一行，不启动器；`--prompt` 打印会话内文本（draft / diagnose 是出会话提示词换首行，code 是三子代理的流程与 Standards / Spec / 汇总简报），不启动器；`--stamp` 首行带「强度未生效」「会话内子代理」两个标记、正文逐字保留、缺标记 7 并把被拒正文留成 `<out>.rejected`、补标后的三条守卫（节被删 / 变「无」/ 仍缺）、重复盖戳 64、不留临时文件；`--repair-prompt` 是出会话补标提示词换首行，`<missing-items>` 只列真缺的条目；官方路由下三形态一律 64。内嵌的 Standards / Spec 简报与 smell baseline 在本机装了上游 `code-review` 技能时逐字比对（`~/.claude/plugins/marketplaces/mattpocock/skills/engineering/code-review/SKILL.md`），不同即失败，没装则跳过。
 - **阶段路由表**：`bash scripts/test-stage-route.sh`。用临时状态文件和假 `date` 测六个阶段的默认表、`use` 单项与多项、只动一个阶段时其余阶段的行不变、设回默认即离开表、`--until` / `--for` 与按阶段到期、目录外的组合 / 编排锁定 / 档案不接受的强度一律拒绝且不改表、审查与实现同模型只警告一次不拦、未知组合回默认并提示、损坏文件整表回默认并提示、`--print` 四个字段与找不到值时退出 66、`--launch` 四个档案的交互与 headless 启动命令，旧开关迁移（没有表时的第一次运行自动迁入两个旧开关里未到期的设置：思考强度取 high、到期时间照搬、旧 `grill` 进讨论、旧 `review` 进审查和诊断、旧 `worker` 进调研起草和实现；已到期的忽略；反推不出档案或目录外的型号保留旧文件并提示，同一次里其余的照常迁入；迁完删旧文件；表里已生效的阶段不覆盖；表已在时只有 `migrate` 才迁；`migrate` 无参数、无可迁时说一声、无可迁不改写表、写不成退出 65；迁移说明只走 stderr，`--print` 的 stdout 仍只有值；`ISS_STAGE_ROUTE_FILE` 改位置的表只看自己旁边的旧文件），以及 `/grill-router` 技能文件的写法和各用户文档对路由表的说法（README、setup 两份只写 `/grill-router` 的软链与用法，GLOSSARY 的 Judgment model、Worker model、Design session、Opus review 四个词条指向 Stage route，其余纯文档不再出现两个旧开关命令），两个旧开关的脚本、技能目录和测试已删除、不留别名；不调真实启动器。
 - **L3 端到端**（手动）：私有仓库 `allanpk716/iss-e2e-test` 先留着，以后做回归测试接着用，本地路径是 `~/orca/iss-e2e-test`，已经加进 Orca。再测时开一个新 spec 就行，不用重建仓库。第一次搭建的步骤如下：
   1. 在 GitHub 上建一个临时的私有仓库，加一个最简单的 Node 项目（只要能跑 `npm test` 就行）。再执行 `/setup-matt-pocock-skills`，让 tracker 用 GitHub。
