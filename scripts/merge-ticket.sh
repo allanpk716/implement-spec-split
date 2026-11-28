@@ -37,9 +37,11 @@
 # so a merge or a test run that failed leaves the Ticket open and the work
 # still to do stays visible (票 #78: four Tickets merged and left open emptied
 # a Spec's frontier, and it nearly landed with 4 of its 9 Tickets). The script
-# needs gh on PATH for it; a Ticket it could not close is named on stderr and
-# the exit code stays 0, since the merge and the test run did pass: close that
-# one by hand.
+# needs gh on PATH for it. A close that fails is tried once more, 5 seconds
+# later: gh fails for a moment now and then (a dropped connection, a 5xx), and
+# a Ticket left open is what this option is for. A Ticket it still could not
+# close is named on stderr and the exit code stays 0, since the merge and the
+# test run did pass: close that one by hand.
 #
 # Gate (all checked before anything is merged; any miss exits 2 and merges
 # nothing): the worktree is the top level of a git worktree and has
@@ -511,9 +513,10 @@ printf 'merge-ticket: tests passed\n'
 # --- tickets -------------------------------------------------------------------
 # Only on this path: on every other exit nothing touches an issue (the header
 # says why). gh runs in the integration worktree, so it resolves the repository
-# from the same remote the session does. A Ticket gh could not close is named
-# on stderr and the exit stays 0: the merge and the test run did pass, and
-# closing it by hand is all that is left.
+# from the same remote the session does. A close that fails is tried once more,
+# 5 seconds later; a Ticket gh still could not close is named on stderr and
+# the exit stays 0: the merge and the test run did pass, and closing it by hand
+# is all that is left.
 [ -z "$CLOSE_TICKETS" ] || printf '%s\n' "$CLOSE_TICKETS" |
   awk 'NF && !seen[$0]++' |
   while IFS= read -r n; do
@@ -521,7 +524,14 @@ printf 'merge-ticket: tests passed\n'
     if ( cd -P -- "$WORKTREE" && gh issue close "$n" --comment "$body" --reason completed ); then
       printf 'merge-ticket: closed #%s\n' "$n"
     else
-      warn "could not close #$n: close it by hand (gh issue close $n); the merge $AFTER stands"
+      # gh's own message of the failure is already on stderr.
+      warn "could not close #$n on the first try; trying once more after 5 seconds"
+      sleep 5
+      if ( cd -P -- "$WORKTREE" && gh issue close "$n" --comment "$body" --reason completed ); then
+        printf 'merge-ticket: closed #%s (on the second try)\n' "$n"
+      else
+        warn "could not close #$n: close it by hand (gh issue close $n); the merge $AFTER stands"
+      fi
     fi
   done
 exit 0

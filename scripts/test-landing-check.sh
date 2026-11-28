@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Deterministic tests for scripts/landing-check.sh. They run the real
 # pipeline-status.sh against a fake gh, so the Spec-to-Ticket resolution, the
-# blocked_by queries and the three kinds of open Ticket that do not block a
-# landing are covered end to end without network access.
+# blocked_by queries, the four kinds of open Ticket that do not block a landing
+# (waiting, human, shelved, and the loose source ticket of 票 #83) and the
+# report lines for the waiting ones are covered end to end without network
+# access.
 
 set -u
 
@@ -153,14 +155,33 @@ spec10('waiting-human-chain', [t11('open', ['ready-for-human']), t12('open'), t1
 spec10('mixed', [t11(), t12('open'), t13('open')], {12: [outside[0]]});
 spec10('closed-blocker', [t11(), t12('open'), t13()], {12: [outside[1]]});
 spec10('blocked-ascending', [t11(), t12('open'), t13('open')], {12: [outside22, outside[1], outside[0]]}, [outside22]);
+// A chain behind a shelved Ticket waits as one behind a human Ticket does.
+const shelved11 = issue(11, '【搁置】Ticket eleven', 'open');
+spec10('waiting-shelved-chain', [shelved11, t12('open'), t13()], {12: [shelved11]});
+// The blocker is another Spec: the report line is the same shape.
+const spec25 = issue(25, 'Other spec', 'open', [], '## Problem Statement\nNot split yet.', sub(0));
+spec10('waiting-spec', [t11(), t12('open'), t13()], {12: [spec25]}, [spec25]);
+// Several reasons of two kinds: the numbers ascending, then the human one.
+spec10('waiting-kinds', [t11('open', ['ready-for-human']), t12('open'), t13()],
+  {12: [t11('open', ['ready-for-human']), outside[0], outside22]});
 
-// A Spec whose Tickets come from its `实现票：` line: #31 names the
-// implementation ticket #40, which has no sub-issues and is the single Ticket.
+// A Spec whose Tickets come from its `实现票：` line. Two kinds of ticket go
+// on that line, and only the first is an execution Ticket (SKILL.md step 0,
+// rule 2). #40 is the implementation ticket of map #50 and the single Ticket:
+// open, it holds the landing back. #60 is the loose source ticket a Spec was
+// drafted from (票 #83 kind b): not an execution ticket, closed together with
+// the Spec, so open it holds nothing back.
+const map50 = issue(50, 'Source map', 'open', ['wayfinder:map'], 'Destination.');
+const lineSpec = (number, title, ref, mapLine) => issue(number, title, 'open', [],
+  `实现票：#${ref}\n${mapLine}\n\n## Problem Statement\nOne ticket.`, sub(0));
 for (const [name, state] of [['impl-open', 'open'], ['impl-closed', 'closed']]) {
-  const spec31 = issue(31, 'Single-ticket spec', 'open', [], '实现票：#40\n\n## Problem Statement\nOne ticket.', sub(0));
   const impl = issue(40, 'Implementation forty', state);
-  write(name, [spec31, impl, ...outside], {}, {});
+  write(name, [lineSpec(31, 'Single-ticket spec', 40, '地图：#50'), impl, map50, ...outside], {50: [impl]}, {});
 }
+for (const [name, labels] of [['source-open', []], ['source-human', ['ready-for-human']]]) {
+  write(name, [lineSpec(32, 'Loose-source spec', 60, ''), issue(60, 'Loose source sixty', 'open', labels), ...outside], {}, {});
+}
+write('source-closed', [lineSpec(32, 'Loose-source spec', 60, ''), issue(60, 'Loose source sixty', 'closed'), ...outside], {}, {});
 NODE
 
 cat > "$BIN/gh" <<'EOF'
@@ -215,8 +236,12 @@ cat > "$WORK/all-closed.expected" <<'EOF'
 （无）
 # shelved
 （无）
+# source
+（无）
+# report
+（无）
 EOF
-expect_output "$WORK/all-closed.expected" "$WORK/all-closed.out" 'every Ticket closed: the four sections are printed as empty'
+expect_output "$WORK/all-closed.expected" "$WORK/all-closed.out" 'every Ticket closed: the six sections are printed as empty'
 expect_empty "$WORK/all-closed.out.err" 'every Ticket closed prints nothing on stderr'
 
 # --- one open Ticket: listed under # open, exit 2 --------------------------------
@@ -231,8 +256,12 @@ cat > "$WORK/one-open.expected" <<'EOF'
 （无）
 # shelved
 （无）
+# source
+（无）
+# report
+剩余：#12
 EOF
-expect_output "$WORK/one-open.expected" "$WORK/one-open.out" 'an open Ticket is listed under # open with the other sections empty'
+expect_output "$WORK/one-open.expected" "$WORK/one-open.out" 'an open Ticket is listed under # open and on the report line, with the other sections empty'
 expect_without 'not found' 'an open Ticket is not a missing Spec' "$WORK/one-open.out.err"
 if [ "$(sort "$WORK/one-open/blocker-calls" | uniq | tr '\n' ' ')" = '12 ' ]; then
   record PASS 'only the open Ticket is asked for its blockers, by the graph and by the check'
@@ -256,8 +285,14 @@ cat > "$WORK/chain-open.expected" <<'EOF'
 （无）
 # shelved
 （无）
+# source
+（无）
+# report
+剩余：#11
+剩余：#12（阻塞：#11）
+剩余：#13（阻塞：#12）
 EOF
-expect_output "$WORK/chain-open.expected" "$WORK/chain-open.out" 'the chain behind an open Ticket is # open too, each naming its open blockers'
+expect_output "$WORK/chain-open.expected" "$WORK/chain-open.out" 'the chain behind an open Ticket is # open too, each naming its open blockers, and the report lines say which Tickets are still owed'
 
 # --- human and shelved Tickets: listed, never blocking ---------------------------
 run_check "$WORK/human-open.out" FIXTURE_DIR="$WORK/human-open"
@@ -286,13 +321,14 @@ run_check "$WORK/waiting-outside.out" FIXTURE_DIR="$WORK/waiting-outside"
 expect_exit 0 'a Ticket blocked by an issue outside the Spec does not hold the landing back'
 expect_has '#12 Ticket twelve（阻塞：#20）' 'a waiting Ticket is listed under # waiting with its blocker' "$WORK/waiting-outside.out"
 expect_has '# waiting' 'the # waiting section is printed' "$WORK/waiting-outside.out"
+expect_has '剩余：#12 等 #20' 'the report line names the Ticket and the issue it waits for' "$WORK/waiting-outside.out"
 if [ "$(sed -n '2p' "$WORK/waiting-outside.out")" = '（无）' ]; then
   record PASS 'a waiting Ticket is not under # open'
 else
   record FAIL 'a waiting Ticket is not under # open' "$(sed -n 2p "$WORK/waiting-outside.out")"
 fi
 
-# A chain behind such a Ticket waits too.
+# A chain behind such a Ticket waits too, and reports what the first one waits for.
 run_check "$WORK/waiting-chain.out" FIXTURE_DIR="$WORK/waiting-chain"
 expect_exit 0 'the chain behind a waiting Ticket waits too'
 cat > "$WORK/waiting-chain.expected" <<'EOF'
@@ -305,8 +341,13 @@ cat > "$WORK/waiting-chain.expected" <<'EOF'
 （无）
 # shelved
 （无）
+# source
+（无）
+# report
+剩余：#11 等 #20
+剩余：#12 等 #20
 EOF
-expect_output "$WORK/waiting-chain.expected" "$WORK/waiting-chain.out" 'the chain behind a waiting Ticket is listed under # waiting, ascending'
+expect_output "$WORK/waiting-chain.expected" "$WORK/waiting-chain.out" 'the chain behind a waiting Ticket is listed under # waiting, ascending, and reports the same blocker'
 
 # A chain behind a human Ticket waits for that person the same way.
 run_check "$WORK/waiting-human-chain.out" FIXTURE_DIR="$WORK/waiting-human-chain"
@@ -320,8 +361,69 @@ cat > "$WORK/waiting-human-chain.expected" <<'EOF'
 #11 Ticket eleven（人工）
 # shelved
 （无）
+# source
+（无）
+# report
+剩余：#12 等人工 #11
 EOF
-expect_output "$WORK/waiting-human-chain.expected" "$WORK/waiting-human-chain.out" 'the chain behind a human Ticket is under # waiting, the Ticket itself under # human'
+expect_output "$WORK/waiting-human-chain.expected" "$WORK/waiting-human-chain.out" 'the chain behind a human Ticket is under # waiting, the Ticket itself under # human, the report line says 人工'
+
+# A chain behind a shelved Ticket waits the same way.
+run_check "$WORK/waiting-shelved-chain.out" FIXTURE_DIR="$WORK/waiting-shelved-chain"
+expect_exit 0 'the chain behind a shelved Ticket does not hold the landing back'
+cat > "$WORK/waiting-shelved-chain.expected" <<'EOF'
+# open
+（无）
+# waiting
+#12 Ticket twelve（阻塞：#11）
+# human
+（无）
+# shelved
+#11 【搁置】Ticket eleven（搁置）
+# source
+（无）
+# report
+剩余：#12 等搁置 #11
+EOF
+expect_output "$WORK/waiting-shelved-chain.expected" "$WORK/waiting-shelved-chain.out" 'the chain behind a shelved Ticket is under # waiting, the report line says 搁置'
+
+# A blocker that is another Spec reads the same as a standalone issue does.
+run_check "$WORK/waiting-spec.out" FIXTURE_DIR="$WORK/waiting-spec"
+expect_exit 0 'a Ticket blocked by another Spec does not hold the landing back'
+cat > "$WORK/waiting-spec.expected" <<'EOF'
+# open
+（无）
+# waiting
+#12 Ticket twelve（阻塞：#25）
+# human
+（无）
+# shelved
+（无）
+# source
+（无）
+# report
+剩余：#12 等 #25
+EOF
+expect_output "$WORK/waiting-spec.expected" "$WORK/waiting-spec.out" 'a Ticket blocked by another Spec reports 等 #<spec>'
+
+# Several reasons of two kinds: the numbers ascending, then the human Ticket.
+run_check "$WORK/waiting-kinds.out" FIXTURE_DIR="$WORK/waiting-kinds"
+expect_exit 0 'a Ticket waiting for issues and a human Ticket does not hold the landing back'
+cat > "$WORK/waiting-kinds.expected" <<'EOF'
+# open
+（无）
+# waiting
+#12 Ticket twelve（阻塞：#11 #20 #22）
+# human
+#11 Ticket eleven（人工）
+# shelved
+（无）
+# source
+（无）
+# report
+剩余：#12 等 #20 #22、人工 #11
+EOF
+expect_output "$WORK/waiting-kinds.expected" "$WORK/waiting-kinds.out" 'a Ticket with several reasons reports the numbers ascending, then the human Ticket'
 
 # Both at once: the waiting one is listed, the other one holds the landing.
 run_check "$WORK/mixed.out" FIXTURE_DIR="$WORK/mixed"
@@ -335,6 +437,11 @@ cat > "$WORK/mixed.expected" <<'EOF'
 （无）
 # shelved
 （无）
+# source
+（无）
+# report
+剩余：#12 等 #20
+剩余：#13
 EOF
 expect_output "$WORK/mixed.expected" "$WORK/mixed.out" 'a waiting Ticket and an open Ticket are sorted into their sections'
 
@@ -342,6 +449,7 @@ expect_output "$WORK/mixed.expected" "$WORK/mixed.out" 'a waiting Ticket and an 
 run_check "$WORK/closed-blocker.out" FIXTURE_DIR="$WORK/closed-blocker"
 expect_exit 2 'a Ticket whose blockers are all closed is not waiting'
 expect_has '#12 Ticket twelve' 'a Ticket with closed blockers only is listed under # open' "$WORK/closed-blocker.out"
+expect_has '剩余：#12' 'a Ticket with closed blockers only is on the report line' "$WORK/closed-blocker.out"
 expect_without '阻塞' 'closed blockers are not listed' "$WORK/closed-blocker.out"
 
 # Several open blockers are listed ascending, whatever order the tracker
@@ -357,22 +465,88 @@ cat > "$WORK/blocked-ascending.expected" <<'EOF'
 （无）
 # shelved
 （无）
+# source
+（无）
+# report
+剩余：#12 等 #20 #22
+剩余：#13
 EOF
-expect_output "$WORK/blocked-ascending.expected" "$WORK/blocked-ascending.out" 'several open blockers are listed ascending under # waiting'
+expect_output "$WORK/blocked-ascending.expected" "$WORK/blocked-ascending.out" 'several open blockers are listed ascending under # waiting and on the report line'
 
 # --- a Spec without Tickets passes ----------------------------------------------
 SPEC_ARG=30
 run_check "$WORK/empty.out" FIXTURE_DIR="$WORK/one-open"
 expect_exit 0 'a Spec without Tickets passes'
-expect_output "$WORK/all-closed.expected" "$WORK/empty.out" 'a Spec without Tickets prints the four empty sections'
+expect_output "$WORK/all-closed.expected" "$WORK/empty.out" 'a Spec without Tickets prints the six empty sections'
 
-# --- a Spec whose Ticket is the implementation ticket its 实现票 line names ------
+# --- a Spec whose Ticket is the one its 实现票 line names ------------------------
+# Kind a: a map implementation ticket without sub-issues is the single Ticket,
+# an execution Ticket like any other.
 SPEC_ARG=31
 run_check "$WORK/impl-open.out" FIXTURE_DIR="$WORK/impl-open"
-expect_exit 2 'an open implementation ticket named on the 实现票 line fails the check'
+expect_exit 2 'an open map implementation ticket named on the 实现票 line fails the check'
 expect_has '#40 Implementation forty' 'the implementation ticket is listed under # open' "$WORK/impl-open.out"
+expect_has '剩余：#40' 'the implementation ticket is on the report line' "$WORK/impl-open.out"
+expect_has '# source' 'an implementation ticket still prints # source' "$WORK/impl-open.out"
+if [ "$(sed -n '/^# source$/{n;p;}' "$WORK/impl-open.out")" = '（无）' ]; then
+  record PASS 'a map implementation ticket is not under # source'
+else
+  record FAIL 'a map implementation ticket is not under # source' "$(sed -n '/^# source$/{n;p;}' "$WORK/impl-open.out")"
+fi
 run_check "$WORK/impl-closed.out" FIXTURE_DIR="$WORK/impl-closed"
 expect_exit 0 'a closed implementation ticket named on the 实现票 line passes'
+
+# Kind b (票 #83): the loose source ticket a Spec was drafted from is not an
+# execution Ticket. It is closed together with the Spec (step 9), so while it
+# is open the check passes: counted under # open it would hold every such
+# Spec back for good.
+SPEC_ARG=32
+run_check "$WORK/source-open.out" FIXTURE_DIR="$WORK/source-open"
+expect_exit 0 'an open loose source ticket does not hold the landing back'
+cat > "$WORK/source-open.expected" <<'EOF'
+# open
+（无）
+# waiting
+（无）
+# human
+（无）
+# shelved
+（无）
+# source
+#60 Loose source sixty（源票）
+# report
+（无）
+EOF
+expect_output "$WORK/source-open.expected" "$WORK/source-open.out" 'an open loose source ticket is listed under # source and nowhere else'
+# pipeline-status.sh asks for #60's blockers once, as for every open Ticket;
+# the check adds no query of its own for a source ticket.
+if [ "$(sort "$WORK/source-open/blocker-calls" | uniq -c | tr -s ' ' | tr '\n' ';')" = ' 1 60;' ]; then
+  record PASS 'a loose source ticket is asked for its blockers once: by the graph, not by the check'
+else
+  record FAIL 'a loose source ticket is asked for its blockers once: by the graph, not by the check' "blocked_by calls: $(tr '\n' ' ' < "$WORK/source-open/blocker-calls")"
+fi
+
+run_check "$WORK/source-human.out" FIXTURE_DIR="$WORK/source-human"
+expect_exit 0 'a ready-for-human loose source ticket does not hold the landing back'
+cat > "$WORK/source-human.expected" <<'EOF'
+# open
+（无）
+# waiting
+（无）
+# human
+#60 Loose source sixty（人工）
+# shelved
+（无）
+# source
+#60 Loose source sixty（源票）
+# report
+（无）
+EOF
+expect_output "$WORK/source-human.expected" "$WORK/source-human.out" 'a ready-for-human loose source ticket is under # human and # source'
+
+run_check "$WORK/source-closed.out" FIXTURE_DIR="$WORK/source-closed"
+expect_exit 0 'a closed loose source ticket passes'
+expect_output "$WORK/all-closed.expected" "$WORK/source-closed.out" 'a closed loose source ticket is listed nowhere'
 
 # --- fail closed ------------------------------------------------------------------
 SPEC_ARG=404

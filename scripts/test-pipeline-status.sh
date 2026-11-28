@@ -999,6 +999,11 @@ assert.strictEqual(spec(88).claim.branch, 'spec-88');
 assert.strictEqual(spec(95).status, 'ready');
 assert.strictEqual(spec(95).claim.state, 'idle');
 assert.notStrictEqual(spec(95).claim.state, 'reserved');
+// A single-ticket Spec whose Ticket is a map implementation ticket (#58 of map
+// #22, and #68 likewise) is an execution Ticket: the same `addTickets` path
+// that flags a loose source leaves it unflagged.
+assert.deepStrictEqual(spec(88).tickets.map((t) => [t.number, t.source]), [[58, false]]);
+assert.deepStrictEqual(spec(95).tickets.map((t) => [t.number, t.source]), [[68, false]]);
 assert.strictEqual(spec(160).status, 'shelved');
 assert.strictEqual(spec(94).status, 'landed');
 assert.deepStrictEqual(spec(94).tickets.map((t) => [t.number, t.state]), [[190, 'closed']]);
@@ -1601,11 +1606,18 @@ assert.strictEqual(ticket(720, 721).shared_counter, true);
 assert.strictEqual(ticket(720, 721).shelved, true);
 assert.strictEqual(ticket(730, 731).shared_counter, true);
 assert.strictEqual(spec(730).kind, 'legacy');
+// None of these Tickets is a loose source ticket (the fixtures are Specs with
+// sub-issues, a landed Spec and a legacy parent): the flag is false on every path.
+for (const t of [...spec(700).tickets, ...spec(710).tickets, ...spec(720).tickets, ...spec(730).tickets]) {
+  assert.strictEqual(t.source, false);
+}
 NODE
 RUN_EXIT=$?
 expect_exit 0 "graph carries shared-counter as a ticket-level flag on every path"
 [ "$RUN_EXIT" -eq 0 ] || cat "$WORK/counter-graph-check.txt"
 expect_has 'shared_counter' 'help documents the shared_counter graph flag' "$WORK/help.out"
+expect_has 'shelved, human, shared_counter, source}' 'help lists the source graph flag among the ticket fields' "$WORK/help.out"
+expect_has 'not an execution Ticket.' 'help says a source flag marks a ticket that is not an execution Ticket' "$WORK/help.out"
 
 # A 实现票 line may name a loose ticket (#83): the source ticket a Spec was
 # drafted from. It is covered like a map implementation ticket — the Ticket of
@@ -1713,6 +1725,11 @@ const spec = (n) => graph.specs.find((item) => item.number === n);
 assert.deepStrictEqual(spec(800).tickets.map((t) => [t.number, t.state]), [[801, 'open']]);
 assert.strictEqual(spec(800).status, 'ready');
 assert.deepStrictEqual(spec(840).tickets.map((t) => [t.number, t.state]), [[841, 'open']]);
+// While its Spec is open, a loose source carries the `source` flag, which
+// frontier.sh and landing-check.sh read: it is the Spec's Ticket but not an
+// execution Ticket (票 #78).
+assert.deepStrictEqual(spec(800).tickets.map((t) => [t.number, t.source]), [[801, true]]);
+assert.deepStrictEqual(spec(840).tickets.map((t) => [t.number, t.source]), [[841, true]]);
 assert.deepStrictEqual(spec(810).tickets.map((t) => [t.number, t.state]), [[811, 'open'], [812, 'closed']]);
 assert.strictEqual(spec(810).tickets_closed, 1);
 assert.deepStrictEqual(spec(820).tickets.map((t) => [t.number, t.state]), [[822, 'closed']]);
@@ -1875,6 +1892,15 @@ assert.deepStrictEqual(spec(883).tickets.map((t) => [t.number, t.shelved]), [[88
 assert.strictEqual(spec(885).status, 'human');
 assert.strictEqual(spec(885).human_only, true);
 assert.deepStrictEqual(spec(885).tickets.map((t) => [t.number, t.human]), [[886, true]]);
+// The flag follows the path that made the Ticket, not the issue: #884 and
+// #886 are the sources of Specs without sub-issues (shelved-only and
+// human-only, both open), so each is flagged; #871 and #872 are execution
+// tickets of #870 that other Specs' lines misname, and #882 a legacy parent's
+// child, so none of them is.
+assert.deepStrictEqual(spec(883).tickets.map((t) => [t.number, t.source]), [[884, true]]);
+assert.deepStrictEqual(spec(885).tickets.map((t) => [t.number, t.source]), [[886, true]]);
+assert.deepStrictEqual(spec(870).tickets.map((t) => [t.number, t.source]), [[871, false], [872, false]]);
+assert.strictEqual(spec(881).tickets[0].source, false);
 NODE
 RUN_EXIT=$?
 expect_exit 0 "graph keeps guarded Specs unimplemented and flags shelved and human sources"

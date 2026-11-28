@@ -10,7 +10,8 @@
 # last part runs the step 9.1 shape too, --ticket origin/main with
 # --no-ticket-worktree. Its last section covers --close-ticket: the merger
 # closes the Tickets it was given on its exit 0 and calls gh on no other exit,
-# and the fake gh records every call it makes.
+# tries a close that failed once more after a pause, and the fake gh records
+# every call it makes.
 
 set -u
 
@@ -122,6 +123,7 @@ run_merge() { # OUT [arguments]
   out=$1
   shift
   env TEST_LOG="$TEST_LOG" TEST_FAIL="$TEST_FAIL" GH_LOG="$GH_LOG" GH_FAIL_CLOSE="${GH_FAIL_CLOSE:-}" \
+      GH_FAIL_CLOSE_ONCE="${GH_FAIL_CLOSE_ONCE:-}" \
       PATH="$BIN:$PATH" bash "$SCRIPT" "$@" > "$out" 2> "$out.err"
   RUN_EXIT=$?
 }
@@ -144,7 +146,8 @@ chmod +x "$BIN/fake-test"
 
 # The fake gh. The merger calls it only on its exit 0 path, and then always as
 # `gh issue close <n> --comment <body> --reason completed`; the fake records
-# each call on one line of GH_LOG and fails for the numbers GH_FAIL_CLOSE names.
+# each call on one line of GH_LOG, fails for the numbers GH_FAIL_CLOSE names,
+# and fails the first call only for each number GH_FAIL_CLOSE_ONCE names.
 : > "$GH_LOG"
 cat > "$BIN/gh" <<'EOF'
 #!/usr/bin/env bash
@@ -160,9 +163,25 @@ for failed in ${GH_FAIL_CLOSE:-}; do
     exit 1
   fi
 done
+for failed in ${GH_FAIL_CLOSE_ONCE:-}; do
+  if [ "$number" = "$failed" ] && [ ! -e "$GH_LOG.failed-once-$number" ]; then
+    : > "$GH_LOG.failed-once-$number"
+    printf 'fake gh: could not close #%s\n' "$number" >&2
+    exit 1
+  fi
+done
 exit 0
 EOF
 chmod +x "$BIN/gh"
+
+# The fake sleep: before the merger tries a failed close once more it pauses
+# 5 seconds. The fake records the pause it was asked for instead of taking it.
+cat > "$BIN/sleep" <<'EOF'
+#!/usr/bin/env bash
+set -u
+printf '%s\n' "$*" >> "${GH_LOG:?}.sleep"
+EOF
+chmod +x "$BIN/sleep"
 
 # A repository with a bare origin (the test-close-self.sh layout), then the
 # Integration branch spec-101 in its own worktree and the Ticket branch
@@ -1319,24 +1338,65 @@ expect_without 'issue close 032' "a number with leading zeros is closed by its n
 expect_has 'merge-ticket: closed #32' "the merger reports the first Ticket" "$WORK/close-twice.out"
 expect_has 'merge-ticket: closed #31' "the merger reports the second Ticket" "$WORK/close-twice.out"
 
-# gh fails for one Ticket: the merge and the test run did pass, so the exit
-# stays 0, the Ticket is named on stderr with the hand action, and the merger
-# does not report it as closed.
+# gh fails for one Ticket every time: the merge and the test run did pass, so
+# the exit stays 0, the Ticket is named on stderr with the hand action, and the
+# merger does not report it as closed. It was tried twice: once more after the
+# first failure, then given up.
 new_ticket 33 "$(git -C "$INTEGRATION" rev-parse HEAD)"
 T33=$T
 printf '%s\n' 'feature thirty-three' > "$T33/feature33.txt"
 commit_in "$T33" 'ticket thirty-three adds a feature'
 TIP33=$(git -C "$T33" rev-parse HEAD)
 : > "$GH_LOG"
+: > "$GH_LOG.sleep"
 GH_FAIL_CLOSE=33 run_merge "$WORK/close-fails.out" --worktree "$INTEGRATION" --integration spec-102 \
   --ticket spec-102-t33 --test 'fake-test' --close-ticket 33
 expect_exit 0 "a Ticket gh could not close does not fail the merge"
 expect_merged "$TIP33" "a Ticket gh could not close keeps the merge"
 expect_has 'fake gh: could not close #33' "gh's own message is passed through" "$WORK/close-fails.out.err"
+expect_has 'could not close #33 on the first try; trying once more after 5 seconds' \
+  "a Ticket gh could not close is tried once more" "$WORK/close-fails.out.err"
 expect_has 'could not close #33: close it by hand (gh issue close 33)' "a Ticket gh could not close is named on stderr" "$WORK/close-fails.out.err"
 expect_has 'the merge' "a Ticket gh could not close names the merge that stands" "$WORK/close-fails.out.err"
 expect_without 'merge-ticket: closed #33' "a Ticket gh could not close is not reported as closed" "$WORK/close-fails.out"
-expect_gh_calls 1 "a Ticket gh could not close is tried once"
+expect_gh_calls 2 "a Ticket gh never closes is tried twice, no more"
+if [ "$(grep -c 'fake gh: could not close #33' "$WORK/close-fails.out.err")" = 2 ] && [ "$(cat "$GH_LOG.sleep")" = 5 ]; then
+  ok "each failed try passes gh's message through, with one 5-second pause between them"
+else
+  bad "each failed try passes gh's message through, with one 5-second pause between them" \
+    "messages=$(grep -c 'fake gh: could not close #33' "$WORK/close-fails.out.err"), pause=[$(cat "$GH_LOG.sleep")]"
+fi
+
+# gh fails once and then works (a dropped connection, a 5xx): the merger
+# tries the close once more after the pause, reports the Ticket as closed and
+# exits 0, and the transient failure leaves nothing for the session to do.
+new_ticket 39 "$(git -C "$INTEGRATION" rev-parse HEAD)"
+T39=$T
+printf '%s\n' 'feature thirty-nine' > "$T39/feature39.txt"
+commit_in "$T39" 'ticket thirty-nine adds a feature'
+TIP39=$(git -C "$T39" rev-parse HEAD)
+: > "$GH_LOG"
+: > "$GH_LOG.sleep"
+rm -f "$GH_LOG.failed-once-39"
+GH_FAIL_CLOSE_ONCE=39 run_merge "$WORK/close-retry.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t39 --test 'fake-test' --close-ticket 39
+expect_exit 0 "a close that fails once does not fail the merge"
+expect_merged "$TIP39" "a close that fails once lands the ticket"
+expect_gh_calls 2 "a close that fails once is tried twice"
+if [ "$(grep -c '^issue close 39 --comment ' "$GH_LOG")" = 2 ]; then
+  ok "the retry is the same close, with its comment"
+else
+  bad "the retry is the same close, with its comment" "$(cat "$GH_LOG")"
+fi
+expect_has 'merge-ticket: closed #39 (on the second try)' "a Ticket closed on the retry is reported as closed" "$WORK/close-retry.out"
+expect_has 'could not close #39 on the first try; trying once more after 5 seconds' "the retry is announced on stderr" "$WORK/close-retry.out.err"
+expect_without 'close it by hand' "a Ticket closed on the retry is not named as left open" "$WORK/close-retry.out.err"
+if [ "$(grep -c 'fake gh: could not close #39' "$WORK/close-retry.out.err")" = 1 ] && [ "$(cat "$GH_LOG.sleep")" = 5 ]; then
+  ok "gh's one failure is passed through, and the merger pauses 5 seconds before the retry"
+else
+  bad "gh's one failure is passed through, and the merger pauses 5 seconds before the retry" \
+    "messages=$(grep -c 'fake gh: could not close #39' "$WORK/close-retry.out.err"), pause=[$(cat "$GH_LOG.sleep")]"
+fi
 
 # Every other exit leaves the issue alone and does not call gh: a gate miss
 # (2), a conflict (3), failing tests (4), a Ticket already landed (5) and a

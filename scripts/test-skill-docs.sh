@@ -17,7 +17,13 @@
 # and 1 from their own lines (one positive and one negative check), where a
 # 9.1 rerun's 3 / 4 / 5 go, the 9.1 review trigger stated once and pointed to
 # from Unattended landing and Flash mode, and the --attempt of a step 5
-# re-dispatch and of 9.1's fix roles taken as the next free one.
+# re-dispatch and of 9.1's fix roles taken as the next free one. So is 票 #78:
+# step 5 always passing --close-ticket (closed on exit 0 only, without asking
+# in every Run, a failed close retried once), step 9 running the landing check
+# and reading its five sections and report lines, exit 2 ending in a parking
+# with category error rather than a loop, and step 0 telling a loose source
+# ticket (never dispatched, closed with its Spec) from a map implementation
+# ticket.
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -199,6 +205,104 @@ has "step 8's form, each round with the next free \`--attempt <n>\`" \
   'SKILL.md step 9.1 test-fix rounds take the next free attempt' "$SKILL"
 without 're-dispatch it once with `--attempt 2`' \
   'SKILL.md step 5 no longer names a fixed attempt for a re-bump re-dispatch' "$SKILL"
+
+# --- SKILL.md: the merger closes Tickets and step 9 checks the landing (票 #78) ---
+
+# Step 5 always passes --close-ticket, and the merger closes a Ticket on its
+# exit 0 only: a merged Ticket left open keeps the Tickets it blocks out of the
+# frontier (票 #26 merged four Tickets without closing them). Closing a merged
+# Ticket is the one closing allowed for every Run, --auto-land or not.
+has '     --close-ticket <m>' 'SKILL.md step 5 passes --close-ticket to the merger' "$SKILL"
+has '`--close-ticket <m>` names the Ticket being merged, and this step always passes it: on its exit `0`, and only there, the merger closes the Ticket' \
+  'SKILL.md step 5 always passes --close-ticket and closes the Ticket on exit 0 only' "$SKILL"
+has 'Never skip the flag: the frontier reads `blocked_by` and nothing else' \
+  'SKILL.md step 5 says never to skip --close-ticket' "$SKILL"
+has 'It does so in every Run, with or without `--auto-land`, without asking: this is the one closing of an issue allowed for all Runs (2026-11-28, 票 #78)' \
+  'SKILL.md step 5 states the exception: a merged Ticket is closed without asking in every Run' "$SKILL"
+has 'A close that fails is tried once more by the merger' \
+  'SKILL.md step 5 says the merger retries a failed close once' "$SKILL"
+has 'and names on stderr one it could not close — close that by hand, the merge stands' \
+  'SKILL.md step 5 exit 0 line keeps the hand action for a Ticket not closed' "$SKILL"
+has '**The merger closes a Ticket only on its own exit `0`.**' \
+  'SKILL.md step 5 says the merger is the only one that closes on a merge' "$SKILL"
+has "Step 9's landing check refuses to land while such a Ticket is open." \
+  'SKILL.md step 5 points the Tickets left open to the landing check' "$SKILL"
+
+# Step 9 runs the landing check before the lock and reads its sections: the
+# five it lists and the report lines it ends with. Exit 2 leads back to step 1,
+# and an empty frontier with no implementing role alive leads back to the check
+# and then to a parking with category error, never to a loop (the parking
+# report names every Ticket under # open). A Ticket that waits is reported with
+# the check's own line: the blocker may be a Spec, a standalone issue or a
+# human Ticket.
+has '<skill dir>/scripts/landing-check.sh --repo <owner/name> --spec <n>' \
+  'SKILL.md step 9 runs the landing check' "$SKILL"
+has "lists the Spec's open Tickets in five sections — \`# open\`, \`# waiting\`, \`# human\`, \`# shelved\`, \`# source\`" \
+  'SKILL.md step 9 names the five sections of the landing check' "$SKILL"
+without 'open Tickets in four sections' 'SKILL.md step 9 no longer names four sections' "$SKILL"
+has "ends with \`# report\`, one \`剩余：\` line per open execution Ticket, ready for a report as it is" \
+  'SKILL.md step 9 takes the report lines of the landing check as they are' "$SKILL"
+has "exits \`0\` only when every execution Ticket of the Spec is closed (a loose source ticket does not count: it is closed with the Spec below; a Spec without Tickets passes)" \
+  'SKILL.md step 9 passes the check without counting the loose source ticket' "$SKILL"
+has '**The way out is parking, never a loop:** back at step 1, when the frontier is empty and no implementing role is alive' \
+  'SKILL.md step 9 parks on an empty frontier with no implementing role alive' "$SKILL"
+has '`2` again parks with category `error`, the parking report listing every line of `# open` and `# report`' \
+  'SKILL.md step 9 parks with category error and lists every open Ticket' "$SKILL"
+has 'answers `exited` for every dispatch of this Run that is not released, and each of those has been handled as step 5 and Recovery say' \
+  'SKILL.md step 9 asks Orca which implementing roles are alive, after the ended ones are handled' "$SKILL"
+has 'one that is `unverifiable` is never parked over (the Watchdog rule)' \
+  'SKILL.md step 9 never parks over an unverifiable role' "$SKILL"
+has 'the `# report` lines go in the report as they are (`剩余：#<t> 等 #<spec>` for another Spec, `剩余：#<t> 等 #<issue>` for a standalone issue, `剩余：#<t> 等人工 #<t>` behind a human Ticket)' \
+  'SKILL.md step 9 reports a waiting Ticket by what it waits for' "$SKILL"
+without '`# waiting` goes in the report as `剩余：#<t> 等 #<spec>`' \
+  'SKILL.md step 9 no longer reports a waiting Ticket as waiting for a Spec only' "$SKILL"
+has '`# human` and `# shelved` go in the report too, a human Ticket under 要你做的' \
+  'SKILL.md step 9 sends a human Ticket to 要你做的' "$SKILL"
+has 'the Tickets the merger closed as they merged (step 5) were never asked about' \
+  'SKILL.md step 9 keeps its confirmation for the Spec and the Tickets merged without being closed' "$SKILL"
+has 'and a loose source ticket (step 0, rule 2b), which no merger ever closed, since nothing is dispatched for it' \
+  'SKILL.md step 9 closes the loose source ticket with the Spec' "$SKILL"
+
+# Step 0 rule 2 tells a map implementation ticket (an execution ticket) from a
+# loose source ticket (never one): nothing is dispatched for the source, and a
+# Spec whose line gives nothing else has no execution ticket yet, so it is
+# released and stopped like a blocked Spec instead of landing with nothing done.
+has '**(b) A loose source ticket** (GLOSSARY.md; 票 #83) belongs to no map' \
+  'SKILL.md step 0 rule 2 names the loose source ticket' "$SKILL"
+has 'It is **not an execution ticket**: nothing is ever dispatched for it (`frontier.sh` keeps it out of the frontier and lists it under `# source`)' \
+  'SKILL.md step 0 rule 2b keeps the loose source ticket out of the frontier' "$SKILL"
+has 'and it is closed together with the Spec when the Spec lands (step 9), not as anything merges' \
+  'SKILL.md step 0 rule 2b closes the loose source ticket with its Spec' "$SKILL"
+has 'one whose line gives nothing but a source ticket has no execution ticket yet (rule 3)' \
+  'SKILL.md step 0 rule 2b sends a Spec without an execution ticket to rule 3' "$SKILL"
+has '3. **Blocked Spec, or one without an execution ticket.**' \
+  'SKILL.md step 0 rule 3 covers a Spec without an execution ticket' "$SKILL"
+has 'a Spec whose frontier is empty while `# source` names its loose source ticket (rule 2b)' \
+  'SKILL.md step 0 rule 3 names the empty frontier of a source-only Spec' "$SKILL"
+has 'a Run that went on would land it with nothing done and close the source ticket with it' \
+  'SKILL.md step 0 rule 3 says why a source-only Spec is not landed' "$SKILL"
+has '`# source` lists the loose source ticket (step 0, rule 2b), which is never dispatched either' \
+  'SKILL.md step 1 names the source section of the frontier' "$SKILL"
+
+# Both reports take the check's lines: the parking report's 现状 pastes # open
+# and # report, and the landing report and the final 结论 carry the `剩余：`
+# lines whatever the Ticket waits for, after a partial landing and after a
+# parking alike.
+has '<when the Run parks on the landing check (step 9): every line of its `# open` and `# report` sections, as they are>' \
+  'the parking report carries the lines of the landing check' "$SKILL"
+has 'the `# report` lines of the landing check, as they are (`剩余：#<t> 等 #<spec>`, `剩余：#<t> 等 #<issue>` or `剩余：#<t> 等人工 #<t>`, one line each; omit when it printed none)' \
+  'the landing report carries the lines of the landing check' "$SKILL"
+has "then the landing check's \`# report\` lines whenever a Ticket is still open" \
+  'the final report carries the lines of the landing check' "$SKILL"
+without 'partially landed with `剩余：#<t> 等 #<spec>`' \
+  'the final report no longer names one form for what is left' "$SKILL"
+
+# The vocabulary and the operating rules follow.
+has '**Loose source ticket**:' 'GLOSSARY defines Loose source ticket' "$GLOSSARY"
+has 'every Run does that without asking, `--auto-land` or not (2026-11-28, 票 #78)' \
+  'GLOSSARY excludes the merger closing a merged Ticket from Unattended landing' "$GLOSSARY"
+has 'closing an execution Ticket as it merges (2026-11-28, 票 #78; allowed by the owner)' \
+  'ai-agents guide states the exception for closing a merged Ticket' "$ROOT/docs/ai-agents.md"
 
 # --- SKILL.md: the three reports carry the route table and the check lines (票 #47)
 

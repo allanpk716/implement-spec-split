@@ -81,12 +81,16 @@ The directory one Run of a Spec keeps its files in: `~/.cache/implement-spec-spl
 _Avoid_: run dir / run directory / `<run dir>` on their own (once a Sidecar is involved they name this directory, but say Spec Run root), state dir, dispatch dir (that is one dispatch's `<Spec Run root>/<name>/`)
 
 **Ticket**:
-One child issue of a Spec, or — for a single-ticket Spec — the referenced map implementation issue itself; the unit an implementer works on.
+One child issue of a Spec, or — for a single-ticket Spec — the referenced map implementation issue itself; the unit an implementer works on. A loose source ticket (see below) is never one: nobody implements it.
 _Avoid_: task, sub-issue
 
 **Map ticket**:
 An implementation child issue under a wayfinder map, without a `wayfinder:*` label; to-spec may turn it into an independent Spec.
 _Avoid_: map decision
+
+**Loose source ticket**:
+The mapless ticket a Spec was drafted from directly (find-next's `直接起草规格`), named on the Spec's `实现票：#<n>` line the way a map ticket is. Not an execution ticket: no implementer is dispatched for it (`frontier.sh` lists it under `# source`; `pipeline-status.sh --graph` flags it `source`), and it is closed together with its Spec when that lands (SKILL.md step 9).
+_Avoid_: execution ticket, map ticket
 
 **Decision ticket**:
 A child issue of a wayfinder map whose resolution is a decision, typed research, prototype, grilling or task (a `wayfinder:<type>` label on GitHub, a `Type:` header line on a local tracker).
@@ -155,7 +159,7 @@ The repo-wide lock (`scripts/lock.sh acquire land --scope repo`) a Run holds fro
 _Avoid_: merge lock (mergers inside one Run are already serialised)
 
 **Unattended landing**:
-A Run landing its Spec without asking the user first, because find-next's `launch-wave.sh` started it with `--auto-land` (the default; `--no-auto-land` opts a batch out). Review trade-offs that carry a recommendation marked auto-applicable are applied as recommended and listed as auto-decisions (自动拍板（可推翻）); only what really needs a human parks the Run. The session closes itself when the Run ends.
+A Run landing its Spec without asking the user first, because find-next's `launch-wave.sh` started it with `--auto-land` (the default; `--no-auto-land` opts a batch out). Closing an execution Ticket as it merges (SKILL.md step 5, `merge-ticket.sh --close-ticket`) is not part of it: every Run does that without asking, `--auto-land` or not (2026-11-28, 票 #78). Review trade-offs that carry a recommendation marked auto-applicable are applied as recommended and listed as auto-decisions (自动拍板（可推翻）); only what really needs a human parks the Run. The session closes itself when the Run ends.
 _Avoid_: auto-push, auto-merge, permanent authorisation (it covers one batch only)
 
 **Parking report**:
@@ -163,7 +167,7 @@ The comment an unattended Run leaves on its Spec issue when a human must act bef
 _Avoid_: failure report, blocking question, 停车 for "waiting on another Spec"
 
 **Partial landing**:
-A Run landing every ticket it can while the rest wait for another Spec: the landed tickets close, the Spec stays open, the integration branch is deleted, and the Spec becomes free again, so `--next-wave` starts it afresh once its blockers land. Its landing report lists `剩余：#<t> 等 #<spec>`.
+A Run landing every ticket it can while the rest wait for another Spec: the landed tickets close, the Spec stays open, the integration branch is deleted, and the Spec becomes free again, so `--next-wave` starts it afresh once its blockers land. Its landing report lists what is left with the landing check's `# report` lines: `剩余：#<t> 等 #<spec>` for another Spec, `剩余：#<t> 等 #<issue>` for a standalone issue, `剩余：#<t> 等人工 #<t>` behind a human ticket.
 _Avoid_: parked, interrupted
 
 **Supervisor**:

@@ -61,6 +61,14 @@ expect_without() {
   fi
 }
 
+expect_output() { # expected-file actual-file name — byte for byte
+  if cmp -s "$1" "$2"; then
+    record PASS "$3"
+  else
+    record FAIL "$3" "$(diff "$1" "$2")"
+  fi
+}
+
 SPEC_ARG=10
 
 run_frontier() {
@@ -184,6 +192,28 @@ for (const [name, scenario] of Object.entries(scenarios)) {
     fs.writeFileSync(`${scenarioDirectory}/blocker-${number}.json`, JSON.stringify(blockers, null, 2));
   }
 }
+
+// A Spec without sub-issues whose `实现票：` line names a loose source ticket
+// (#83): the mapless, childless ticket #40 is the Spec's single Ticket in the
+// graph, flagged `source`. One directory per state of the source.
+const sourceIssues = [
+  issue(20, 'Open blocker', 'open', []),
+  issue(21, 'Closed blocker', 'closed', []),
+];
+for (const [name, source] of [
+  ['source-open', issue(40, 'Loose source ticket', 'open', [])],
+  ['source-human', issue(40, 'Human loose source', 'open', ['ready-for-human'])],
+  ['source-closed', issue(40, 'Loose source ticket', 'closed', [])],
+]) {
+  const directory = `${work}/${name}`;
+  fs.mkdirSync(directory, {recursive: true});
+  const spec = issue(31, 'Loose-source spec', 'open', [], '实现票：#40\n\n## Problem Statement\nDrafted from a loose ticket.', sub(0));
+  const sourceDirectoryIssues = [spec, source, ...sourceIssues];
+  fs.writeFileSync(`${directory}/issues.json`, JSON.stringify(sourceDirectoryIssues, null, 2));
+  for (const item of sourceDirectoryIssues) {
+    fs.writeFileSync(`${directory}/blocker-${item.number}.json`, '[]');
+  }
+}
 NODE
 
 cat > "$BIN/gh" <<'EOF'
@@ -218,6 +248,9 @@ case "$*" in
       exit 1
     fi
     number=$(printf '%s\n' "$*" | sed -n 's#.*/issues/\([0-9][0-9]*\)/dependencies/blocked_by.*#\1#p')
+    # blocker-numbers holds the issue of every query that was answered, one per
+    # line: a test can tell which issues were asked for, and how often.
+    printf '%s\n' "$number" >> "$FIXTURE_DIR/blocker-numbers"
     cat "$FIXTURE_DIR/blocker-$number.json"
     exit $?
     ;;
@@ -265,6 +298,8 @@ cat > "$WORK/main.expected" <<'EOF'
 #15 Human ticket（人工）
 # shelved
 #14 【搁置】Shelved ticket（搁置）
+# source
+（无）
 EOF
 if cmp -s "$WORK/main.out" "$WORK/main.expected"; then
   record PASS 'no shared-counter ticket: output is byte-identical'
@@ -323,6 +358,67 @@ expect_has '#16 Human counter ticket（人工）' 'human shared-counter ticket i
 expect_has '#17 【搁置】Shelved counter ticket（搁置）' 'shelved shared-counter ticket is still listed under shelved' "$WORK/human-shelved-slot.out"
 expect_has '#18' 'human and shelved shared-counter tickets take no slot: the free one is released' "$WORK/human-shelved-slot-frontier.out"
 expect_without '等共享计数器' 'human and shelved shared-counter tickets are not waited for' "$WORK/human-shelved-slot.out"
+
+# A Spec without sub-issues whose `实现票：` line names a loose source ticket
+# (#83): the graph flags that ticket `source`. It is not an execution ticket,
+# so it is never in the frontier and the script asks for no blockers of its
+# own for it (the one query is the graph's); it is listed under `# source`.
+# Each state of the source is the Spec's own fixture directory.
+SPEC_ARG=31
+rm -f "$WORK/source-open/blocker-calls" "$WORK/source-open/blocker-numbers"
+run_frontier "$WORK/source-open.out" FIXTURE_DIR="$WORK/source-open"
+expect_exit 0 'an open loose source ticket: scan succeeds'
+cat > "$WORK/source-open.expected" <<'EOF'
+# blocked
+（无）
+# human
+（无）
+# shelved
+（无）
+# source
+#40 Loose source ticket（源票）
+EOF
+expect_output "$WORK/source-open.expected" "$WORK/source-open.out" \
+  'an open loose source ticket is listed under # source, and is in no frontier'
+source_queries=$(tr '\n' ' ' < "$WORK/source-open/blocker-numbers")
+if [ "$source_queries" = '40 ' ]; then
+  record PASS "a loose source ticket's blockers are asked for once: by the graph, not by the frontier"
+else
+  record FAIL "a loose source ticket's blockers are asked for once: by the graph, not by the frontier" "queries [$source_queries]"
+fi
+
+# A source that is ready-for-human is under both headings, in neither frontier.
+run_frontier "$WORK/source-human.out" FIXTURE_DIR="$WORK/source-human"
+expect_exit 0 'a ready-for-human loose source ticket: scan succeeds'
+cat > "$WORK/source-human.expected" <<'EOF'
+# blocked
+（无）
+# human
+#40 Human loose source（人工）
+# shelved
+（无）
+# source
+#40 Human loose source（源票）
+EOF
+expect_output "$WORK/source-human.expected" "$WORK/source-human.out" \
+  'a ready-for-human loose source ticket is under # human and # source'
+
+# A closed source is nobody's implementation: the Spec has no Ticket at all.
+run_frontier "$WORK/source-closed.out" FIXTURE_DIR="$WORK/source-closed"
+expect_exit 0 'a closed loose source ticket: scan succeeds'
+cat > "$WORK/source-closed.expected" <<'EOF'
+# blocked
+（无）
+# human
+（无）
+# shelved
+（无）
+# source
+（无）
+EOF
+expect_output "$WORK/source-closed.expected" "$WORK/source-closed.out" \
+  'a closed loose source ticket is listed nowhere'
+SPEC_ARG=10
 
 SPEC_ARG=99
 run_frontier "$WORK/missing.out"

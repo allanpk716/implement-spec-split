@@ -39,14 +39,16 @@ tracker documentation instead.
                          spec_numbers, tickets[]}; specs[] {number, title, kind, state,
                          status landed|needs_tickets|ready|running|interrupted|shelved|human, map
                          (number or null), has_tickets, tickets[] {number, title, state,
-                         shelved, human, shared_counter}, tickets_total, tickets_closed, claim
+                         shelved, human, shared_counter, source}, tickets_total, tickets_closed, claim
                          {state active|reserved|interrupted|idle, branch, worktree, claimed_at}
                          or null, depends_on, extra_blockers}; loose_specs[] (Specs
                          without a map); next_wave (same object as --order --json).
                          Ticket flags come from GitHub labels, the title or the body:
                          `human` is the `ready-for-human` label, `shared_counter` the
                          `shared-counter` label (a Ticket that bumps a shared counter;
-                         frontier.sh releases one such Ticket at a time).
+                         frontier.sh releases one such Ticket at a time), `source` the
+                         loose source ticket of a Spec without sub-issues (the mapless
+                         ticket its 实现票 line names), which is not an execution Ticket.
 
 PIPELINE_STATUS_NOW may set an ISO-8601 current time for deterministic stale-claim tests.
 PIPELINE_STATUS_ORCA_TERMINALS_JSON may name a file holding `orca terminal list --json`
@@ -571,7 +573,11 @@ if (mode === 'collect') {
   const byNumber = new Map(issues.map((issue) => [Number(issue.number), issue]));
   const implementations = new Map(stage.implementations.map((impl) => [Number(impl.number), impl]));
 
-  function ticketRecord(number) {
+  // `source` marks the loose source ticket of a Spec (#83, mapNumber null): it
+  // is the Spec's Ticket in the graph and in the coverage counts, but not an
+  // execution Ticket. Only the caller that knows the ticket is one sets it; the
+  // flag is false on every other path.
+  function ticketRecord(number, source = false) {
     const issue = byNumber.get(Number(number));
     return {
       number: Number(number),
@@ -580,6 +586,7 @@ if (mode === 'collect') {
       shelved: issue ? isShelved(issue) : false,
       human: issue ? hasLabel(issue, 'ready-for-human') : false,
       sharedCounter: issue ? hasLabel(issue, 'shared-counter') : false,
+      source,
     };
   }
 
@@ -642,11 +649,11 @@ if (mode === 'collect') {
     if (!spec.ownChildren && !referencesImplementation) continue;
     const tickets = [];
     const ticketSet = new Set();
-    const addTickets = (numbers) => {
+    const addTickets = (numbers, source = false) => {
       for (const number of numbers) {
         if (!ticketSet.has(Number(number))) {
           ticketSet.add(Number(number));
-          tickets.push(ticketRecord(number));
+          tickets.push(ticketRecord(number, source));
         }
       }
     };
@@ -660,7 +667,11 @@ if (mode === 'collect') {
         if (impl.childTotal > 0) {
           addTickets(readEndpoint(endpointDir, 'sub', impl.number).map((issue) => issue.number));
         } else {
-          addTickets([impl.number]);
+          // The single Ticket is the implementation itself. A mapless one is
+          // the loose source ticket, flagged `source`: frontier.sh dispatches
+          // no implementer for it and landing-check.sh does not count it
+          // against the landing; it is closed with its Spec when that lands.
+          addTickets([impl.number], impl.mapNumber === null);
         }
       }
     }
@@ -1750,6 +1761,7 @@ if (mode === 'order') {
       shelved: isShelved(child),
       human: child.human === true || hasLabel(child, 'ready-for-human'),
       shared_counter: child.sharedCounter === true || hasLabel(child, 'shared-counter'),
+      source: child.source === true,
     });
     const specIssue = (number) => {
       const issue = issueByNumber.get(Number(number));

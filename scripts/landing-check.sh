@@ -10,7 +10,7 @@
 # `实现票：#N` line and their sub-issues), read from pipeline-status.sh --graph
 # as scripts/frontier.sh reads it. A landed Spec has had each of its
 # `ready-for-agent` Tickets closed as it merged (merge-ticket.sh
-# --close-ticket), so before the landing every one of them is closed. Three
+# --close-ticket), so before the landing every one of them is closed. Four
 # kinds of open Ticket do not hold the landing back, and are listed so that the
 # report can name them:
 #   waiting  an open blocker of it lies outside this Spec's Tickets (a Ticket
@@ -20,7 +20,11 @@
 #            a Ticket waits too (SKILL.md "Tickets blocked by another Spec": a
 #            partial landing);
 #   human    carrying `ready-for-human`: never dispatched;
-#   shelved  titled 【搁置】, or marked so in its body.
+#   shelved  titled 【搁置】, or marked so in its body;
+#   source   the loose source ticket of a Spec without sub-issues (the graph's
+#            `source` flag: the mapless ticket its 实现票 line names, 票 #83).
+#            Not an execution ticket: nothing is dispatched for it, and step 9
+#            closes it together with the Spec, so its being open is no debt.
 # Every other open Ticket is under `# open` and fails the check: it is work the
 # Spec still owes, or a Ticket that merged without being closed (票 #78: four
 # merged Tickets left open emptied the frontier of Spec #26, which nearly
@@ -31,9 +35,21 @@
 #              `#<t> <title>` and, when it has open blockers, `（阻塞：#a #b）`;
 #   # waiting  the Tickets that wait, in the same form;
 #   # human    `#<t> <title>（人工）`;
-#   # shelved  `#<t> <title>（搁置）`.
-# Tickets are ascending in every section; one that is both human and shelved
-# is in both.
+#   # shelved  `#<t> <title>（搁置）`;
+#   # source   `#<t> <title>（源票）`;
+#   # report   one line per open Ticket that is neither human, shelved nor the
+#              source ticket, under # open or # waiting alike — the line the
+#              report takes as it is, so that no report hides a Ticket the Spec
+#              still owes, and the session never reads the reasons off the
+#              issues: `剩余：#<t>` under # open, with its open blockers
+#              (`剩余：#<t>（阻塞：#a #b）`), and `剩余：#<t> 等 …` for a
+#              waiting one: `等 #<spec>` when the blocker is a Spec, `等 #<issue>`
+#              when it is a standalone issue (several: `等 #a #b`), `等人工 #<t>`
+#              a human Ticket of this Spec, `等搁置 #<t>` a shelved one; a
+#              Ticket that waits only behind another one names what that one
+#              waits for.
+# Tickets are ascending in every section. One that is both human and shelved
+# is in both, and a source that is human or shelved is in those sections too.
 #
 # Exit codes:
 #   0  the check passes: `# open` is empty (a Spec without Tickets passes)
@@ -148,12 +164,15 @@ const tickets = (Array.isArray(spec.tickets) ? spec.tickets : [])
 const open = tickets.filter((ticket) => ticket.state === 'open');
 const ticketNumbers = new Set(tickets.map((ticket) => Number(ticket.number)));
 const deferred = new Set(open
-  .filter((ticket) => ticket.human === true || ticket.shelved === true)
+  .filter((ticket) => ticket.human === true || ticket.shelved === true || ticket.source === true)
+  .map((ticket) => Number(ticket.number)));
+const humanNumbers = new Set(open
+  .filter((ticket) => ticket.human === true)
   .map((ticket) => Number(ticket.number)));
 
-// The open blockers of every open Ticket that is neither human nor shelved,
-// from the endpoint frontier.sh reads. The two deferred kinds are listed
-// without theirs.
+// The open blockers of every open Ticket that is neither human, shelved nor
+// the source ticket, from the endpoint frontier.sh reads. The deferred kinds
+// are listed without theirs.
 const blockers = new Map();
 for (const ticket of open) {
   const number = Number(ticket.number);
@@ -178,19 +197,43 @@ for (const ticket of open) {
 // A Ticket waits when an open blocker of it lies outside this Spec, or when it
 // is blocked by one that waits or is deferred; that spreads along the edges
 // inside the Spec until nothing changes. The rest is `# open`.
-const waiting = new Set();
-for (const ticket of open) {
-  const number = Number(ticket.number);
-  if (deferred.has(number)) continue;
-  if ((blockers.get(number) || []).some((blocker) => !ticketNumbers.has(blocker))) waiting.add(number);
+//
+// What a waiting Ticket waits for is kept as it is found, so that `# report`
+// is the check's own reading: a blocker outside the Spec is another Spec or a
+// standalone issue (both `number`), a deferred one of this Spec is `human` or
+// `shelved`, and a Ticket that waits only behind another one waits for what
+// that one waits for.
+const reasonKey = (reason) => `${reason.kind}:${reason.number}`;
+function reasonsFor(number) {
+  const reasons = [];
+  const keys = new Set();
+  for (const blocker of blockers.get(number) || []) {
+    const found = !ticketNumbers.has(blocker)
+      ? [{kind: 'number', number: blocker}]
+      : deferred.has(blocker)
+        ? [{kind: humanNumbers.has(blocker) ? 'human' : 'shelved', number: blocker}]
+        : waitsFor.get(blocker) || [];
+    for (const reason of found) {
+      if (!keys.has(reasonKey(reason))) {
+        keys.add(reasonKey(reason));
+        reasons.push(reason);
+      }
+    }
+  }
+  return reasons;
 }
+
+const waiting = new Set();
+const waitsFor = new Map();
 for (let changed = true; changed;) {
   changed = false;
   for (const ticket of open) {
     const number = Number(ticket.number);
     if (deferred.has(number) || waiting.has(number)) continue;
-    if ((blockers.get(number) || []).some((blocker) => waiting.has(blocker) || deferred.has(blocker))) {
+    const reasons = reasonsFor(number);
+    if (reasons.length > 0) {
       waiting.add(number);
+      waitsFor.set(number, reasons);
       changed = true;
     }
   }
@@ -209,21 +252,63 @@ function line(ticket) {
   return `#${number} ${clean(ticket.title)}${suffix}`;
 }
 
+// The landing report's line for an open execution Ticket, whichever section
+// lists it. A waiting one says what it waits for, the reasons by kind (the
+// numbers, then 人工, then 搁置), each kind ascending, the groups joined by `、`.
+// The numbers follow 等 after one space (等 #20 #22); 人工 and 搁置 follow it
+// directly (等人工 #11, 等搁置 #11).
+const KIND_ORDER = {number: 0, human: 1, shelved: 2};
+const KIND_HEAD = {number: ' ', human: '人工 ', shelved: '搁置 '};
+function reportLine(number) {
+  if (!waiting.has(number)) {
+    // Under # open: work the Spec still owes, named with the open blockers its
+    // # open line names (they are Tickets of this Spec that are open too).
+    const openBlockers = blockers.get(number) || [];
+    const suffix = openBlockers.length > 0
+      ? `（阻塞：${openBlockers.map((value) => `#${value}`).join(' ')}）`
+      : '';
+    return `剩余：#${number}${suffix}`;
+  }
+  const reasons = (waitsFor.get(number) || []).slice()
+    .sort((a, b) => (a.kind === b.kind ? a.number - b.number : KIND_ORDER[a.kind] - KIND_ORDER[b.kind]));
+  const groups = ['number', 'human', 'shelved']
+    .map((kind) => {
+      const numbers = reasons.filter((reason) => reason.kind === kind);
+      return numbers.length === 0 ? '' : KIND_HEAD[kind] + numbers.map((reason) => `#${reason.number}`).join(' ');
+    })
+    .filter(Boolean);
+  return `剩余：#${number} 等${groups.join('、')}`;
+}
+
 const blocking = [];
 const waitingLines = [];
 const human = [];
 const shelved = [];
+const source = [];
 for (const ticket of open) {
   const number = Number(ticket.number);
   if (ticket.human === true) human.push(`#${number} ${clean(ticket.title)}（人工）`);
   if (ticket.shelved === true) shelved.push(`#${number} ${clean(ticket.title)}（搁置）`);
+  if (ticket.source === true) source.push(`#${number} ${clean(ticket.title)}（源票）`);
   if (deferred.has(number)) continue;
   if (waiting.has(number)) waitingLines.push(line(ticket));
   else blocking.push(line(ticket));
 }
 
 const out = [];
-for (const [title, lines] of [['# open', blocking], ['# waiting', waitingLines], ['# human', human], ['# shelved', shelved]]) {
+for (const [title, lines] of [
+  ['# open', blocking],
+  ['# waiting', waitingLines],
+  ['# human', human],
+  ['# shelved', shelved],
+  ['# source', source],
+  // Every open Ticket that is neither human, shelved nor the source ticket,
+  // under # open or # waiting alike: a report must never hide a Ticket the
+  // Spec still owes.
+  ['# report', open
+    .filter((ticket) => !deferred.has(Number(ticket.number)))
+    .map((ticket) => reportLine(Number(ticket.number)))],
+]) {
   out.push(title);
   out.push(...(lines.length > 0 ? lines : ['（无）']));
 }

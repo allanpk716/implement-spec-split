@@ -70,3 +70,4 @@ This reports state, recent commands and edits, time since the last progress even
 - Do not automatically switch from GLM to Claude after auth, quota, or transient errors; ask the user.
 - Do not ask Codex workers to delete directories recursively; their command policy may reject it.
 - Ask the user before pushing, closing issues, or publishing anything.
+- Exception for closing an execution Ticket as it merges (2026-11-28, 票 #78; allowed by the owner): `scripts/merge-ticket.sh --close-ticket <n>` (SKILL.md step 5) closes the Ticket without asking in every Run, with or without `--auto-land`. The Ticket has already merged, and closing it can be undone by reopening it. The rule above still holds for pushing, for closing the Spec, and for any other issue.
