@@ -31,7 +31,9 @@
 # section, the smoke exception of rule 3, a loosening recorded instead of taken,
 # the fifth item of the report); and the user documents and the Brief templates
 # describe find-next's combined round as a decision round, never as a question
-# round (Standards 1).
+# round (Standards 1); and doctor's two hints are told apart in the hooks README
+# and the two setup guides (Standards 3 — stage 3's FAIL gives the manual fix,
+# the install-state row is the one that says to run install.sh).
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -457,6 +459,27 @@ for template in brief-spec-batch brief-map-spec-batch brief-tickets-batch; do
   without '给用户确认用' "$template: seams are no longer for the user to confirm" "$file"
   has '给调用方审稿用' "$template: seams are review material" "$file"
 done
+
+# --- what doctor's hints say (规格 #58 审查 Standards 硬违规 3) ---
+
+# Two different hints were described as one. Stage 3's own FAIL for a matcher
+# without Bash gives the manual fix (test-doctor.sh pins the hint naming
+# hooks/README.md and docs/setup.md); the foundation group's install-state row
+# is the one that says to run install.sh, and whatever install.sh leaves to a
+# person (a real directory, the Windows link step, a loosening) says so.
+without 'matcher 缺 `Bash` 时在阶段 3 报 FAIL，提示运行 `install.sh`' \
+  'hooks README no longer says the stage-3 FAIL hints at install.sh' "$HOOKS"
+has '阶段 3 自己那条给手工改法' 'hooks README: the stage-3 FAIL gives the manual fix' "$HOOKS"
+has '基础组「本机安装状态」那条（调 `install.sh --check --json` 得来）提示「运行 install.sh（落地时会自动运行）」' \
+  'hooks README: the install-state row is the one that hints at install.sh' "$HOOKS"
+without '提示都是「运行 install.sh（落地时会自动运行）」' \
+  'docs/setup.md no longer says every hint is the install.sh one' "$ROOT/docs/setup.md"
+has '阶段 3 自己的检查（如 matcher 缺 `Bash`）报 FAIL 时给的也是手工改法，不是「运行 install.sh」' \
+  'docs/setup.md: stage 3 FAILs give the manual fix' "$ROOT/docs/setup.md"
+without 'every hint says to run install.sh' \
+  'docs/setup.en.md no longer says every hint says to run install.sh' "$ROOT/docs/setup.en.md"
+has "Stage 3's own checks (a matcher without \`Bash\`, for example) fail with the manual fix" \
+  'docs/setup.en.md: stage 3 FAILs give the manual fix' "$ROOT/docs/setup.en.md"
 has "never for a Spec on another repository, whatever \`install.sh\` its root may hold" \
   "GLOSSARY: the Unattended landing entry keeps the install to this skill's own repository" "$GLOSSARY"
 

@@ -29,7 +29,7 @@
 
 matcher 必须包含 `Bash`，flash 模式才能识别 `sed -i`、heredoc、`>` / `>>` 重定向和 `tee` 这类源码写入。未设置 `FLASH_ORCHESTRATOR` 时，hook 收到 Bash 输入会直接放行，普通会话行为不变。
 
-「matcher 覆盖 `Edit`、`Write`、`Bash`」是仓库根 `./install.sh` 的第一条本机配置期望项（规格 #58，方向 tighten）。在仓库里运行 `./install.sh`（落地流程每次落地后也会自动运行它）：已注册的 delegate-guard 这一条 matcher 缺 `Bash` 时，它先把 `settings.json` 备份到 `<settings 所在目录>/backups/install-<时间戳>/`，再把缺的工具追加到 matcher 末尾（已有的 `NotebookEdit` 原样保留），改后校验是合法 JSON、不是就用备份还原；已含 `Bash` 的一字不动。`./install.sh --check` 只报告不改，有漂移退出 1。它不替你注册 hook：没注册 delegate-guard 时这一项不算漂移、不处理也不报告，上面的注册步骤照旧是手工的。`scripts/doctor.sh` 只检测：matcher 缺 `Bash` 时在阶段 3 报 FAIL，提示运行 `install.sh`；它自己不改 `settings.json`（它调的 `install.sh --check` 同样只读）。
+「matcher 覆盖 `Edit`、`Write`、`Bash`」是仓库根 `./install.sh` 的第一条本机配置期望项（规格 #58，方向 tighten）。在仓库里运行 `./install.sh`（落地流程每次落地后也会自动运行它）：已注册的 delegate-guard 这一条 matcher 缺 `Bash` 时，它先把 `settings.json` 备份到 `<settings 所在目录>/backups/install-<时间戳>/`，再把缺的工具追加到 matcher 末尾（已有的 `NotebookEdit` 原样保留），改后校验是合法 JSON、不是就用备份还原；已含 `Bash` 的一字不动。`./install.sh --check` 只报告不改，有漂移退出 1。它不替你注册 hook：没注册 delegate-guard 时这一项不算漂移、不处理也不报告，上面的注册步骤照旧是手工的。`scripts/doctor.sh` 只检测：matcher 缺 `Bash` 时报两条 FAIL——阶段 3 自己那条给手工改法（参考本文件和 `docs/setup.md` 第 3 阶段，把 `Bash` 加进 matcher），基础组「本机安装状态」那条（调 `install.sh --check --json` 得来）提示「运行 install.sh（落地时会自动运行）」；它自己不改 `settings.json`（它调的 `install.sh --check` 同样只读）。
 
 ## 裸调 codex exec 拦截
 

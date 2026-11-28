@@ -521,7 +521,7 @@ $S migrate                                                              # 迁移
 
 ## 自检
 
-`scripts/doctor.sh` 自身的检查只读取本机配置，不修改配置文件。它按"基础、阶段 1、阶段 2、阶段 3"报告当前状态，其中「基础」组的「本机安装状态」一项调 `install.sh --check --json`（同样只读）：技能链缺 / 指错 / 悬空记 WARN，tighten 期望项未满足记 FAIL，提示都是「运行 install.sh（落地时会自动运行）」。各状态的含义：
+`scripts/doctor.sh` 自身的检查只读取本机配置，不修改配置文件。它按"基础、阶段 1、阶段 2、阶段 3"报告当前状态，其中「基础」组的「本机安装状态」一项调 `install.sh --check --json`（同样只读）：技能链缺 / 指错 / 悬空记 WARN，tighten 期望项未满足记 FAIL，这两种的提示是「运行 install.sh（落地时会自动运行）」；提示不全是这一句——脚本不替人做的，提示写明要手工做：另一份 clone 的真实目录（确认后改名或删除）、Windows 的建链（`install.sh --check` 打印的 `mklink /J` 步骤）、放宽项（需要的话手工改，安装脚本不放宽配置），其余是「在技能目录里运行 bash install.sh --check 看详情」。阶段 3 自己的检查（如 matcher 缺 `Bash`）报 FAIL 时给的也是手工改法，不是「运行 install.sh」。各状态的含义：
 
 - `PASS`：检查通过。
 - `WARN`：该项可能影响对应阶段，但不阻塞其他阶段；按提示修复。

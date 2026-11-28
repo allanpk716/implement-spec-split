@@ -522,7 +522,7 @@ Both repositories carry the bookmark tag `pre-flash-orchestrator`, and the globa
 
 ## Self-check
 
-The checks in `scripts/doctor.sh` only read local configuration and do not modify configuration files. It reports current status by "foundation, Stage 1, Stage 2, Stage 3"; the foundation group's "local install state" check calls `install.sh --check --json` (read-only as well): a missing, mis-pointed or dangling skill link is a WARN, an unmet tighten expectation a FAIL, and every hint says to run install.sh (which the landing flow runs by itself). Its default output is Chinese; use `--lang en` or `DOCTOR_LANG=en` to get English output:
+The checks in `scripts/doctor.sh` only read local configuration and do not modify configuration files. It reports current status by "foundation, Stage 1, Stage 2, Stage 3"; the foundation group's "local install state" check calls `install.sh --check --json` (read-only as well): a missing, mis-pointed or dangling skill link is a WARN, an unmet tighten expectation a FAIL, and these two hint at running install.sh (which the landing flow runs by itself); the hints are not all that one sentence — whatever the script leaves to a person says so: a real directory of another clone, the Windows link step and a loosening each give the manual step, and the rest point at `install.sh --check` for details. Stage 3's own checks (a matcher without `Bash`, for example) fail with the manual fix, not with "run install.sh". Its default output is Chinese; use `--lang en` or `DOCTOR_LANG=en` to get English output:
 
 - `PASS`: the check passed.
 - `WARN`: the item may affect the corresponding stage but does not block other stages; fix it according to the message.
