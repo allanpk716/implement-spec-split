@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # Merge one Ticket branch into its Spec's Integration branch (GLOSSARY.md) and
 # run the test command, all inside the Integration branch's worktree. A Spec
-# session runs this in step 5 instead of a merger role: only a conflict needs a
-# worker, and SKILL.md dispatches that one, never this script. Step 9.1 (main
-# into the Integration branch) runs it too, with --no-ticket-worktree.
+# session runs this in step 5 instead of a merger role: only a conflict or a
+# colliding counter needs a worker, and SKILL.md dispatches that one, never
+# this script. Step 9.1 (main into the Integration branch) runs it too, with
+# --no-ticket-worktree.
 #
 # Usage:
 #   merge-ticket.sh --worktree <integration worktree> --integration <branch>
 #                   --ticket <branch> --test '<command>'
-#                   [--no-ticket-worktree]
+#                   [--counter <path>]... [--no-ticket-worktree]
 #   merge-ticket.sh --worktree <integration worktree> --integration spec-<n>
 #                   --ticket origin/<main branch> --test '<command>'
 #                   --no-ticket-worktree
@@ -22,9 +23,11 @@
 # command exactly as its documentation gives it (for example `bash
 # scripts/test-x.sh && bash scripts/test-y.sh`); the script does not guess one.
 # It runs through `bash -c` in the worktree after the merge, with stdin closed,
-# and its stdout and stderr are passed through unchanged. --no-ticket-worktree
-# skips the two checks about the Ticket branch's own worktree (that some
-# worktree has it checked out, and that that worktree is clean): step 9.1
+# and its stdout and stderr are passed through unchanged. --counter names a
+# shared counter file the built-in list does not know (repeatable; the union
+# with the built-ins is judged by the version-file rule below). --no-ticket-
+# worktree skips the two checks about the Ticket branch's own worktree (that
+# some worktree has it checked out, and that that worktree is clean): step 9.1
 # merges a ref nobody has checked out. It is never inferred from --ticket.
 #
 # Gate (all checked before anything is merged; any miss exits 2 and merges
@@ -44,6 +47,30 @@
 # the Integration branch's first-parent line (main has not moved since the
 # Spec branched); the tree did not change, so the test command does not run.
 #
+# Shared counters come after every other check and before the merge. Two
+# kinds collide without git noticing, and each is judged on its own:
+#   numbered directory: a directory holding two or more entries named
+#     `<digits>-...` or `<digits>_...` at the Integration tip (ADRs,
+#     migrations). When both sides added an entry with the same number in
+#     that directory -- different names, same prefix -- they collide. A file
+#     under such an entry (one directory per number) counts as that number.
+#   version file: VERSION, version.py, version.go, _version.py, plus every
+#     --counter path. It collides when the Ticket side's own commits (the
+#     non-merge commits the Integration branch does not have) touched it, the
+#     Integration side's changes since the base include it, and the two tips
+#     hold the same content (the whole file compared, no version parsed).
+# CHANGELOG files and manifests such as pyproject.toml are not built in: the
+# first needs its entries parsed, the second changes for dependencies too.
+# Each side is measured as what it added since the base, not as what it
+# touched. The base is the first commit on the Ticket tip's first-parent chain
+# that the Integration branch already has (the Integration tip at dispatch
+# time; a merge-back does not move it, a rebase does); the Integration side is
+# the net diff from there to its tip, the Ticket side the net diff from
+# merge-base(Integration tip, Ticket tip) to the Ticket tip. So the check is
+# whether the merged result would hold the same counter twice, and it clears
+# once the Ticket side re-bumps: the old entry is gone from its net additions
+# and its version file no longer equals the Integration tip's.
+#
 # The merge is `git merge --no-ff --no-edit`: every Ticket lands as a merge
 # commit whatever the two branches look like. On a conflict the conflicted
 # paths are listed on stderr, `git merge --abort` puts the worktree back to
@@ -62,6 +89,11 @@
 #      branch (the ticket has landed; with --no-ticket-worktree also a ref
 #      that brings no new commit), nothing merged, tests not run, stderr says
 #      so (the caller goes on, no re-dispatch)
+#   6  shared counters collide: nothing merged, tests not run, worktree
+#      untouched; stderr lists each colliding counter with both sides' commits
+#      (`<counter>\t<side>\t<commit> <subject>\t<paths>`, one line per side)
+#      for the Brief of the worker that re-bumps the Ticket side. Rerun after
+#      the re-bump; a rerun that still exits 6 means the re-bump did not clear
 #  64  bad usage
 
 set -u
@@ -72,15 +104,17 @@ usage() {
   cat <<EOF
 usage: $SCRIPT_NAME --worktree <integration worktree> --integration <branch>
                    --ticket <branch> --test '<command>'
-                   [--no-ticket-worktree]
+                   [--counter <path>]... [--no-ticket-worktree]
 
 Merge the Ticket branch into the Integration branch in its worktree (a merge
 commit, --no-ff), then run the test command there through bash -c. Nothing is
-merged unless the Ticket branch has new commits and both worktrees are clean.
-A Ticket branch already part of the Integration branch exits 5 (nothing to
-merge); a conflict aborts the merge and leaves the worktree as it was.
---no-ticket-worktree lets --ticket be a ref nobody has checked out (step 9.1:
-origin/<main branch>) and skips the Ticket worktree checks.
+merged unless the Ticket branch has new commits, both worktrees are clean and
+no shared counter (a numbered directory's number, a version file) was added by
+both sides: that exits 6 and lists them. A Ticket branch already part of the
+Integration branch exits 5 (nothing to merge); a conflict aborts the merge and
+leaves the worktree as it was. --no-ticket-worktree lets --ticket be a ref
+nobody has checked out (step 9.1: origin/<main branch>) and skips the Ticket
+worktree checks; --counter adds a version-like file to the built-ins.
 EOF
 }
 
@@ -104,7 +138,9 @@ WORKTREE=
 INTEGRATION=
 TICKET=
 TEST_CMD=
+EXTRA_COUNTERS=
 NO_TICKET_WORKTREE=
+NL=$'\n'
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -132,6 +168,13 @@ while [ $# -gt 0 ]; do
       TEST_CMD=$2
       shift 2
       ;;
+    --counter)
+      [ $# -ge 2 ] || usage_error '--counter requires a path'
+      [ -n "$2" ] || usage_error '--counter requires a path'
+      # Repeatable: newline-separated, read back one path per line.
+      EXTRA_COUNTERS=${EXTRA_COUNTERS:+$EXTRA_COUNTERS$NL}$2
+      shift 2
+      ;;
     --no-ticket-worktree)
       NO_TICKET_WORKTREE=1
       shift
@@ -150,6 +193,108 @@ done
 [ -n "$INTEGRATION" ] || usage_error '--integration is required'
 [ -n "$TICKET" ] || usage_error '--ticket is required'
 [ -n "$TEST_CMD" ] || usage_error '--test is required'
+
+# --- shared counters -----------------------------------------------------------
+# Helpers of the gate that runs after every other check and before the merge.
+# Each one only reads; none touches a worktree or a ref.
+
+# The base: the first commit on <ticket_ref>'s first-parent chain that the
+# Integration branch already has. The last commit of that chain the Integration
+# branch lacks is followed by it (ancestors of ancestors, so everything below
+# it is on the Integration branch too). Prints nothing when there is none.
+first_parent_base() { # ticket_ref integration_ref
+  local last
+  last=$(git -C "$WORKTREE" rev-list --first-parent "$1" "^$2" 2>/dev/null | tail -n 1)
+  [ -n "$last" ] || return 1
+  git -C "$WORKTREE" rev-parse --verify --quiet "$last^1" 2>/dev/null
+}
+
+# How many entries of <dir> at <tip> are named <digits>-... or <digits>_...
+# (a directory needs two to count as numbered). "." is the top level.
+numbered_entries() { # dir tip
+  local list
+  if [ "$1" = . ]; then
+    list=$(git -C "$WORKTREE" ls-tree --name-only "$2" 2>/dev/null) || return 1
+  else
+    list=$(git -C "$WORKTREE" ls-tree --name-only "$2" -- "$1/" 2>/dev/null) || return 1
+  fi
+  printf '%s\n' "$list" | awk '{ n = split($0, c, "/"); if (c[n] ~ /^[0-9]+[-_]/) count++ } END { print count + 0 }'
+}
+
+# Prints `<side>\t<dir>\t<digits>\t<path>` for every path added from..to that
+# is an entry of a numbered directory, or a file under such an entry (one
+# directory per number, as migrations do).
+numbered_additions() { # side from to
+  git -C "$WORKTREE" diff --name-only --diff-filter=A --no-renames "$2" "$3" 2>/dev/null |
+    awk -F/ -v side="$1" '
+      function digits(s) { sub(/[-_].*$/, "", s); return s }
+      function emit(path, depth, entry, c, d, k) {
+        split(path, c, "/")
+        d = "."
+        if (depth >= 1) { d = c[1]; for (k = 2; k <= depth; k++) d = d "/" c[k] }
+        printf "%s\t%s\t%s\t%s\n", side, d, digits(entry), path
+      }
+      {
+        if ($NF ~ /^[0-9]+[-_]/) { emit($0, NF - 1, $NF); next }
+        if (NF >= 2 && $(NF - 1) ~ /^[0-9]+[-_]/) emit($0, NF - 2, $(NF - 1))
+      }'
+}
+
+# Prints one line per directory and number both sides added an entry for:
+# `<dir>\t<digits>\t<integration paths>\t<ticket paths>` (paths comma-separated).
+numbered_pairs() { # base integration_tip merge_base ticket_tip
+  {
+    numbered_additions integration "$1" "$2"
+    numbered_additions ticket "$3" "$4"
+  } | awk -F'\t' '
+    function joined(a, b) { return a == "" ? b : a ", " b }
+    $1 == "integration" { k = $2 SUBSEP $3; i[k] = 1; ip[k] = joined(ip[k], $4); next }
+    $1 == "ticket" { k = $2 SUBSEP $3; t[k] = 1; tp[k] = joined(tp[k], $4) }
+    END {
+      for (k in i)
+        if (k in t) { split(k, d, SUBSEP); printf "%s\t%s\t%s\t%s\n", d[1], d[2], ip[k], tp[k] }
+    }' | sort
+}
+
+# The lines of a collision in numbered directories: every pair whose directory
+# is numbered at the Integration tip, each side with the newest commit that
+# touched one of its entries.
+numbered_hits() { # base integration_tip merge_base ticket_tip
+  numbered_pairs "$@" | while IFS=$'\t' read -r dir digits integration_paths ticket_paths; do
+    [ "$(numbered_entries "$dir" "$2")" -ge 2 ] 2>/dev/null || continue
+    printf 'numbered-dir %s %s\tintegration\t%s\t%s\n' "$dir" "$digits" \
+      "$(git -C "$WORKTREE" log -1 --format='%h %s' "$1..$2" -- "${integration_paths%%, *}" 2>/dev/null)" \
+      "$integration_paths"
+    printf 'numbered-dir %s %s\tticket\t%s\t%s\n' "$dir" "$digits" \
+      "$(git -C "$WORKTREE" log --no-merges -1 --format='%h %s' "$2..$4" -- "${ticket_paths%%, *}" 2>/dev/null)" \
+      "$ticket_paths"
+  done
+}
+
+# Is <path> a version counter both sides moved to the same content? The three
+# conditions of the header, cheapest and most often false first.
+version_hit() { # path base integration_tip ticket_tip
+  local n integration_side integration_blob ticket_blob
+  n=$(git -C "$WORKTREE" rev-list --no-merges --count "$3..$4" -- "$1" 2>/dev/null)
+  case $n in '' | *[!0-9]*) return 1 ;; esac
+  [ "$n" -ge 1 ] || return 1
+  integration_side=$(git -C "$WORKTREE" diff --name-only --no-renames "$2" "$3" -- "$1" 2>/dev/null)
+  [ -n "$integration_side" ] || return 1
+  integration_blob=$(git -C "$WORKTREE" rev-parse --verify --quiet "$3:$1" 2>/dev/null) || return 1
+  ticket_blob=$(git -C "$WORKTREE" rev-parse --verify --quiet "$4:$1" 2>/dev/null) || return 1
+  [ "$integration_blob" = "$ticket_blob" ]
+}
+
+# The lines of a collision in version files, one path per line of <counters>.
+version_hits() { # base integration_tip ticket_tip counters
+  printf '%s\n' "$4" | while IFS= read -r path; do
+    version_hit "$path" "$1" "$2" "$3" || continue
+    printf 'version %s\tintegration\t%s\t\n' "$path" \
+      "$(git -C "$WORKTREE" log -1 --format='%h %s' "$1..$2" -- "$path" 2>/dev/null)"
+    printf 'version %s\tticket\t%s\t\n' "$path" \
+      "$(git -C "$WORKTREE" log --no-merges -1 --format='%h %s' "$2..$3" -- "$path" 2>/dev/null)"
+  done
+}
 
 # --- gate ---------------------------------------------------------------------
 
@@ -227,6 +372,34 @@ fi
 dirty=$(git -C "$WORKTREE" status --porcelain 2>/dev/null) ||
   gate_fail "could not read the status of the integration worktree $WORKTREE"
 [ -z "$dirty" ] || gate_fail "integration worktree $WORKTREE has uncommitted or untracked changes"
+
+# --- gate: shared counters ------------------------------------------------------
+
+INTEGRATION_TIP=$(git -C "$WORKTREE" rev-parse --verify --quiet "refs/heads/$INTEGRATION") ||
+  gate_fail "could not read the tip of $INTEGRATION"
+TICKET_TIP=$(git -C "$WORKTREE" rev-parse --verify --quiet "$TICKET_REF") ||
+  gate_fail "could not read the tip of $TICKET"
+counter_base=$(first_parent_base "$TICKET_REF" "refs/heads/$INTEGRATION") || counter_base=
+if [ -z "$counter_base" ]; then
+  # No commit of the Ticket's first-parent chain is on the Integration branch
+  # (rebased onto something else, or unrelated histories): the merge-base is
+  # the best remaining guess at the fork point.
+  counter_base=$(git -C "$WORKTREE" merge-base "$INTEGRATION_TIP" "$TICKET_TIP" 2>/dev/null) || counter_base=
+fi
+if [ -n "$counter_base" ]; then
+  counter_merge_base=$(git -C "$WORKTREE" merge-base "$INTEGRATION_TIP" "$TICKET_TIP" 2>/dev/null) || counter_merge_base=
+  if [ -n "$counter_merge_base" ]; then
+    COUNTERS=$(printf '%s\n' VERSION version.py version.go _version.py ${EXTRA_COUNTERS:+"$EXTRA_COUNTERS"} |
+      awk 'NF && !seen[$0]++')
+    counter_hits=$(numbered_hits "$counter_base" "$INTEGRATION_TIP" "$counter_merge_base" "$TICKET_TIP"
+      version_hits "$counter_base" "$INTEGRATION_TIP" "$TICKET_TIP" "$COUNTERS")
+    if [ -n "$counter_hits" ]; then
+      warn "shared counters collide: re-bump them on the ticket side ($TICKET), then run again; nothing merged, tests not run"
+      printf '%s\n' "$counter_hits" >&2
+      exit 6
+    fi
+  fi
+fi
 
 BEFORE=$(git -C "$WORKTREE" rev-parse HEAD)
 
