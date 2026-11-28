@@ -219,7 +219,8 @@ has '--run-dir <运行目录>/task-<票号>/ops --time-limit 2400 --idle-timeout
 has '的步骤必传 `--mcp ssh-manager`' 'find-next step 3 passes ssh-manager MCP for remote steps' "$FIND_NEXT"
 has '以及**原文照抄**的护栏，只允许改 Brief 写明的范围' 'find-next step 3 copies the guardrails verbatim into the Brief' "$FIND_NEXT"
 has '实现者要越出护栏或验收达不到时只报告、不硬推' 'find-next step 3 keeps the ops worker inside the guardrails' "$FIND_NEXT"
-has '该步标了放宽项的不执行、只记录，不替用户决定放宽' 'find-next step 3 records a loosening item instead of loosening' "$FIND_NEXT"
+has '该步标了放宽项的不执行、只记录（写进该 task 票的 Resolution 与收尾的「未执行的放宽项」），不替用户决定放宽' \
+  'find-next step 3 records a loosening item instead of loosening' "$FIND_NEXT"
 has 'prototype 的反应题要的是用户的主观反应，agent 替不了：不拍板' 'find-next step 3 does not decide a prototype reaction' "$FIND_NEXT"
 has '决策题带推荐就进拍板轮，没有推荐或推荐不明确的按第 6 步的可逆性规则自选' \
   'find-next step 4 sends a loose ticket decision to the round' "$FIND_NEXT"
