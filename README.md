@@ -27,8 +27,17 @@ The original skill lets every subagent inherit the session model, so you pay top
 
 ```bash
 git clone https://github.com/allanpk716/implement-spec-split ~/.claude/skills/implement-spec-split
+cd ~/.claude/skills/implement-spec-split && ./install.sh
 ```
-Then run scripts/doctor.sh to check your setup.
+
+`./install.sh` is the one install step (规格 #58). It is idempotent — re-running it once everything is in place changes nothing — and `git pull && ./install.sh` is the whole update; the landing flow of `SKILL.md` (step 9) runs it again after every landing that fast-forwarded the main checkout, so links and settings stay in step with the repository. It does two things:
+
+- **Skill symlinks.** For every directory git tracks that holds a `SKILL.md` — this skill and the sub-skills `find-next`, `grill-feature`, `grill-map`, `grill-router` — it makes `~/.claude/skills/<name>` a symlink to that directory in the checkout it runs from: a missing link is created, a link pointing elsewhere is re-pointed, a dangling link left by a skill the checkout no longer has (the two old switches) is removed, and a real directory of the same name is never touched (it warns). Both install shapes are supported: clone-direct (above — `~/.claude/skills/implement-spec-split` *is* the repository, which counts as in place, so only the sub-skill links are made) and a clone anywhere else with `./install.sh` run from it (all five links point at that checkout). The main checkout is the one the script runs from, so run it from the clone the links should follow.
+- **Local configuration expectations.** A data list of what the checkout expects of `~/.claude/settings.json`, each item marked tighten or loosen. A **tighten** item not met (today one: the `delegate-guard` PreToolUse matcher must cover `Edit`, `Write` and `Bash`, see [hooks/README.md](hooks/README.md)) is applied after the file is backed up to `~/.claude/backups/install-<timestamp>/`, and the written file is validated as JSON and restored from the backup otherwise. A **loosen** item is never applied: it is only reported under 「未执行的放宽项」 (a section of its own in the human output, `unexecutedLoosenings` in `--json`) as a WARN, so an install that has one exits 1. A hook that is not registered is not drift: nothing is expected of a Stage you have not opted into.
+
+`./install.sh --check` reports and changes nothing (no link, no `settings.json`, no backup): exit 0 when everything is in place, 1 on any drift. `./install.sh --json` prints one JSON object in the shape of `scripts/doctor.sh` for scripts; `scripts/doctor.sh` runs `--check` as one of its own checks and points at `install.sh` to fix what it finds. On Windows (Git Bash) nothing is linked: each skill not in place prints the manual step (`mklink /J`, or copy) as a WARN, and the settings half runs as everywhere else.
+
+Then run `scripts/doctor.sh` to check your setup.
 
 Invoke manually with `/implement-spec-split [spec ref] [--parallel n]` (normally find-next starts it, see below). Change the defaults in the "Config" section of `SKILL.md`; the per-stage launcher, model and reasoning effort live in the Stage route table (`/grill-router`).
 
@@ -61,26 +70,16 @@ After `run-use` the new terminal is the Run's coordinator again (`orca orchestra
 
 `/find-next --suggest` keeps the old read-only behaviour (one Next step and the command to type), and `/find-next --list` prints the full to-do list from `pipeline-status.sh --all` without a worker, led by per-grill progress from `grill-status.sh` (in-progress ticket branches and parking reports included) and ending with what needs you now, what runs on its own, and what comes later. `--worker agent --agent-model <model>` swaps find-next's own codex-worker steps for an Agent subagent on that model (the development commands it generates carry no backend: Ticket workers always go through the 实现 route). Advance mode supports GitHub trackers; local markdown trackers are scanned by `find-next/scripts/scan.py` for `--suggest` / `--list`.
 
-Install it next to the main skill:
+`./install.sh` (see [Install](#install)) links it next to the main skill together with the two Design-session wrappers and the Stage route command, and keeps the four links right on every update. The manual equivalent of what it does on macOS / Linux, for anyone who would rather link by hand (on Windows use `mklink /J`, or copy — `install.sh` prints that step for each skill instead of linking):
 
 ```bash
 ln -s ~/.claude/skills/implement-spec-split/find-next ~/.claude/skills/find-next   # Windows: mklink /J, or copy
-```
-
-Install the two Design-session wrappers the same way:
-
-```bash
 ln -s ~/.claude/skills/implement-spec-split/grill-feature ~/.claude/skills/grill-feature
 ln -s ~/.claude/skills/implement-spec-split/grill-map ~/.claude/skills/grill-map
-```
-
-Install the Stage route command the same way:
-
-```bash
 ln -s ~/.claude/skills/implement-spec-split/grill-router ~/.claude/skills/grill-router
 ```
 
-`/grill-router` shows and sets the Stage route table (ADR 0004): the Launcher profile, model and reasoning effort each of the six Stages runs on — orchestration (the flash main session, locked), design (Design sessions), research (read-only codex worker dispatches), implementation (the Orca workers `scripts/stage-dispatch.sh` starts for a Ticket's implementer, fix and conflict roles; codex runs headless only, so a `codex-glm` implementation route is refused), review and diagnosis (`scripts/opus-review.sh`). With no argument it shows the six routes; `/grill-router use review=claude-glm/glm-5.4/high design=claude-glm/glm-5.4/medium` sets several in one command (natural language works too, e.g. `审查用 glm 5.4，讨论用 opus`), an expiry (`到 <time>`, or a duration such as `5h`) makes them return to their defaults by themselves, and `/grill-router use review=claude/opus/high` is the reset (a status line that is off its default names the way back after 切回用). Only (profile, model) pairs that passed a smoke test can be routed, and a change takes effect at that Stage's next dispatch or next new Design session, never mid-call. With the old switches gone that leaves 3 + 1 entry points: the three work commands `/grill-feature`, `/grill-map` and `/find-next`, and this one setting command. The wrapper only runs `scripts/stage-route.sh` and relays its six status lines. Upgrading from a version that had the `judgment-model` and `worker-model` switches: remove their two symlinks from `~/.claude/skills/`, link `grill-router` as above, and the first `/grill-router` run carries every old setting that has not expired into the table (`/grill-router migrate` does it again on request).
+`/grill-router` shows and sets the Stage route table (ADR 0004): the Launcher profile, model and reasoning effort each of the six Stages runs on — orchestration (the flash main session, locked), design (Design sessions), research (read-only codex worker dispatches), implementation (the Orca workers `scripts/stage-dispatch.sh` starts for a Ticket's implementer, fix and conflict roles; codex runs headless only, so a `codex-glm` implementation route is refused), review and diagnosis (`scripts/opus-review.sh`). With no argument it shows the six routes; `/grill-router use review=claude-glm/glm-5.4/high design=claude-glm/glm-5.4/medium` sets several in one command (natural language works too, e.g. `审查用 glm 5.4，讨论用 opus`), an expiry (`到 <time>`, or a duration such as `5h`) makes them return to their defaults by themselves, and `/grill-router use review=claude/opus/high` is the reset (a status line that is off its default names the way back after 切回用). Only (profile, model) pairs that passed a smoke test can be routed, and a change takes effect at that Stage's next dispatch or next new Design session, never mid-call. With the old switches gone that leaves 3 + 1 entry points: the three work commands `/grill-feature`, `/grill-map` and `/find-next`, and this one setting command. The wrapper only runs `scripts/stage-route.sh` and relays its six status lines. Upgrading from a version that had the `judgment-model` and `worker-model` switches: `./install.sh` removes their two dangling symlinks from `~/.claude/skills/` and links `grill-router`, and the first `/grill-router` run carries every old setting that has not expired into the table (`/grill-router migrate` does it again on request).
 
 `/grill-feature <idea>` opens a Design session for a small feature; `/grill-map <map or idea>` does the same for a large-module wayfinder map. Each wrapper blocks until `scripts/design-session.sh` receives `handoff.md`, then hands the session over to find-next's 推进模式 (`/grill-map` does not after an early 「先到这」 handoff, which `handoff.md` marks on its first line).
 Run `scripts/grill-status.sh` from a managed repository (or pass its directory) to list each Design session topic with spec and ticket progress; it is read-only and does not spend tokens. `scripts/completion-report.sh` turns the same design-session records plus git/GitHub state into a Chinese completion conclusion — current topic progress, repository-wide status, a release recommendation with a suggested version (it never tags or pushes), tickets a release would unfreeze, and interrupted grills.
