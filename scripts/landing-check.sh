@@ -199,23 +199,33 @@ for (const ticket of open) {
 // inside the Spec until nothing changes. The rest is `# open`.
 //
 // What a waiting Ticket waits for is kept as it is found, so that `# report`
-// is the check's own reading: a blocker outside the Spec is another Spec or a
-// standalone issue (both `number`), a deferred one of this Spec is `human` or
-// `shelved`, and a Ticket that waits only behind another one waits for what
-// that one waits for.
+// is the check's own reading. A reason has a kind, and KINDS is the one place
+// the kinds are enumerated; KIND_LIST is the same table in the order of a
+// report line. `head` is what follows 等 before the numbers of a kind (等 #20
+// #22, 等人工 #11, 等搁置 #11). `holds` reads a blocker's own reason off the
+// graph, and at most one kind holds: a blocker outside this Spec's Tickets is
+// another Spec or a standalone issue, read by its number; one of this Spec that
+// is deferred is `human` when it is a human Ticket, shelved as well or not,
+// and `shelved` otherwise. A Ticket of this Spec that no kind holds waits
+// itself, and the Ticket behind it waits for what that one waits for.
+const KINDS = {
+  number: {order: 0, head: ' ', holds: (blocker) => !ticketNumbers.has(blocker)},
+  human: {order: 1, head: '人工 ', holds: (blocker) => deferred.has(blocker) && humanNumbers.has(blocker)},
+  shelved: {order: 2, head: '搁置 ', holds: (blocker) => deferred.has(blocker) && !humanNumbers.has(blocker)},
+};
+const KIND_LIST = Object.entries(KINDS).sort((a, b) => a[1].order - b[1].order);
+
 const reasonKey = (reason) => `${reason.kind}:${reason.number}`;
 function reasonsFor(number) {
   const reasons = [];
   const keys = new Set();
   for (const blocker of blockers.get(number) || []) {
-    const found = !ticketNumbers.has(blocker)
-      ? [{kind: 'number', number: blocker}]
-      : deferred.has(blocker)
-        ? [{kind: humanNumbers.has(blocker) ? 'human' : 'shelved', number: blocker}]
-        : waitsFor.get(blocker) || [];
+    const own = KIND_LIST.find(([, kind]) => kind.holds(blocker));
+    const found = own ? [{kind: own[0], number: blocker}] : (waitsFor.get(blocker) || []);
     for (const reason of found) {
-      if (!keys.has(reasonKey(reason))) {
-        keys.add(reasonKey(reason));
+      const key = reasonKey(reason);
+      if (!keys.has(key)) {
+        keys.add(key);
         reasons.push(reason);
       }
     }
@@ -243,38 +253,36 @@ function clean(value) {
   return String(value || '').replace(/[\r\n\t]+/g, ' ').trim();
 }
 
-function line(ticket) {
-  const number = Number(ticket.number);
+// The open blockers of a Ticket as the suffix of a line that names it,
+// `（阻塞：#a #b）` ascending, or nothing when it has none.
+function blockerSuffix(number) {
   const openBlockers = blockers.get(number) || [];
-  const suffix = openBlockers.length > 0
+  return openBlockers.length > 0
     ? `（阻塞：${openBlockers.map((value) => `#${value}`).join(' ')}）`
     : '';
-  return `#${number} ${clean(ticket.title)}${suffix}`;
+}
+
+function line(ticket) {
+  const number = Number(ticket.number);
+  return `#${number} ${clean(ticket.title)}${blockerSuffix(number)}`;
 }
 
 // The landing report's line for an open execution Ticket, whichever section
-// lists it. A waiting one says what it waits for, the reasons by kind (the
-// numbers, then 人工, then 搁置), each kind ascending, the groups joined by `、`.
-// The numbers follow 等 after one space (等 #20 #22); 人工 and 搁置 follow it
-// directly (等人工 #11, 等搁置 #11).
-const KIND_ORDER = {number: 0, human: 1, shelved: 2};
-const KIND_HEAD = {number: ' ', human: '人工 ', shelved: '搁置 '};
+// lists it. A waiting one says what it waits for: the reasons by kind, in the
+// order of KINDS (the numbers, then 人工, then 搁置), each kind ascending, the
+// groups joined by `、`.
 function reportLine(number) {
   if (!waiting.has(number)) {
     // Under # open: work the Spec still owes, named with the open blockers its
     // # open line names (they are Tickets of this Spec that are open too).
-    const openBlockers = blockers.get(number) || [];
-    const suffix = openBlockers.length > 0
-      ? `（阻塞：${openBlockers.map((value) => `#${value}`).join(' ')}）`
-      : '';
-    return `剩余：#${number}${suffix}`;
+    return `剩余：#${number}${blockerSuffix(number)}`;
   }
   const reasons = (waitsFor.get(number) || []).slice()
-    .sort((a, b) => (a.kind === b.kind ? a.number - b.number : KIND_ORDER[a.kind] - KIND_ORDER[b.kind]));
-  const groups = ['number', 'human', 'shelved']
-    .map((kind) => {
+    .sort((a, b) => KINDS[a.kind].order - KINDS[b.kind].order || a.number - b.number);
+  const groups = KIND_LIST
+    .map(([kind, {head}]) => {
       const numbers = reasons.filter((reason) => reason.kind === kind);
-      return numbers.length === 0 ? '' : KIND_HEAD[kind] + numbers.map((reason) => `#${reason.number}`).join(' ');
+      return numbers.length === 0 ? '' : head + numbers.map((reason) => `#${reason.number}`).join(' ');
     })
     .filter(Boolean);
   return `剩余：#${number} 等${groups.join('、')}`;

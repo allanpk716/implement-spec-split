@@ -574,9 +574,9 @@ if (mode === 'collect') {
   const implementations = new Map(stage.implementations.map((impl) => [Number(impl.number), impl]));
 
   // `source` marks the loose source ticket of a Spec (#83, mapNumber null): it
-  // is the Spec's Ticket in the graph and in the coverage counts, but not an
-  // execution Ticket. Only the caller that knows the ticket is one sets it; the
-  // flag is false on every other path.
+  // is in the Spec's `tickets` in the graph and in the coverage counts, but not
+  // an execution Ticket. Only the caller that knows the ticket is one sets it;
+  // the flag is false on every other path.
   function ticketRecord(number, source = false) {
     const issue = byNumber.get(Number(number));
     return {

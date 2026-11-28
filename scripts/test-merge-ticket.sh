@@ -10,8 +10,8 @@
 # last part runs the step 9.1 shape too, --ticket origin/main with
 # --no-ticket-worktree. Its last section covers --close-ticket: the merger
 # closes the Tickets it was given on its exit 0 and calls gh on no other exit,
-# tries a close that failed once more after a pause, and the fake gh records
-# every call it makes.
+# tries a close that failed once more after a pause, goes on to the next Ticket
+# when one stays unclosed, and the fake gh records every call it makes.
 
 set -u
 
@@ -1333,7 +1333,7 @@ if head -n 1 "$GH_LOG" | grep -q '^issue close 32 --comment '; then
 else
   bad "the Tickets are closed in the order given" "$(cat "$GH_LOG")"
 fi
-expect_gh_call 'issue close 31 --comment ' "the second Ticket named is closed" "$GH_LOG"
+expect_gh_call 'issue close 31 --comment ' "the second Ticket named is closed"
 expect_without 'issue close 032' "a number with leading zeros is closed by its number" "$GH_LOG"
 expect_has 'merge-ticket: closed #32' "the merger reports the first Ticket" "$WORK/close-twice.out"
 expect_has 'merge-ticket: closed #31' "the merger reports the second Ticket" "$WORK/close-twice.out"
@@ -1396,6 +1396,30 @@ if [ "$(grep -c 'fake gh: could not close #39' "$WORK/close-retry.out.err")" = 1
 else
   bad "gh's one failure is passed through, and the merger pauses 5 seconds before the retry" \
     "messages=$(grep -c 'fake gh: could not close #39' "$WORK/close-retry.out.err"), pause=[$(cat "$GH_LOG.sleep")]"
+fi
+
+# A Ticket gh never closes does not stop the Tickets after it: one merge
+# closing two, the first of which gh refuses every time. Both of its tries are
+# made, then the second Ticket is closed as usual, and the exit stays 0.
+new_ticket 42 "$(git -C "$INTEGRATION" rev-parse HEAD)"
+T42=$T
+printf '%s\n' 'feature forty-two' > "$T42/feature42.txt"
+commit_in "$T42" 'ticket forty-two adds a feature'
+TIP42=$(git -C "$T42" rev-parse HEAD)
+: > "$GH_LOG"
+: > "$GH_LOG.sleep"
+GH_FAIL_CLOSE=41 run_merge "$WORK/close-next.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t42 --test 'fake-test' --close-ticket 41 --close-ticket 42
+expect_exit 0 "a Ticket gh could not close does not stop the Tickets after it"
+expect_merged "$TIP42" "a Ticket gh could not close keeps the merge of the next one"
+expect_gh_calls 3 "a Ticket gh never closes is tried twice and the Ticket after it is still closed"
+expect_has 'merge-ticket: closed #42' "the Ticket after one gh could not close is reported as closed" "$WORK/close-next.out"
+expect_has 'could not close #41: close it by hand (gh issue close 41)' \
+  "a Ticket gh could not close is still named on stderr when Tickets follow it" "$WORK/close-next.out.err"
+if [ "$(awk '{print $3}' "$GH_LOG" | tr '\n' ' ')" = '41 41 42 ' ]; then
+  ok "the Ticket after one gh could not close is closed after both tries of the failed one"
+else
+  bad "the Ticket after one gh could not close is closed after both tries of the failed one" "$(cat "$GH_LOG")"
 fi
 
 # Every other exit leaves the issue alone and does not call gh: a gate miss

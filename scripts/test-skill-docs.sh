@@ -23,7 +23,11 @@
 # and reading its five sections and report lines, exit 2 ending in a parking
 # with category error rather than a loop, and step 0 telling a loose source
 # ticket (never dispatched, closed with its Spec) from a map implementation
-# ticket.
+# ticket. The review fixes after it (票 #78 审查修复 r3) are pinned the same
+# way: the final 结论 block at one line per item, its 结果 line counting what is
+# left and 要你做的 naming a Ticket merged and left open by its number, the
+# `剩余：` lines under 细节, all four forms of what a Ticket waits for in SKILL.md
+# and GLOSSARY, and no umbrella "implementation ticket" on the `实现票` line.
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -233,8 +237,8 @@ has "Step 9's landing check refuses to land while such a Ticket is open." \
 # and an empty frontier with no implementing role alive leads back to the check
 # and then to a parking with category error, never to a loop (the parking
 # report names every Ticket under # open). A Ticket that waits is reported with
-# the check's own line: the blocker may be a Spec, a standalone issue or a
-# human Ticket.
+# the check's own line: what it waits for may be another Spec, a standalone
+# issue, a human Ticket or a shelved one, and the line says which.
 has '<skill dir>/scripts/landing-check.sh --repo <owner/name> --spec <n>' \
   'SKILL.md step 9 runs the landing check' "$SKILL"
 has "lists the Spec's open Tickets in five sections — \`# open\`, \`# waiting\`, \`# human\`, \`# shelved\`, \`# source\`" \
@@ -252,16 +256,28 @@ has 'answers `exited` for every dispatch of this Run that is not released, and e
   'SKILL.md step 9 asks Orca which implementing roles are alive, after the ended ones are handled' "$SKILL"
 has 'one that is `unverifiable` is never parked over (the Watchdog rule)' \
   'SKILL.md step 9 never parks over an unverifiable role' "$SKILL"
-has 'the `# report` lines go in the report as they are (`剩余：#<t> 等 #<spec>` for another Spec, `剩余：#<t> 等 #<issue>` for a standalone issue, `剩余：#<t> 等人工 #<t>` behind a human Ticket)' \
-  'SKILL.md step 9 reports a waiting Ticket by what it waits for' "$SKILL"
+has 'a Ticket under `# waiting` waits for another Spec, a standalone issue, or a human' \
+  'SKILL.md step 9 names everything a waiting Ticket can wait for' "$SKILL"
+has 'the `# report` lines go in the report as they are (`剩余：#<t> 等 #<spec>` for another Spec, `剩余：#<t> 等 #<issue>` for a standalone issue, `剩余：#<t> 等人工 #<t>` behind a human Ticket, `剩余：#<t> 等搁置 #<t>` behind a shelved one)' \
+  'SKILL.md step 9 reports a waiting Ticket by what it waits for, in all four forms' "$SKILL"
 without '`# waiting` goes in the report as `剩余：#<t> 等 #<spec>`' \
   'SKILL.md step 9 no longer reports a waiting Ticket as waiting for a Spec only' "$SKILL"
 has '`# human` and `# shelved` go in the report too, a human Ticket under 要你做的' \
   'SKILL.md step 9 sends a human Ticket to 要你做的' "$SKILL"
 has 'the Tickets the merger closed as they merged (step 5) were never asked about' \
   'SKILL.md step 9 keeps its confirmation for the Spec and the Tickets merged without being closed' "$SKILL"
-has 'and a loose source ticket (step 0, rule 2b), which no merger ever closed, since nothing is dispatched for it' \
-  'SKILL.md step 9 closes the loose source ticket with the Spec' "$SKILL"
+# Step 0 rule 2 and step 9 name the tickets of the `实现票` line without the
+# umbrella "implementation ticket" (审查 r3, 判断项 3: GLOSSARY has no such word,
+# and a loose source ticket is never one). A map implementation ticket is still
+# named as such, and every ticket on the line is closed with its Spec.
+has 'take the open tickets referenced on an `实现票：#<n>`' \
+  'SKILL.md step 0 rule 2 takes the tickets on the 实现票 line, whatever kind each is' "$SKILL"
+without 'Multiple referenced implementation tickets' \
+  'SKILL.md step 0 rule 2 no longer calls every ticket on the line an implementation ticket' "$SKILL"
+without 'every implementation ticket on its `实现票` line' \
+  'SKILL.md step 9 no longer closes "implementation tickets" as an umbrella' "$SKILL"
+has 'Close the Spec too, and every ticket on its `实现票` line: a map implementation ticket, even when that map implementation ticket has its own sub-issues, and a loose source ticket (step 0, rule 2b), which no merger ever closed, since nothing is dispatched for it' \
+  'SKILL.md step 9 closes every ticket on the 实现票 line with the Spec, the loose source ticket included' "$SKILL"
 
 # Step 0 rule 2 tells a map implementation ticket (an execution ticket) from a
 # loose source ticket (never one): nothing is dispatched for the source, and a
@@ -284,16 +300,33 @@ has 'a Run that went on would land it with nothing done and close the source tic
 has '`# source` lists the loose source ticket (step 0, rule 2b), which is never dispatched either' \
   'SKILL.md step 1 names the source section of the frontier' "$SKILL"
 
-# Both reports take the check's lines: the parking report's 现状 pastes # open
-# and # report, and the landing report and the final 结论 carry the `剩余：`
-# lines whatever the Ticket waits for, after a partial landing and after a
-# parking alike.
+# The reports take the check's lines, in all four forms of what a Ticket waits
+# for (审查 r3, 判断项 2: the fourth, 等搁置, was in the script's header and in
+# MAINTAINING alone): the parking report's 现状 pastes # open and # report, and
+# the landing report and the final report's 细节 carry the `剩余：` lines
+# whatever the Ticket waits for, after a partial landing and after a parking
+# alike. The final 结论 block stays at one line per item (审查 r3, 取舍 1 选 B):
+# its 结果 line counts what is left, and a Ticket merged and left open — the
+# one kind a person can act on — stays on the first screen, by its number,
+# under 要你做的.
 has '<when the Run parks on the landing check (step 9): every line of its `# open` and `# report` sections, as they are>' \
   'the parking report carries the lines of the landing check' "$SKILL"
-has 'the `# report` lines of the landing check, as they are (`剩余：#<t> 等 #<spec>`, `剩余：#<t> 等 #<issue>` or `剩余：#<t> 等人工 #<t>`, one line each; omit when it printed none)' \
-  'the landing report carries the lines of the landing check' "$SKILL"
-has "then the landing check's \`# report\` lines whenever a Ticket is still open" \
-  'the final report carries the lines of the landing check' "$SKILL"
+has 'the `# report` lines of the landing check, as they are (`剩余：#<t> 等 #<spec>`, `剩余：#<t> 等 #<issue>`, `剩余：#<t> 等人工 #<t>` or `剩余：#<t> 等搁置 #<t>`, one line each; omit when it printed none)' \
+  'the landing report carries the lines of the landing check, in all four forms' "$SKILL"
+has 'Then a `## 结论` block of at most 5 lines, one per item' \
+  'the final report keeps its 结论 block to one line per item' "$SKILL"
+has "when the landing check's \`# report\` names Tickets, the line ends with \`剩余 N 张\`" \
+  'the final report counts what is left on its 结果 line' "$SKILL"
+has 'a Ticket that merged without being closed and is still open is one of them, named one by one (`#<t>`, close it) and never only counted' \
+  'the final report names a Ticket merged and left open under 要你做的, one by one' "$SKILL"
+has 'The `剩余：` lines themselves are never lines of this block' \
+  'the final report keeps the report lines out of its 结论 block' "$SKILL"
+has "under \`## 细节\`, the technical part below, which starts with the landing check's \`# report\` lines, as they are" \
+  'the final report opens 细节 with the lines of the landing check' "$SKILL"
+has "- **What is left**: the landing check's \`# report\` lines, as they are" \
+  'the final report lists what is left under 细节' "$SKILL"
+without "then the landing check's \`# report\` lines whenever a Ticket is still open" \
+  'the final report no longer puts the report lines into its 结论 block' "$SKILL"
 without 'partially landed with `剩余：#<t> 等 #<spec>`' \
   'the final report no longer names one form for what is left' "$SKILL"
 
@@ -301,6 +334,12 @@ without 'partially landed with `剩余：#<t> 等 #<spec>`' \
 has '**Loose source ticket**:' 'GLOSSARY defines Loose source ticket' "$GLOSSARY"
 has 'every Run does that without asking, `--auto-land` or not (2026-11-28, 票 #78)' \
   'GLOSSARY excludes the merger closing a merged Ticket from Unattended landing' "$GLOSSARY"
+# A partial landing's lines are the script's four forms, here as in SKILL.md:
+# the glossary is the vocabulary, so it may not list three of them.
+has '`剩余：#<t> 等 #<spec>` for another Spec, `剩余：#<t> 等 #<issue>` for a standalone issue, `剩余：#<t> 等人工 #<t>` behind a human ticket, `剩余：#<t> 等搁置 #<t>` behind a shelved one' \
+  'GLOSSARY lists all four forms of what is left after a partial landing' "$GLOSSARY"
+without 'behind a human ticket.' \
+  'GLOSSARY no longer ends the forms of a partial landing at the human Ticket' "$GLOSSARY"
 has 'closing an execution Ticket as it merges (2026-11-28, 票 #78; allowed by the owner)' \
   'ai-agents guide states the exception for closing a merged Ticket' "$ROOT/docs/ai-agents.md"
 

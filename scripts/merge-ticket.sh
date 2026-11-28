@@ -513,25 +513,40 @@ printf 'merge-ticket: tests passed\n'
 # --- tickets -------------------------------------------------------------------
 # Only on this path: on every other exit nothing touches an issue (the header
 # says why). gh runs in the integration worktree, so it resolves the repository
-# from the same remote the session does. A close that fails is tried once more,
-# 5 seconds later; a Ticket gh still could not close is named on stderr and
-# the exit stays 0: the merge and the test run did pass, and closing it by hand
-# is all that is left.
+# from the same remote the session does. What is left for the session never
+# changes the exit code: the merge and the test run did pass.
+
+# Closes issue <n> with the comment of the header and reports it on stdout. A
+# close that fails is tried once more, 5 seconds later: gh fails for a moment
+# now and then, and a Ticket left open is the thing --close-ticket exists to
+# prevent. gh's own message of each failure is already on stderr. Returns 1,
+# naming the hand action, when gh could not close it the second time either:
+# the exit stays 0 all the same, and closing it by hand is all that is left.
+close_ticket() { # n
+  local n body failures
+  n=$1
+  body="由 scripts/merge-ticket.sh 关闭：票分支 \`${TICKET}\` 已合入 \`${INTEGRATION}\`（${AFTER:0:7}），测试命令通过。"
+  failures=0
+  until ( cd -P -- "$WORKTREE" && gh issue close "$n" --comment "$body" --reason completed ); do
+    failures=$((failures + 1))
+    if [ "$failures" -ge 2 ]; then
+      warn "could not close #$n: close it by hand (gh issue close $n); the merge $AFTER stands"
+      return 1
+    fi
+    warn "could not close #$n on the first try; trying once more after 5 seconds"
+    sleep 5
+  done
+  if [ "$failures" -eq 0 ]; then
+    printf 'merge-ticket: closed #%s\n' "$n"
+  else
+    printf 'merge-ticket: closed #%s (on the second try)\n' "$n"
+  fi
+}
+
 [ -z "$CLOSE_TICKETS" ] || printf '%s\n' "$CLOSE_TICKETS" |
   awk 'NF && !seen[$0]++' |
-  while IFS= read -r n; do
-    body="由 scripts/merge-ticket.sh 关闭：票分支 \`${TICKET}\` 已合入 \`${INTEGRATION}\`（${AFTER:0:7}），测试命令通过。"
-    if ( cd -P -- "$WORKTREE" && gh issue close "$n" --comment "$body" --reason completed ); then
-      printf 'merge-ticket: closed #%s\n' "$n"
-    else
-      # gh's own message of the failure is already on stderr.
-      warn "could not close #$n on the first try; trying once more after 5 seconds"
-      sleep 5
-      if ( cd -P -- "$WORKTREE" && gh issue close "$n" --comment "$body" --reason completed ); then
-        printf 'merge-ticket: closed #%s (on the second try)\n' "$n"
-      else
-        warn "could not close #$n: close it by hand (gh issue close $n); the merge $AFTER stands"
-      fi
-    fi
+  while IFS= read -r number; do
+    # A Ticket gh could not close does not stop the Tickets after it.
+    close_ticket "$number"
   done
 exit 0
