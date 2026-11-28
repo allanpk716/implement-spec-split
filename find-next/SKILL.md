@@ -139,6 +139,8 @@ flash 模式下，本节所有原本由主会话审读或复核的结论都按�
 
 **子代理空闲却没交最终报告**（票 #79）：`--worker agent` 的子代理留下「测试在后台跑，跑完再报」之类的话、结束回合返回时，没有机制会再唤醒它，后台任务结束也没人来报——主会话不等这份报告，自己核实，按证据判定完成或失败并收尾，不无限等待。核实在前台做：`ps` 看它留下的进程还在不在（`ps -axo pid,etime,time,command`；还在跑的后台任务不是进展——它的回合已经结束，没人会去读结果——结束它）；看它该交的产物在不在、全不全（`result.md`，以及 Brief 要求的 `resolution.md`、草稿）；它会改仓库时（task、prototype）再看分支最近提交时间和工作区状态（`git for-each-ref --sort=-committerdate --format='%(refname:short) %(committerdate:relative)' 'refs/heads/<分支>'`、`git status --porcelain`）。产物齐全、该提交的已提交，就当作它交了报告，照常复核；产物缺失或没提交，按失败处理——把原因补进 Brief、换新运行目录重派一次，再失败就停下报告。
 
+**主会话不内联包裹多行脚本**（票 #80）：不得用 `bash -c`、`sh -c`、`$'…'` 把多行脚本包进一条 Bash 命令，脚本里有没有 `rm` 都一样——禁的是包裹形态本身：bypass 模式（`--dangerously-skip-permissions`）下权限层照样会对它弹确认框，脚本里没有删除命令时也被误判过，无人值守的会话没人回答就卡死。必须多行的脚本写进 `mktemp -d` 目录下的脚本文件执行，脚本里配 `trap` 清理它自己的 `mktemp -d` 目录；除此之外的删除一律单独 `rm` 带字面路径；或把活拆成多次独立的 Bash 调用。各 Brief 模板的「环境约束（找文件与子进程）」一节写着 worker 侧的同一条约束。
+
 **Brief 卫生**：往 Brief 里引用仓库外的文件（调研文档、别处的笔记、`~/ops` 下的脚本这类）前，先用系统索引（macOS 的 `mdfind`）或 `ls` 定位到确切路径并确认存在再写；定位不到就在 Brief 里明写「未定位到，不作为依据」，不给模糊路径让 worker 自行全盘搜索。各 Brief 模板的「环境约束（找文件与子进程）」一节是 worker 侧的对应约束。
 
 推进模式只支持 GitHub 跟踪器。先读 `docs/agents/issue-tracker.md`；发现本地 markdown 跟踪器时，说明推进模式不支持，改按 `--suggest` 或 `--list` 执行。**同一仓库同一时间只在一个会话里运行推进模式**，由第 1 步的 `find-next-advance` 锁保证。

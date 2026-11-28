@@ -48,12 +48,16 @@
 # rule; a conclusion's sources name session-verify.md in Flash mode and in the
 # two setup documents; and the ticket number stays in the title of item 6 only.
 # So is 票 #80: a multi-line script is never wrapped into one Bash command
-# (`bash -c`, `sh -c`, a `$'…'` string) — an `rm` inside it asks for
-# confirmation even under --dangerously-skip-permissions, and an unattended
-# session then sits at the prompt. SKILL.md states the rule next to its `rm`
-# rule, with the two ways out (a script file in a `mktemp -d` directory that
-# cleans up after itself, or separate Bash calls), and the section every
-# find-next Brief template shares states it next to the foreground-test rule.
+# (`bash -c`, `sh -c`, a `$'…'` string), whatever it holds — one with an `rm`
+# and one without both asked for confirmation even under
+# --dangerously-skip-permissions, and an unattended session then sits at the
+# prompt. SKILL.md states the rule next to its `rm` rule, with the two ways
+# out (a script file in a `mktemp -d` directory that cleans up after itself,
+# or separate Bash calls) and every other deletion its own `rm` with a
+# literal path; find-next's SKILL.md states it for its main session; and a
+# dispatched role gets it from its Brief: the section every find-next Brief
+# template shares, next to the foreground-test rule, and the fixed clauses of
+# the root Brief template.
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -430,6 +434,18 @@ has 'worker 空闲后不会被唤醒，后台收尾等于失联' \
   'Ticket Brief template says why: nothing wakes an idle worker' "$BRIEF_FIND_NEXT"
 has '测试与验证一律前台跑完再交最终报告；不得把测试放到后台然后结束回合' \
   'root Brief template runs its tests in the foreground before the final report' "$BRIEF_ROOT_TEMPLATE"
+# The root template carries the rule of 票 #80 next to that sentence too: the
+# wrapping is forbidden, and a multi-line script goes to a file under
+# `mktemp -d` or into separate Bash calls. Its fixed clauses forbid a
+# recursive deletion outright, so its sentence does not hand the cleanup to a
+# `trap` (a `trap` removing its `mktemp -d` directory is one) and leaves the
+# temporary directory to that clause: said in the report. The second check
+# pins that hand-over, so the shared section's sentence cannot be copied in
+# whole, `trap` included, to contradict the clause it would sit next to.
+has '不得用 `bash -c`、`sh -c`、`$'"'"'…'"'"'` 内联包裹多行脚本（含 `rm` / `del` 等删除类命令时尤其如此）：多行脚本写进 `mktemp -d` 目录下的脚本文件执行，或拆成多次独立调用' \
+  'root Brief template keeps a worker from wrapping a multi-line script inline' "$BRIEF_ROOT_TEMPLATE"
+has '临时目录的清理照上面「不要递归删除目录」那条，在报告里说明' \
+  'root Brief template leaves the cleanup of the script directory to its rule against recursive deletion' "$BRIEF_ROOT_TEMPLATE"
 # Step 5: the merge role's Brief and each fix role's Brief carry the rule.
 has 'carrying the foreground-test rule (its tests and verification finish in the foreground before its final report' \
   'SKILL.md step 5 merge-role Brief carries the foreground-test rule' "$SKILL"
@@ -489,25 +505,28 @@ has "${FOREGROUND_RULE_COMMON}" \
 # day the number of templates changes. The rule of 票 #80 (below) is counted
 # the same way over the same templates, so the count is a function: <what>
 # names the rule on the check's line, and a template counts when it holds
-# every text given.
+# every text given. Its failure detail is `has`'s shape — missing […] in
+# <file> — once per template that lacks a text, naming only the texts that
+# template lacks (the review of 票 #80: "11 of 12 templates have […]" said
+# neither which template nor where one text ended and the next began).
 in_every_template() { # what text...
-  local what=$1 total=0 holding=0 first= template holds text
+  local what=$1 total=0 holding=0 first= lacking= missing= template holds text
   shift
   for template in "$ROOT"/find-next/templates/*.md; do
     [ -f "${template}" ] || continue
     total=$((total + 1))
     [ -n "${first}" ] || first=${template}
-    holds=1
+    holds=1 missing=
     for text in "$@"; do
-      grep -Fq -- "${text}" "${template}" || holds=0
+      if ! grep -Fq -- "${text}" "${template}"; then holds=0; missing="${missing}${missing:+ | }[${text}]"; fi
     done
-    [ "${holds}" -eq 1 ] && holding=$((holding + 1))
+    if [ "${holds}" -eq 1 ]; then holding=$((holding + 1)); else lacking="${lacking:+${lacking}; }missing ${missing} in ${template#$ROOT/}"; fi
   done
   if [ -n "${first}" ] && [ "${holding}" -eq "${total}" ]; then
     ok "every find-next Brief template (${total}) carries ${what} in the section they share"
   else
     bad "every find-next Brief template carries ${what} in the section they share" \
-      "${holding} of ${total} templates have [${*}]"
+      "${lacking:-find-next/templates/ holds no Brief template}"
   fi
 }
 in_every_template 'the rule' "${FOREGROUND_RULE_COMMON}"
@@ -632,31 +651,69 @@ has "the Run's final report names that file as the dispatch's report path and sa
 
 # --- no inline script, in SKILL.md and in every Brief template (票 #80) ----------
 
-# On 2026-11-28 two unattended sessions (spec-25's diagnostic cleanup, spec-26's
-# fix-26-r2) sat at a confirmation nobody answered: a worker had wrapped a
-# multi-line script holding an `rm` into one Bash command — `bash -c '…'`,
-# `sh -c '…'` or a `$'…'` string — and the permission layer asked for
-# confirmation all the same. The rule against it is written where a reader
-# looks for the rule about an `rm`: in SKILL.md, next to "No unresolvable
-# `rm`", and once more in the section every find-next Brief template shares,
-# next to the foreground-test rule, so every role a template is written for
-# gets it. Each place is pinned as a whole — the rule with its three forms,
-# then the two ways out — so neither can be dropped on its own. A hook that
-# let such a script through would loosen a guard: it is recorded in
-# MAINTAINING and was not built.
-has "**No inline script.** A multi-line script wrapped into one Bash command — \`bash -c '…'\`, \`sh -c '…'\` or a \`$'…'\` string — meets the same confirmation when it holds an \`rm\` or another deleting command" \
-  'SKILL.md forbids wrapping a multi-line script into one Bash command' "$SKILL"
+# On 2026-11-28 two unattended sessions sat at a confirmation nobody answered,
+# both on a multi-line script wrapped into one Bash command — `bash -c '…'`,
+# `sh -c '…'` or a `$'…'` string: spec-25's diagnostic cleanup, whose script
+# held an `rm`, and spec-26's fix-26-r2, whose script held nothing but `read`,
+# `printf` and `grep` — no `rm`; the permission layer misjudged it. So the
+# rule is on the wrapping, not on the `rm`: a script that deletes nothing is
+# not exempt. The first review of 票 #80 found both written the other way
+# round — "fix-26-r2 and its rm script", and the rule made conditional on an
+# `rm` — so the fact and the unconditional statement are each pinned, and the
+# conditional phrase is pinned out. The rule is written where a reader looks
+# for the rule about an `rm`: in SKILL.md, next to "No unresolvable `rm`"; in
+# find-next's SKILL.md for its main session, next to the rule of 票 #79; and
+# in the Briefs a dispatched role reads — the section every find-next Brief
+# template shares, next to the foreground-test rule, and the fixed clauses of
+# the root Brief template. The way out through a script file takes the `rm`
+# out of the one place the permission layer reads, the Bash command line, so
+# the script may delete only in the `trap` that cleans up its own `mktemp -d`
+# directory and every other deletion is its own `rm` with a literal path.
+# Each place is pinned as a whole — the rule with its three forms, then the
+# two ways out — so neither can be dropped on its own. A hook that let such
+# a script through would loosen a guard: it is recorded in MAINTAINING and
+# was not built.
+has "**No inline script.** Never wrap a multi-line script into one Bash command — \`bash -c '…'\`, \`sh -c '…'\` or a \`$'…'\` string — whoever runs it. The ban is on the wrapping itself, not on an \`rm\` inside it: a script wrapped that way meets the same confirmation even under \`--dangerously-skip-permissions\`, and holding no deleting command is no protection" \
+  'SKILL.md forbids wrapping a multi-line script into one Bash command, deleting command or not' "$SKILL"
+has "whose \`bash -c \$'…'\` held nothing but \`read\`, \`printf\` and \`grep\` — no \`rm\` at all; the permission layer misjudged it" \
+  'SKILL.md records the fix-26-r2 script as holding no rm, stopped by a misjudgment' "$SKILL"
+without 'when it holds an `rm`' 'SKILL.md no longer makes an rm in the script the condition of the rule' "$SKILL"
 has 'written to a file in a `mktemp -d` directory and run from there, with a `trap` of its own to clean up, or the work is split into separate Bash calls' \
   'SKILL.md gives the two ways out of an inline script' "$SKILL"
+has 'Inside such a script file the only deletion is its `trap` cleaning up its own `mktemp -d` directory: every other deletion is its own `rm` command with a literal path' \
+  'SKILL.md keeps every deletion but the trap its own rm with a literal path' "$SKILL"
+has 'and the 固定条款 section of the root template, `templates/brief-implement.md`, states it next to that rule too' \
+  'SKILL.md names the root Brief template as a second source of the rule for a dispatched role' "$SKILL"
+# find-next's main session keeps the rule too, next to the rule of 票 #79.
+has "**主会话不内联包裹多行脚本**（票 #80）：不得用 \`bash -c\`、\`sh -c\`、\`\$'…'\` 把多行脚本包进一条 Bash 命令，脚本里有没有 \`rm\` 都一样" \
+  'find-next SKILL.md has the rule against wrapping a multi-line script, rm or not' "$FIND_NEXT"
+has '脚本里配 `trap` 清理它自己的 `mktemp -d` 目录；除此之外的删除一律单独 `rm` 带字面路径；或把活拆成多次独立的 Bash 调用' \
+  'find-next SKILL.md gives the ways out of a multi-line script' "$FIND_NEXT"
 # The Ticket Brief template is where the check of the section's sentence is
 # read, as for the foreground-test rule; the count over the templates that
-# exist is the other check, with the two ways out counted in.
+# exist is the other check, with the two ways out and the deletion rule
+# counted in.
 INLINE_RULE_COMMON="不得用 \`bash -c\`、\`sh -c\`、\`\$'…'\` 内联包裹多行脚本（含 \`rm\` / \`del\` 等删除类命令时尤其如此）"
 INLINE_WAYS_OUT_COMMON='多行脚本写进 `mktemp -d` 目录下的脚本文件执行，脚本里配 `trap` 清理；或拆成多次独立调用'
+INLINE_DELETION_COMMON='脚本自身 `trap` 清理它的 `mktemp -d` 目录除外，其他删除一律单独 `rm` 带字面路径'
 has "${INLINE_RULE_COMMON}" \
   'Ticket Brief template keeps a worker from wrapping a multi-line script inline' \
   "$BRIEF_FIND_NEXT"
-in_every_template 'the rule and its two ways out' "${INLINE_RULE_COMMON}" "${INLINE_WAYS_OUT_COMMON}"
+in_every_template 'the rule, its two ways out and its deletion rule' "${INLINE_RULE_COMMON}" "${INLINE_WAYS_OUT_COMMON}" "${INLINE_DELETION_COMMON}"
+# GLOSSARY names the rule, as it names the foreground-test rule, and the two
+# entries that describe the section every find-next Brief template shares
+# point at it.
+has '**No inline script (禁内联脚本)**:' 'GLOSSARY defines the No inline script rule' "$GLOSSARY"
+has 'The ban is on the wrapping itself, not on an `rm` inside it: a script wrapped that way meets a confirmation even under `--dangerously-skip-permissions`, and holding no deleting command is no protection' \
+  'GLOSSARY states the No inline script rule as unconditional' "$GLOSSARY"
+has 'inside that file only the `trap` deletes anything, its own `mktemp -d` directory, and every other deletion is its own `rm` command with a literal path' \
+  'GLOSSARY states the deletion rule inside the script file' "$GLOSSARY"
+has 'the section every find-next Brief template shares, next to the foreground-test rule, and the 固定条款 section of the root Brief template' \
+  'GLOSSARY names where a dispatched role gets the No inline script rule' "$GLOSSARY"
+has 'the foreground-test rule, in its general form, and the No inline script rule' \
+  'GLOSSARY Brief entry points at the shared section for both process rules' "$GLOSSARY"
+has 'for a test or a long command, next to the No inline script rule' \
+  'GLOSSARY foreground-test rule entry points at the rule next to it in the shared section' "$GLOSSARY"
 
 # --- hooks README ----------------------------------------------------------------
 
