@@ -10,12 +10,15 @@ How the implementing roles run is fixed (规格 #26): a headless read-only explo
 
 ## Install
 
-Install the repository as a Claude skill:
+Install the repository as a Claude skill with the repository's own install script — it is the one install step, idempotent (re-running it changes nothing once everything is in place), and the update is `git pull && ./install.sh`:
 
 ```bash
 git clone https://github.com/allanpk716/implement-spec-split \
   ~/.claude/skills/implement-spec-split
+cd ~/.claude/skills/implement-spec-split && ./install.sh
 ```
+
+`./install.sh` links every skill the repository tracks (the root skill and the sub-skills `find-next`, `grill-feature`, `grill-map`, `grill-router`) into `~/.claude/skills/<name>` as symlinks to the checkout it runs from — creating missing links, re-pointing wrong ones, removing dangling ones, never touching a real directory of the same name — and then checks the repository's expectations of `~/.claude/settings.json`: a tighten item not met (the `delegate-guard` PreToolUse matcher must cover `Edit`, `Write` and `Bash`) is applied after the file is backed up to `~/.claude/backups/install-<timestamp>/` and validated as JSON; a loosen item is never applied and only reported under 「未执行的放宽项」 (`unexecutedLoosenings` in `--json`, exit 1). An unregistered hook is not drift. Both the clone-direct shape above and a clone anywhere else linked by `./install.sh` are supported. `./install.sh --check` reports without changing anything (exit 1 on drift) and `--json` prints one JSON object for scripts; `scripts/doctor.sh` runs `--check` as one of its checks. On Windows (Git Bash) nothing is linked: each skill not in place prints the `mklink /J` (or copy) manual step as a WARN. When the repository changes, run `./install.sh` again; the landing flow of `SKILL.md` (step 9) does so by itself after a landing.
 
 The user also needs Claude Code, the `mattpocock-skills` plugin, Git, and Node.js. Windows additionally needs Git Bash because the worker wrappers are Bash scripts. The target project must have the issue-tracker setup produced by `/setup-matt-pocock-skills`. Orca must be running with the 实现 route's launcher (`claude-glm` by default) on PATH, since the Ticket workers are Orca workers.
 
@@ -61,7 +64,7 @@ This reports state, recent commands and edits, time since the last progress even
 
 ## Find the next step (`find-next`)
 
-`find-next/` is a separate, read-only skill in this repo. Install it with `ln -s <clone>/find-next ~/.claude/skills/find-next`. When the user asks what to do next with their wayfinder maps, follow `find-next/SKILL.md`: run the scanner, judge (by default on a `--read-only` codex worker), and return one next step with the command. When the user wants the whole picture ("what is left", "give me a to-do list"), use `--list`: run `scripts/pipeline-status.sh --all` yourself and print the grouped list, no worker. Never edit, claim or label tickets while doing so. When the user wants all missing specs written at once, use `--batch`: group the tickets, draft each group on a `--read-only` codex worker with `find-next/templates/brief-spec-batch.md`, review, ask the user once, and only after their confirmation publish with `find-next/scripts/publish-batch.sh --apply`. `/to-spec` and `/to-tickets` cannot be invoked by the model; tell the user to type them.
+`find-next/` is a separate, read-only skill in this repo. `./install.sh` (see Install) links it as `~/.claude/skills/find-next`; by hand that is `ln -s <clone>/find-next ~/.claude/skills/find-next`. When the user asks what to do next with their wayfinder maps, follow `find-next/SKILL.md`: run the scanner, judge (by default on a `--read-only` codex worker), and return one next step with the command. When the user wants the whole picture ("what is left", "give me a to-do list"), use `--list`: run `scripts/pipeline-status.sh --all` yourself and print the grouped list, no worker. Never edit, claim or label tickets while doing so. When the user wants all missing specs written at once, use `--batch`: group the tickets, draft each group on a `--read-only` codex worker with `find-next/templates/brief-spec-batch.md`, review, ask the user once, and only after their confirmation publish with `find-next/scripts/publish-batch.sh --apply`. `/to-spec` and `/to-tickets` cannot be invoked by the model; tell the user to type them.
 
 ## Agent operating rules
 

@@ -59,19 +59,39 @@ This division of labour is optimized for one specific situation: **Claude quota 
 
 1. Claude Code, Git, and Node.js (the scripts use node for JSON and processes).
 2. Windows: Git Bash (the wrappers are all Bash scripts).
-3. Clone this repository into Claude's skills directory, **without changing the path**. The Stage 3 rules and hook both reference this path:
+3. Clone this repository, then run the install script — since 规格 #58 that is the one install step, and it is idempotent: re-running it changes nothing once everything is in place:
 
    ```bash
    git clone https://github.com/allanpk716/implement-spec-split ~/.claude/skills/implement-spec-split
+   cd ~/.claude/skills/implement-spec-split && ./install.sh
+   ```
+
+   Both install shapes are supported: **clone-direct** (above — `~/.claude/skills/implement-spec-split` *is* the repository; the root skill's place is the main checkout's real directory, which counts as in place, so the script only links the sub-skills) and **symlink** (a clone anywhere else, for example `~/orca/implement-spec-split`, with `./install.sh` run from that clone, so all five skill links point at it). `install.sh` takes the checkout it runs in as the main checkout, and the links point there. The path `~/.claude/skills/implement-spec-split` holds in both shapes (clone-direct: it is the repository; symlink: it resolves through the link to the clone), so the Stage 3 rules and hook may reference it as it is.
+
+   `./install.sh` does two things:
+
+   - **Skill symlinks**: for every directory git tracks that holds a `SKILL.md` (the root skill and the sub-skills `find-next`, `grill-feature`, `grill-map`, `grill-router`) it makes `~/.claude/skills/<name>` a symlink to that directory in the main checkout — a missing link is created, a link pointing elsewhere is re-pointed, a dangling link left by a skill the checkout no longer has is removed; a real directory of the same name is never touched, only warned about. "Points correctly" is judged by the physical directory the link resolves to, so a link written by hand as `ln -s ~/.claude/skills/implement-spec-split/<name> …` (below) resolves to the same directory and counts as in place.
+   - **Local configuration expectations**: a list of what the checkout expects of this machine's configuration (data built into `install.sh`), each item marked tighten or loosen. A tighten item not met (v1 has one: the `delegate-guard` PreToolUse matcher must cover `Edit`, `Write` and `Bash`) is applied after `settings.json` is backed up to `<its directory>/backups/install-<timestamp>/`; the edit is made in place with node, and the written file is validated as JSON — otherwise the backup is restored and the row is FAIL. A loosen item is never applied: it is only listed under 「未执行的放宽项」 (a section of its own in the human output, `unexecutedLoosenings` in `--json`) as a WARN, and the exit code is 1. An expectation whose hook is not registered is not drift: it is neither handled nor reported (Stage 3 is opt-in; until a hook is registered, `install.sh` only links).
+
+   `./install.sh --check` reports and changes nothing (no link, no `settings.json`, no backup): exit 0 when everything is in place, 1 on any drift. `./install.sh --json` prints one JSON object only (the shape of `scripts/doctor.sh`: a `checks` array plus `summary`) for scripts. On Windows (Git Bash) nothing is linked or removed: each skill not in place prints one manual step (`mklink /J`, or copy) as a WARN; the expectations half only reads and writes the file through node, the same on every platform.
+
+   To link by hand instead, the manual equivalent on macOS / Linux is these four links (on Windows use `mklink /J`, or copy; keep up yourself when a skill is added, renamed or retired):
+
+   ```bash
+   ln -s ~/.claude/skills/implement-spec-split/find-next ~/.claude/skills/find-next
+   ln -s ~/.claude/skills/implement-spec-split/grill-feature ~/.claude/skills/grill-feature
+   ln -s ~/.claude/skills/implement-spec-split/grill-map ~/.claude/skills/grill-map
+   ln -s ~/.claude/skills/implement-spec-split/grill-router ~/.claude/skills/grill-router
    ```
 
 **Verify**
 
 ```bash
 ls ~/.claude/skills/implement-spec-split/{SKILL.md,scripts,templates,hooks}
+~/.claude/skills/implement-spec-split/install.sh --check      # exit 0 when all in place; exit 1 on drift, listing each one
 ```
 
-After installing any stage, you can run `scripts/doctor.sh` to check it.
+After installing any stage, you can run `scripts/doctor.sh` to check it; when its "local install state" check reports drift, run `./install.sh` as its hint says.
 
 ---
 
@@ -146,10 +166,12 @@ After a wayfinder discussion leaves you with a pile of tickets and no idea which
 
 Maps and tickets marked shelved (搁置) are skipped. The implementation stage is not scanned; that is `/implement-spec-split --status`.
 
-**Install**: symlink it into the skills directory (on Windows use `mklink /J`, or copy). Symlink the Stage route command `/grill-router` the same way; it is described in Stage 4:
+**Install**: Stage 0's `./install.sh` has already symlinked it into the skills directory together with the two Design-session wrapper skills and the Stage route command `/grill-router` (described in Stage 4); after the repository changes, run it again (`git pull && ./install.sh`; the landing flow runs it by itself). The manual equivalent (on Windows use `mklink /J`, or copy):
 
 ```bash
 ln -s ~/.claude/skills/implement-spec-split/find-next ~/.claude/skills/find-next
+ln -s ~/.claude/skills/implement-spec-split/grill-feature ~/.claude/skills/grill-feature
+ln -s ~/.claude/skills/implement-spec-split/grill-map ~/.claude/skills/grill-map
 ln -s ~/.claude/skills/implement-spec-split/grill-router ~/.claude/skills/grill-router
 ```
 
@@ -257,7 +279,7 @@ This makes everyday sessions in **all projects** follow this division: Opus hand
    }
    ```
 
-   On macOS / Linux, replace the path with the absolute path of `node ~/.claude/skills/implement-spec-split/hooks/delegate-guard.js`. Back up `settings.json` before changing it.
+   On macOS / Linux, replace the path with the absolute path of `node ~/.claude/skills/implement-spec-split/hooks/delegate-guard.js`. The `Bash` in the matcher needs no manual check or backup: later, run `./install.sh` in the repository. It lists "the delegate-guard matcher covers `Edit`, `Write` and `Bash`" as an expectation (tighten), and when the registered entry lacks `Bash` it first backs `settings.json` up to `~/.claude/backups/install-<timestamp>/`, then appends the missing tools to the matcher (an existing `NotebookEdit` stays as it is) and validates the written file as JSON. Registered as above, `Bash` already included, nothing is appended. `install.sh` does not register a hook for you — an unregistered hook is not drift — so the hooks below are still added by hand.
 
    **Also register unattended-ask-guard**: nobody answers questions in an unattended `/implement-spec-split --auto-land` session, so this hook denies `AskUserQuestion` and tells the model to use automatic decisions or a parking report instead. Append one more item to the same `hooks.PreToolUse` array:
 
@@ -414,7 +436,7 @@ Everyday scheduling spends no subscription quota: the main session (Orchestrator
 
 **Prerequisites**
 
-- Stage 0 (symlink install) and Stage 3 (the delegate-guard hook) are in place; the `/grill-feature`, `/grill-map` and `/grill-router` symlinks are installed per the README.
+- Stage 0 (`./install.sh` has run, so the `/grill-feature`, `/grill-map` and `/grill-router` symlinks are in place) and Stage 3 (the delegate-guard hook) are in place.
 - `claude-glm` is set up (the Stage 2 GLM endpoint and API key): `claude-flash` reuses its endpoint and `~/ops/state/claude-glm/apikey` and never copies the key.
 - Install the launcher (the four-piece set lives in `~/ops/services/claude-flash/`; see its README.md):
 
@@ -492,15 +514,15 @@ Both repositories carry the bookmark tag `pre-flash-orchestrator`, and the globa
 
 ## Updating and rollback
 
-- **Update**: `cd ~/.claude/skills/implement-spec-split && git pull`. Templates and scripts take effect immediately; the hook takes effect on its next call.
+- **Update**: `cd ~/.claude/skills/implement-spec-split && git pull && ./install.sh` (clone-direct shape; with the symlink shape run the same in the clone). `install.sh` links a skill the repository gained, removes the dangling links of a retired one and applies a new tighten item of the expectation list (after a backup); re-running it changes nothing. Templates and scripts take effect immediately; the hook takes effect on its next call. An unattended landing runs it by itself after every landing (step 9 of the root `SKILL.md`), and fast-forwards the clone-direct copy to the new main first, so no manual update is normally needed; when it cannot (not on `main`, or not clean) the landing report's 要你做 says `git pull`.
 - **Update the division rules**: after `templates/global-claude-md.md` changes in this repository, manually synchronize it to `~/.claude/CLAUDE.md` (the global file is outside repository management).
-- **Upgrade to the Stage route table**: if the version you had installed the `judgment-model` and `worker-model` switches, remove their two symlinks from `~/.claude/skills/` and symlink `grill-router`; the first `/grill-router` run carries the old settings over (see Stage 4).
-- **Pause the division of labour**: remove the delegate-guard entry from `settings.json` and remove the division section from CLAUDE.md.
-- **Change machines**: three things must move: the cloned repository (Stage 0), `~/.codex/config.toml` and the proxy (Stage 2), and the CLAUDE.md division section plus the hook registration in `settings.json` (Stage 3). Cloning the repository alone is not enough.
+- **Upgrade to the Stage route table**: if the version you had installed the `judgment-model` and `worker-model` switches, `./install.sh` removes their two dangling symlinks from `~/.claude/skills/` and symlinks `grill-router`; the first `/grill-router` run carries the old settings over (see Stage 4).
+- **Pause the division of labour**: remove the delegate-guard entry from `settings.json` and remove the division section from CLAUDE.md. `install.sh` then expects nothing of it (an unregistered hook is not drift); only Stage 4 is unavailable.
+- **Change machines**: three things must move: the cloned repository with `./install.sh` run (Stage 0), `~/.codex/config.toml` and the proxy (Stage 2), and the CLAUDE.md division section plus the hook registration in `settings.json` (Stage 3). Cloning the repository alone is not enough.
 
 ## Self-check
 
-The checks in `scripts/doctor.sh` only read local configuration and do not modify configuration files. It reports current status by "foundation, Stage 1, Stage 2, Stage 3". Its default output is Chinese; use `--lang en` or `DOCTOR_LANG=en` to get English output:
+The checks in `scripts/doctor.sh` only read local configuration and do not modify configuration files. It reports current status by "foundation, Stage 1, Stage 2, Stage 3"; the foundation group's "local install state" check calls `install.sh --check --json` (read-only as well): a missing, mis-pointed or dangling skill link is a WARN, an unmet tighten expectation a FAIL, and every hint says to run install.sh (which the landing flow runs by itself). Its default output is Chinese; use `--lang en` or `DOCTOR_LANG=en` to get English output:
 
 - `PASS`: the check passed.
 - `WARN`: the item may affect the corresponding stage but does not block other stages; fix it according to the message.
