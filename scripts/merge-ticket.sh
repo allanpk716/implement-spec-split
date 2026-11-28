@@ -403,14 +403,16 @@ INTEGRATION_TIP=$(git -C "$WORKTREE" rev-parse --verify --quiet "refs/heads/$INT
 TICKET_TIP=$(git -C "$WORKTREE" rev-parse --verify --quiet "$TICKET_REF") ||
   gate_fail "could not read the tip of $TICKET"
 counter_base=$(first_parent_base "$TICKET_REF" "refs/heads/$INTEGRATION") || counter_base=
+# Computed once: the merge-base is the Ticket side's own base below, and the
+# fallback for the Integration side's when there is no first-parent base.
+counter_merge_base=$(git -C "$WORKTREE" merge-base "$INTEGRATION_TIP" "$TICKET_TIP" 2>/dev/null) || counter_merge_base=
 if [ -z "$counter_base" ]; then
   # No commit of the Ticket's first-parent chain is on the Integration branch
   # (rebased onto something else, or unrelated histories): the merge-base is
   # the best remaining guess at the fork point.
-  counter_base=$(git -C "$WORKTREE" merge-base "$INTEGRATION_TIP" "$TICKET_TIP" 2>/dev/null) || counter_base=
+  counter_base=$counter_merge_base
 fi
 if [ -n "$counter_base" ]; then
-  counter_merge_base=$(git -C "$WORKTREE" merge-base "$INTEGRATION_TIP" "$TICKET_TIP" 2>/dev/null) || counter_merge_base=
   if [ -n "$counter_merge_base" ]; then
     version_files=$(printf '%s\n' VERSION version.py version.go _version.py ${EXTRA_COUNTERS:+"$EXTRA_COUNTERS"} |
       awk 'NF && !seen[$0]++')
