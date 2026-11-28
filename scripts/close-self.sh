@@ -286,7 +286,9 @@ ticket_worktrees_of() { # spec worktree
 
 # The Ticket dispatches left in the run directory: for every interactive
 # sidecar whose worktree the dispatch made and that was not released,
-# sidecar<TAB>worktree<TAB>branch<TAB>base branch.
+# sidecar<US>worktree<US>branch<US>base branch (US is the unit separator, \x1f:
+# branch and base may be empty, and a tab would let read fold them together
+# and hand base's place to branch).
 ticket_sidecars() {
   [ -n "$RUN_DIR" ] || return 0
   if [ ! -d "$RUN_DIR" ]; then
@@ -305,14 +307,14 @@ ticket_sidecars() {
       if (!value || value.form !== "interactive" || value.worktree_created !== true) continue;
       if (typeof value.worktree !== "string" || value.worktree === "" || value.released_at) continue;
       process.stdout.write([path.join(runDir, name), value.worktree,
-        String(value.branch || ""), String(value.base_branch || "")].join("\t") + "\n");
+        String(value.branch || ""), String(value.base_branch || "")].join("\x1f") + "\n");
     }
   ' "$RUN_DIR"
 }
 
 release_tickets() {
   local sidecar worktree branch base reason
-  while IFS=$'\t' read -r sidecar worktree branch base; do
+  while IFS=$'\x1f' read -r sidecar worktree branch base; do
     [ -n "$sidecar" ] || continue
     case "$SEEN" in *" $worktree "*) continue ;; esac
     SEEN="$SEEN$worktree "

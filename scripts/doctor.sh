@@ -48,13 +48,14 @@ EXPECTED_SKILL_DIR=$HOME/.claude/skills/implement-spec-split
 TMP_ROOT=$(mktemp -d)
 CHECKS=$TMP_ROOT/checks.jsonl
 HOOKS_TSV=$TMP_ROOT/hooks.tsv
+SUBAGENT_TSV=$TMP_ROOT/subagent.tsv
 PREFLIGHT_TSV=$TMP_ROOT/preflight.tsv
 SMOKE_OUT=$TMP_ROOT/smoke.out
 GLM_OUT=$TMP_ROOT/glm.out
 : > "$CHECKS"
 
 cleanup() {
-  for file in "$CHECKS" "$HOOKS_TSV" "$PREFLIGHT_TSV" "$SMOKE_OUT" "$GLM_OUT"; do
+  for file in "$CHECKS" "$HOOKS_TSV" "$SUBAGENT_TSV" "$PREFLIGHT_TSV" "$SMOKE_OUT" "$GLM_OUT"; do
     [ -e "$file" ] && rm -f "$file"
   done
   rmdir "$TMP_ROOT" 2>/dev/null || true
@@ -144,8 +145,11 @@ fi
 # 阶段 3 配置状态先判定，用于决定阶段 2 缺失是 WARN 还是 FAIL。
 HOOK_REGISTERED=0
 RULE_INSTALLED=0
-if [ -f "$SETTINGS_JSON" ]; then
-  SETTINGS_JSON=$SETTINGS_JSON OUT_FILE=$HOOKS_TSV node - > "$HOOKS_TSV" <<'NODE'
+
+# The PreToolUse entries of settings.json whose hook command names the script:
+# one matcher<TAB>command row each.
+hooks_registered() { # script out-file
+  SETTINGS_JSON=$SETTINGS_JSON HOOK_SCRIPT=$1 node - > "$2" <<'NODE'
 const fs = require('fs');
 let root;
 try { root = JSON.parse(fs.readFileSync(process.env.SETTINGS_JSON, 'utf8')); } catch { process.exit(0); }
@@ -154,12 +158,17 @@ if (!Array.isArray(entries)) process.exit(0);
 for (const entry of entries) {
   const hooks = Array.isArray(entry?.hooks) ? entry.hooks : [];
   for (const hook of hooks) {
-    if (String(hook?.command || '').includes('delegate-guard.js')) {
+    if (String(hook?.command || '').includes(process.env.HOOK_SCRIPT)) {
       console.log([String(entry.matcher || ''), String(hook.command || '')].join('\t'));
     }
   }
 }
 NODE
+}
+
+if [ -f "$SETTINGS_JSON" ]; then
+  hooks_registered delegate-guard.js "$HOOKS_TSV"
+  hooks_registered subagent-guard.js "$SUBAGENT_TSV"
   [ -s "$HOOKS_TSV" ] && HOOK_REGISTERED=1
 fi
 TEMPLATE_VERSION=$(sed -n 's/.*opus-codex-division: v\([0-9][0-9]*\).*/\1/p' "$SKILL_DIR/templates/global-claude-md.md" | tail -n 1)
@@ -282,6 +291,25 @@ esac
 if [ "$STAGE3_CONFIGURED" -eq 0 ]; then
   add stage3 INFO "阶段 3 未配置" "Stage 3 is not configured"
 else
+  matcher_covers() {
+    local matcher=$1 tool=$2 item
+    IFS='|' read -ra items <<< "$matcher"
+    for item in "${items[@]}"; do
+      [[ $item == "$tool" ]] && return 0
+    done
+    return 1
+  }
+
+  # The path of <script> in a `node <path>` hook command, or nothing.
+  hook_command_path() { # command script
+    HOOK_COMMAND=$1 HOOK_SCRIPT=$2 node -e '
+      const command = process.env.HOOK_COMMAND;
+      const match = command.match(/(?:^|[|;&\s\/\\"])(?:node(?:\.exe)?)"?\s+(?:"([^"]+)"|\x27([^\x27]+)\x27|(\S+))/i);
+      const path = match ? (match[1] || match[2] || match[3] || "") : "";
+      console.log(path.includes(process.env.HOOK_SCRIPT) ? path : "");
+    '
+  }
+
   if [ "$HOOK_REGISTERED" -eq 0 ]; then
     add stage3 FAIL "阶段 3 只配置了一半：缺少 delegate-guard hook" "Stage 3 is half-configured: the delegate-guard hook is missing" "按 docs/setup.md 阶段 3 注册 hook" "Register the hook as described in docs/setup.md stage 3"
   elif [ "$RULE_INSTALLED" -eq 0 ]; then
@@ -295,23 +323,10 @@ else
     while IFS=$'\t' read -r matcher command; do
       HOOK_MATCHER=$matcher
       HOOK_COMMAND=$command
-      HOOK_PATH=$(HOOK_COMMAND=$command node -e '
-        const command = process.env.HOOK_COMMAND;
-        const match = command.match(/(?:^|[|;&\s\/\\"])(?:node(?:\.exe)?)"?\s+(?:"([^"]+)"|\x27([^\x27]+)\x27|(\S+))/i);
-        const path = match ? (match[1] || match[2] || match[3] || "") : "";
-        console.log(path.includes("delegate-guard.js") ? path : "");
-      ')
+      HOOK_PATH=$(hook_command_path "$command" delegate-guard.js)
       break
     done < "$HOOKS_TSV"
 
-    matcher_covers() {
-      local matcher=$1 tool=$2 item
-      IFS='|' read -ra items <<< "$matcher"
-      for item in "${items[@]}"; do
-        [[ $item == "$tool" ]] && return 0
-      done
-      return 1
-    }
     if matcher_covers "$HOOK_MATCHER" Edit && matcher_covers "$HOOK_MATCHER" Write; then
       add stage3 PASS "hook matcher 覆盖 Edit 和 Write" "The hook matcher covers Edit and Write"
     else
@@ -346,6 +361,41 @@ JSON
         add stage3 FAIL "delegate-guard 冒烟测试未拒绝 15 行 Write" "The delegate-guard smoke test did not deny a 15-line Write" "hook 会静默失效；运行 hooks/test-delegate-guard.js 并检查配置" "The hook fails silently; run hooks/test-delegate-guard.js and inspect the configuration"
       fi
       rmdir "$SMOKE_HOME" 2>/dev/null || true
+    fi
+  fi
+
+  # subagent-guard (规格 #26) keeps the flash main thread from opening a
+  # code-writing subagent. Not registered is a WARN -- the rules still say not
+  # to, and delegate-guard denies the subagent's writes -- but registered wrong
+  # is a FAIL: then it silently does nothing.
+  SUBAGENT_MATCHER=
+  SUBAGENT_COMMAND=
+  [ -s "$SUBAGENT_TSV" ] && IFS=$'\t' read -r SUBAGENT_MATCHER SUBAGENT_COMMAND < "$SUBAGENT_TSV"
+  if [ -z "$SUBAGENT_COMMAND" ]; then
+    add stage3 WARN "未注册 subagent-guard hook：flash 主线程仍能开会话内子代理" "The subagent-guard hook is not registered: the flash main thread can still open an in-session subagent" "按 docs/setup.md 阶段 3「同时注册 subagent-guard」注册" "Register it as described in docs/setup.md stage 3 (Register subagent-guard as well)"
+  else
+    add stage3 PASS "已注册 subagent-guard hook" "The subagent-guard hook is registered"
+    if matcher_covers "$SUBAGENT_MATCHER" Agent; then
+      add stage3 PASS "subagent-guard matcher 覆盖 Agent" "The subagent-guard matcher covers Agent"
+    else
+      add stage3 FAIL "subagent-guard matcher \"$SUBAGENT_MATCHER\" 未覆盖 Agent" "The subagent-guard matcher \"$SUBAGENT_MATCHER\" does not cover Agent" "参考 hooks/README.md 使用 Agent|Task" "Use Agent|Task as shown in hooks/README.md"
+    fi
+    SUBAGENT_PATH=$(hook_command_path "$SUBAGENT_COMMAND" subagent-guard.js)
+    if [ -z "$SUBAGENT_PATH" ]; then
+      add stage3 FAIL "无法从 hook command 解析 subagent-guard.js 路径" "Could not parse the subagent-guard.js path from the hook command" "使用 node <绝对路径>/subagent-guard.js" "Use node <absolute-path>/subagent-guard.js"
+    elif [ ! -f "$SUBAGENT_PATH" ]; then
+      add stage3 FAIL "subagent-guard.js 不存在：$SUBAGENT_PATH" "subagent-guard.js does not exist: $SUBAGENT_PATH" "hook 会静默失效；修正 settings.json 里的路径" "The hook fails silently; fix the path in settings.json"
+    else
+      add stage3 PASS "subagent-guard.js 存在" "subagent-guard.js exists"
+      : > "$SMOKE_OUT"
+      FLASH_ORCHESTRATOR=1 node "$SUBAGENT_PATH" <<'JSON' >> "$SMOKE_OUT" 2>&1 || true
+{"tool_name":"Agent","tool_input":{"subagent_type":"general-purpose","prompt":"write the code"}}
+JSON
+      if grep -q '"permissionDecision":"deny"' "$SMOKE_OUT"; then
+        add stage3 PASS "subagent-guard 冒烟测试拒绝 flash 主线程开子代理" "The subagent-guard smoke test denies a subagent from the flash main thread"
+      else
+        add stage3 FAIL "subagent-guard 冒烟测试未拒绝 flash 主线程开子代理" "The subagent-guard smoke test did not deny a subagent from the flash main thread" "hook 会静默失效；运行 hooks/test-subagent-guard.js 并检查配置" "The hook fails silently; run hooks/test-subagent-guard.js and inspect the configuration"
+      fi
     fi
   fi
 

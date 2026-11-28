@@ -13,7 +13,7 @@ supersedes: ADR-0002, ADR-0003
 - **Launcher profile 由本项目维护，不用 Orca agent id**：Orca 不能注册自定义 agent（stablyai/orca#2284），`openclaude` 槽位不接受 `--model`。GLM 启动器走「`orca terminal create --command "<launcher> --model … --effort …"` + `worker-start --terminal`」收编（`docs/orca-smoke-2026-11-27.md` 实测通过，含嵌套 worktree）。
 - **工作区是三层树**：主会话 → 规格（`new-child`）→ 票（`new-child`，`--base-branch spec-<n>`），侧栏可折叠；票合入后、规格落地后释放并删除工作区，停车的保留。`progress-tab.sh` 退役。merger 改为脚本，冲突才起 worker。
 - **规格会话入口靠脚本验证结果**：`worker-start` 把 Orca 的 preamble 放在 spec 前，`/implement-spec-split N` 由模型自己调用 Skill（实测 flash 会照做，但不是机制保证）。`launch-wave` 在限定时间内检查认领记录是否出现；没出现时先读终端，确认没开始（如 prompt 还没提交）才停掉、`--retry-of` 重派一次，看到在动就延长等待，判断不了就停车（社区实测「已投递」不等于已开始、启动可慢到 13 分钟，沉默时盲目重派会把副作用做两遍）。
-- **flash 主会话及其拉起的流程里，五个非编排阶段一律经路由表派发**，会话内用 Agent 工具做实现或审查由 hook 拦。CC 原生订阅会话保持现状（会话内子代理照用），只有经 `codex-worker.sh` 派出的 worker 受路由表影响：带 `--read-only` 读「调研起草」，否则读「实现」。
+- **flash 主会话及其拉起的流程里，五个非编排阶段一律经路由表派发**，会话内用 Agent 工具做实现或审查由 hook 拦。CC 原生订阅会话保持现状（会话内子代理照用），只有经 `codex-worker.sh` 派出的 worker 受路由表影响：带 `--read-only` 读「调研起草」，否则读「实现」。（2026-11-28 注：规格 #26 票 #45 起，CC 原生订阅会话的实现阶段同样经派发模块（`stage-dispatch.sh`）走 Orca worker，不再用会话内子代理；只有第 7 步审查保留会话内子代理（`mattpocock-skills:code-review`），规格 US13 说的「会话内子代理不受影响」指的是 hook 不拦，不是实现仍可交给它。）
 
 ## Considered Options
 
@@ -21,7 +21,7 @@ supersedes: ADR-0002, ADR-0003
 - **路由表直接写 Orca agent id**：否决，见上文 #2284 与 `openclaude` 不支持 `--model`。Orca 以后支持自定义 agent 时只改档案，表不动。
 - **审查、诊断也改成 Orca worker**：否决。`worker-start` 只起 TUI，没有 per-dispatch 工具白名单、没有退出码；无人值守会自动采纳审查结论，额度停车和失败必须分得清。
 - **保留两个旧开关当别名**：否决，用户要入口少。
-- **原生会话也强制走路由表并拦子代理**：先同意后撤回。原生会话是用户在场的手动场景，保持现状。
+- **原生会话也强制走路由表并拦子代理**：先同意后撤回。原生会话是用户在场的手动场景，保持现状。（2026-11-28 注：规格 #26 票 #45 起部分重开——原生会话的实现阶段也经派发模块，与 flash 会话同一条路；拦截没有重开，原生会话的子代理仍不由 hook 拦。）
 - **票的实现 worker 在规格工作区里开终端标签**：否决，用户不要一堆标签；改为嵌套子工作区。
 - **规格会话入口改回 `worktree create --prompt`（命令行展开，确定）**：否决，那样拿不到 Orca 的 worker 生命周期；改用脚本检查认领记录。
 

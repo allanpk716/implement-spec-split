@@ -68,6 +68,10 @@ has 'stage-dispatch.sh wait --sidecar' 'SKILL.md waits with the module' "$SKILL"
 has 'stage-dispatch.sh release --sidecar' 'SKILL.md releases through the module' "$SKILL"
 has 'merge-ticket.sh --worktree <integration worktree>' 'SKILL.md merges with the script first' "$SKILL"
 has 'merge-ticket.sh' 'SKILL.md names the merger script' "$SKILL"
+# Step 5 tells a landed ticket (exit 5) from an incomplete one (exit 2): the
+# first is released and gone on with, never dispatched again.
+has '- `5` (the Ticket branch is already part of the integration branch' 'SKILL.md step 5 knows merge-ticket exit 5' "$SKILL"
+has 'Do not dispatch the ticket again' 'SKILL.md step 5 does not re-dispatch a landed ticket' "$SKILL"
 has 'find-next/templates/brief-implement.md' 'SKILL.md names the Ticket Brief template' "$SKILL"
 has 'orca orchestration run-create' 'SKILL.md creates the Orca Run for Ticket workers' "$SKILL"
 has 'WORKER_ALLOW_FLASH=1' 'SKILL.md lets the flash session run the headless exploration' "$SKILL"

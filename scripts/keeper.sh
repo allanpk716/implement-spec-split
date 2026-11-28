@@ -5,7 +5,13 @@
 # two kinds of unattended wait which cost the most time:
 #   1. a Run parked on quota or a transient error is resumed once its
 #      recoverable time has passed (at most KEEPER_MAX_RESUMES times per 24h);
-#   2. a session that died (claim interrupted, no new report) is resumed;
+#   2. a session that died (claim interrupted, no new report) is asked of Orca
+#      first, by the rule of 3 (an interrupted claim only says the claiming
+#      pid is gone: a Spec parked with its reservation kept is found so once
+#      the reservation lapses, while its session still works): resumed when
+#      every worker in its Spec worktree exited or none is listed there (the
+#      terminals Orca still lists are closed first), left alone and reported
+#      once when a worker is live or Orca cannot vouch for it;
 #   3. a session whose files went silent for KEEPER_STALL_MIN is asked of
 #      Orca, which manages it as a worker (the first evidence; the file times
 #      are the second): a live worker is left alone, however old the files
@@ -72,12 +78,13 @@ usage() {
 usage: $SCRIPT_NAME [--once] [--dry-run] [--repo <owner/name>] [--state <file>]
 
 Runs one keeper round: resumes quota/transient parking and dead sessions when
-their recoverable time has passed, asks Orca whether a silent session is still
-alive and restarts it only when Orca says it exited, notifies a human about
-parking that needs a decision and about sessions Orca cannot vouch for, and
-sweeps abandoned Spec and Ticket worktrees (scripts/sweep-worktrees.sh). Reads
-GitHub, claims, run directories, session transcripts and Orca; with --dry-run it
-writes nothing.
+their recoverable time has passed, asks Orca whether a silent or interrupted
+session is still alive and restarts it only when Orca says it exited (or lists
+no worker for it), notifies a human about parking that needs a decision, about
+sessions Orca cannot vouch for and about an interrupted claim whose session is
+still live, and sweeps abandoned Spec and Ticket worktrees
+(scripts/sweep-worktrees.sh). Reads GitHub, claims, run directories, session
+transcripts and Orca; with --dry-run it writes nothing.
 
   --once     one round and exit (launchd); without it, rounds every
              KEEPER_INTERVAL seconds (default 600)
@@ -639,7 +646,9 @@ worker_show_fields() { # stdin: worker-show --json -> liveness<US>terminal<US>te
 # verdict<US>key<US>evidence<US>terminals: key is what the once-only
 # notification is keyed on (the dispatch, or none, or orca), evidence names
 # every dispatch and its liveness, and terminals are the handles of the exited
-# workers Orca has not released.
+# workers Orca has not released. none means the whole list has no worker for
+# the worktree; a list cut short before the worktree turned up says orca
+# instead, since it is Orca that could not finish the answer.
 worker_liveness() { # worktree -> verdict<US>key<US>evidence<US>terminals
   local worktree=$1 cursor= page=0 rows= next= list= args
   local dispatches=() dispatch fields liveness terminal state
@@ -670,8 +679,9 @@ worker_liveness() { # worktree -> verdict<US>key<US>evidence<US>terminals
     cursor=$next
   done
   if [ "${#dispatches[@]}" -eq 0 ]; then
-    printf 'unverifiable\x1fnone\x1fworker-list 里没有 workspace 为 %s 的 worker%s\x1f' \
-      "$worktree" "${truncated:+（${truncated}）}"
+    [ -z "$truncated" ] || key=orca
+    printf 'unverifiable\x1f%s\x1fworker-list 里没有 workspace 为 %s 的 worker%s\x1f' \
+      "$key" "$worktree" "${truncated:+（${truncated}）}"
     return 0
   fi
   for dispatch in ${dispatches[@]+"${dispatches[@]}"}; do
@@ -819,6 +829,24 @@ notify_unverifiable_once() { # spec key evidence age
   fi
 }
 
+# The two conclusions of interrupted_check that leave the Spec alone, told once
+# by the same mechanism: per Spec for a live session (which dispatch it is does
+# not change what there is to look at), per Spec and evidence for one Orca
+# cannot vouch for (the key, as in notify_unverifiable_once). The conclusion
+# is logged the first time, SKIP after.
+notify_interrupted_once() { # spec live|unverifiable [evidence key] message
+  local spec=$1 word=$2 key="interrupted-$2:$REPO#$1${3:+:$3}" message=$4
+  if [ "$(state_op seen "$key")" = 1 ]; then
+    log_line "$REPO" "#$spec" SKIP "claim interrupted，${message}，已通知过，不自动恢复"
+    return 0
+  fi
+  case "$word" in live) word=LIVE ;; *) word=UNVERIFIABLE ;; esac
+  log_line "$REPO" "#$spec" "$word" "claim interrupted，${message}，不自动恢复"
+  if notify "$REPO" "#$spec" "$REPO #$spec 认领已断（claim interrupted）：${message}，未自动恢复"; then
+    [ "$DRY" -eq 0 ] && state_op notify "$key" "$(date +%s)"
+  fi
+}
+
 stall_check() { # spec worktree
   local spec=$1 worktree=$2 state phase updated run_mtime worker_mtime
   state=$(run_state "$REPO_NAME" "$spec")
@@ -892,6 +920,58 @@ EOF
   do_resume "$spec" "Orca 报告会话已退出（${evidence}）"
 }
 
+# An interrupted claim (the claiming pid is gone, no new report) is asked of
+# Orca before anything is resumed, by the liveness rule of stall_check: the
+# session may well be alive in the worktree (a Spec parked with its reservation
+# kept is found interrupted once the reservation lapses while its session still
+# works), and launch-wave would resume into that same worktree. What Orca says
+# decides:
+#   live          left alone; a human is told once per Spec
+#   exited        a confirmed death: the terminals Orca still lists are closed
+#                 and the Spec is resumed (the claim record stays: launch-wave
+#                 resumes through it)
+#   no worker     nothing is alive in the worktree; resumed the same way
+#   unverifiable  left alone; a human is told once per Spec and evidence
+interrupted_check() { # spec worktree
+  local spec=$1 worktree=$2 verdict key evidence handles
+  if [ -z "$worktree" ]; then
+    # No worktree, so no session to be live in one: nothing to ask Orca.
+    do_resume "$spec" "会话已死（claim interrupted，找不到 spec-$spec 的 worktree），没有新的报告"
+    return 0
+  fi
+  IFS=$'\x1f' read -r verdict key evidence handles <<<"$(worker_liveness "$worktree")"
+  case "$verdict:$key" in
+    live:*)
+      notify_interrupted_once "$spec" live '' "Orca 报告会话仍在运行（${evidence}）"
+      return 0
+      ;;
+    exited:*|unverifiable:none) ;;
+    *)
+      notify_interrupted_once "$spec" unverifiable "$key" "Orca 无法确认会话是否已退出（${evidence:-判活没有结论}）"
+      return 0
+      ;;
+  esac
+  log_line "$REPO" "#$spec" EXITED "claim interrupted，会话已死（${evidence}）"
+  if ! can_resume "$spec"; then
+    return 0
+  fi
+  local handle
+  if [ "$DRY" -eq 1 ]; then
+    for handle in $handles; do log_line "$REPO" "#$spec" WOULD_CLOSE_TERMINAL "$handle"; done
+    log_line "$REPO" "#$spec" WOULD_RESUME "会话已死（claim interrupted，${evidence}），没有新的报告"
+    return 0
+  fi
+  # A terminal Orca has not released is closed here; one it released is gone.
+  for handle in $handles; do
+    if orca_terminal_close "$handle" >/dev/null 2>&1; then
+      log_line "$REPO" "#$spec" CLOSE_TERMINAL "$handle"
+    else
+      log_line "$REPO" "#$spec" ERROR "orca terminal close 失败：$handle"
+    fi
+  done
+  do_resume "$spec" "会话已死（claim interrupted，${evidence}），没有新的报告"
+}
+
 process_spec() { # spec title
   local spec=$1 title=$2
   local claim_line claim_word claim_record worktree report
@@ -940,7 +1020,7 @@ EOF
     return 0
   fi
   if [ "$claim_word" = interrupted ]; then
-    do_resume "$spec" "会话已死（claim interrupted），没有新的报告"
+    interrupted_check "$spec" "$worktree"
   fi
 }
 

@@ -5,8 +5,9 @@
 // agent_id) it denies spawning a subagent, so that implementation and review
 // go through the dispatch module (scripts/stage-dispatch.sh) on the Stage
 // route table instead of an in-session subagent. Read-only subagents are
-// allowed; see the whitelist below. Invalid input and internal failures fail
-// open.
+// allowed; see the whitelist below. Invalid JSON and internal failures fail
+// open (a missing tool_input is neither: its subagent_type reads as empty and
+// is denied, see below).
 
 'use strict';
 

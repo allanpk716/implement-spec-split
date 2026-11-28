@@ -39,8 +39,8 @@ const FLASH_REASON =
   '审查走 `scripts/opus-review.sh`。';
 const BARE_CODEX_EXEC_REASON =
   '不要直接调 codex exec：它没有卡死检测（2026-11-22 曾挂 10 小时）。' +
-  '用 ~/.claude/skills/implement-spec-split/scripts/codex-worker.sh；' +
-  '会话内实现者直接自己写代码。';
+  'headless 的 codex worker 一律通过 ~/.claude/skills/implement-spec-split/scripts/codex-worker.sh 启动；' +
+  '票的实现由 scripts/stage-dispatch.sh 派发的 Orca worker 在自己的工作区里写，规格会话自己不写代码。';
 const TEXT_EXTENSIONS = new Set([
   '.md',
   '.txt',

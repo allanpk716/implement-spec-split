@@ -371,6 +371,18 @@ expect_exit 1 "a missing terminal exits 1"
 expect_has 'no Orca terminal matches' "a missing terminal warns" "$WORK/notfound.out.err"
 ORCA_FIXTURE=$WORK/orca-clean.json
 
+# Only ORCA_TAB_ID, no ORCA_AGENT_PANE and no inherited handle: a tab id alone
+# does not name a pane, nothing can be looked up, and a session that says it is
+# in Orca exits 1 instead of skipping.
+TAB_ID=tab-1 PANE= HANDLE=
+rm -f "$ORCA_LOG"
+run_close "$WORK/tab-only.out"
+TAB_ID=tab-1 PANE=tab-1:leaf-1
+expect_exit 1 "only ORCA_TAB_ID set exits 1"
+expect_has "ORCA_TAB_ID and ORCA_AGENT_PANE do not name a pane, got tab 'tab-1' pane ''" "only ORCA_TAB_ID set says what it got" "$WORK/tab-only.out.err"
+expect_without 'terminal close' "only ORCA_TAB_ID set closes nothing" "$ORCA_LOG"
+expect_without 'skip: not in Orca' "only ORCA_TAB_ID set is not read as a session outside Orca" "$WORK/tab-only.out"
+
 # Orca itself failing is said as such, and nothing is closed.
 rm -f "$ORCA_LOG"
 ORCA_FAIL=1
@@ -712,6 +724,59 @@ expect_without 'worktree rm' "a dirty Ticket worktree is not removed" "$ORCA_LOG
 expect_has 'uncommitted or untracked changes' "the dirty Ticket is said to be kept" "$WORK/ticket-dirty.out.err"
 expect_dir "$WT_TF" "the dirty Ticket worktree stays"
 expect_dir "$WT_F" "the Spec worktree stays with it"
+
+# A sidecar whose base_branch is empty (an older dispatch, or one that never
+# recorded it): the base is taken from the branch and the Ticket is released as
+# usual. The sidecar's row is split on the unit separator, so the empty column
+# keeps its place.
+new_spec_worktree 111 WT_G
+new_ticket_worktree 111 14 WT_TG
+write_orca_fixture "$WORK/orca-g.json" "$WT_G"
+write_show_fixture "$SHOW_DIR" "$WT_G"
+write_sidecar "$WORK/run-h" implement-14 14 111 "$WT_TG" ctx_t14
+write_dispatch_show ctx_t14 succeeded settled
+node -e '
+  const fs = require("fs");
+  const [file] = process.argv.slice(1);
+  const value = JSON.parse(fs.readFileSync(file, "utf8"));
+  value.base_branch = "";
+  fs.writeFileSync(file, JSON.stringify(value, null, 2) + "\n");
+' "$WORK/run-h/dispatch-implement-14.json"
+rm -f "$ORCA_LOG"
+ORCA_FIXTURE=$WORK/orca-g.json
+run_close "$WORK/ticket-no-base.out" --run-dir "$WORK/run-h" --remove-worktree "$WT_G"
+ORCA_FIXTURE=$WORK/orca-clean.json
+expect_exit 0 "a sidecar without base_branch exits 0"
+expect_has "worktree rm --worktree path:$WT_TG --force --delete-branch" "a Ticket without base_branch is released, the base taken from its branch" "$ORCA_LOG"
+expect_no_dir "$WT_TG" "the Ticket worktree without base_branch is gone"
+expect_has "worktree rm --worktree path:$WT_G --force --delete-branch" "the Spec worktree goes after it" "$ORCA_LOG"
+
+# A sidecar whose branch is empty cannot be checked for a merge: the Ticket is
+# kept. (With a tab between the columns, read folded the empty one away, base
+# slid into branch's place and the check became base against itself: the Ticket
+# was released unchecked.)
+new_spec_worktree 112 WT_H
+new_ticket_worktree 112 15 WT_TH
+write_orca_fixture "$WORK/orca-h.json" "$WT_H"
+write_show_fixture "$SHOW_DIR" "$WT_H"
+write_sidecar "$WORK/run-i" implement-15 15 112 "$WT_TH" ctx_t15
+write_dispatch_show ctx_t15 succeeded settled
+node -e '
+  const fs = require("fs");
+  const [file] = process.argv.slice(1);
+  const value = JSON.parse(fs.readFileSync(file, "utf8"));
+  value.branch = "";
+  fs.writeFileSync(file, JSON.stringify(value, null, 2) + "\n");
+' "$WORK/run-i/dispatch-implement-15.json"
+rm -f "$ORCA_LOG"
+ORCA_FIXTURE=$WORK/orca-h.json
+run_close "$WORK/ticket-no-branch.out" --run-dir "$WORK/run-i" --remove-worktree "$WT_H"
+ORCA_FIXTURE=$WORK/orca-clean.json
+expect_exit 0 "a sidecar without a branch exits 0"
+expect_without "worktree rm --worktree path:$WT_TH" "a Ticket without a branch is not released unchecked" "$ORCA_LOG"
+expect_has 'not merged into spec-112' "the reason names the base it could not check against" "$WORK/ticket-no-branch.out.err"
+expect_dir "$WT_TH" "the Ticket worktree without a branch stays"
+expect_dir "$WT_H" "the Spec worktree stays with it"
 
 # After parking the caller passes no --remove-worktree: the Spec worktree
 # keeps the unlanded work, while a merged, settled Ticket is still released.

@@ -39,7 +39,10 @@
 # Orca lists for it (by repoId), joined on the real path. A Ticket worktree
 # Orca lists with parentWorktreeId null is an orphan (its Spec worktree is
 # gone) and is named as one; an Orca entry whose directory no longer exists is
-# a left-over registration and is removed the same way. The Orca list is an
+# a left-over registration and is removed the same way. Without a repo id (the
+# repository was not found in Orca's repo list) only the Orca entries whose
+# path git already lists count: the list is then every repository's, and
+# another repository's worktree is never a candidate. The Orca list is an
 # addition: without it the git worktrees are judged all the same.
 #
 # Usage:
@@ -219,9 +222,11 @@ origin_slug() { # path -> owner/name of origin, or nothing
 # <US>orphan<US>exists<US>inOrca<US>here (US is the unit separator, \x1f: a
 # detached worktree has an empty branch column, which a tab would collapse and
 # so shift every flag one column left). A Ticket branch Orca lists with
-# no parent is an orphan; an Orca entry whose repoId is not the repository's
-# counts only when git already lists its path (then the repo id was not
-# available, and the path is the evidence).
+# no parent is an orphan. Orca's list is filtered by the repository's id; when
+# Orca's repo list did not give one (the checkout was found through ~/orca)
+# the list is every repository's, and an entry counts only when git already
+# lists its path -- the path is then the evidence that it is this repository's
+# -- so a left-over registration git does not know is out of reach.
 candidates() { # repo id
   REPO_ID=${1:-} HERE_WT=${HERE_WT:-} node -e '
     const fs = require("fs");
@@ -253,7 +258,9 @@ candidates() { # repo id
     const repoId = process.env.REPO_ID || "";
     for (const item of list) {
       if (!item || !item.path) continue;
-      if (repoId && String(item.repoId || "") !== repoId) continue;
+      // Without a repo id the list covers every repository: an entry counts
+      // only when git already lists its path (the path is the evidence).
+      if (repoId ? String(item.repoId || "") !== repoId : !rows.has(real(item.path))) continue;
       const branch = String(item.branch || "");
       const ticket = /^refs\/heads\/spec-[1-9][0-9]*-t[1-9][0-9]*$/.test(branch);
       const flags = ["inOrca"];

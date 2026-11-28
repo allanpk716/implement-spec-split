@@ -37,7 +37,7 @@ Retired (规格 #26): the model the former in-session implementing subagents wer
 _Avoid_: implement model (ambiguous with harness-specific settings such as `GLM_MODEL`)
 
 **Implementing roles**:
-The exploration, implementer, merger and fix roles; everything except review.
+The four roles a Run dispatches through the dispatch module (`scripts/stage-dispatch.sh`), each on its Stage route (规格 #26): the step-2 exploration — headless, a `--read-only` dispatch whose executor is `codex-worker.sh`, on the 调研起草 route — and, on the 实现 route as Orca workers, a Ticket's implementer, the fix role and the conflict role. Not review, and not a merger: merging is `scripts/merge-ticket.sh`, a script, and only a conflict dispatches the conflict role.
 
 **Review roles**:
 The Standards and Spec reviewers of `mattpocock-skills:code-review`; always In-session subagents on a strong model (non-flash sessions only; in Flash mode every review runs out-of-session via `opus-review.sh`).
@@ -71,6 +71,10 @@ _Avoid_: harness (when meaning the route entry), agent slot
 **Spec**:
 The issue describing the whole feature; implemented in one run. On GitHub this is an open issue using the to-spec template heading `## Problem Statement`; a legacy open parent issue with unfinished children is also treated as a Spec. On a local-markdown tracker it is a ticket whose body uses `## Problem Statement`, or a closed Closing ticket. The Spec number is the number of that issue, and the integration branch is `spec-<Spec number>`. A Hand-written Spec (手写规格) is an existing Spec whose body has neither a `实现票：#N` line nor a `地图：#N` / `来源地图：#N` line, so it hangs under no map; find-next still drafts its Tickets (`S<k>=spec:<n>`) with a Brief that points to neither a map nor an implementation ticket.
 _Avoid_: PRD, epic
+
+**Spec Run root**:
+The directory one Run of a Spec keeps its files in: `~/.cache/implement-spec-split/runs/<repo>-<n>-<YYYYmmdd-HHMM>/` (`<repo>` = the main checkout's directory name), outside every worktree. `run-phase.sh` writes `run.json` there, which is how Recovery finds the Run; it is the `--run-dir` of every dispatch the Run makes — the `<run dir>` a Sidecar lives in, with each dispatch's own files under `<Spec Run root>/<name>/` — and it holds the Briefs (`briefs/`), the review findings and the parking and final reports. The dispatch module refuses a run directory inside the Spec worktree, since release removes that worktree.
+_Avoid_: run dir / run directory / `<run dir>` on their own (once a Sidecar is involved they name this directory, but say Spec Run root), state dir, dispatch dir (that is one dispatch's `<Spec Run root>/<name>/`)
 
 **Ticket**:
 One child issue of a Spec, or — for a single-ticket Spec — the referenced map implementation issue itself; the unit an implementer works on.
@@ -217,5 +221,5 @@ Starting an implementation worker (a Ticket's implementation or fix role, dispat
 _Avoid_: 精简开关 as the name of the start (the switch is only the opt-out), bare mode
 
 **Sidecar**:
-The JSON file `<run dir>/dispatch-<name>.json` that `scripts/stage-dispatch.sh` writes for one dispatch and keeps current as the dispatch lives: the Stage route it took, the worktree, terminal and Orca dispatch id it got, whether the start was a Lean start and why not when it was not, the worker_done once `wait` recorded it (with the report path), the model read off the worker's terminal while it still existed (`actual_model`, taken by `release` or `verify`: Orca records none for an adopted terminal), and the release time. It lives in the Spec's run directory, outside every worktree, so that `release` removing the child worktree loses none of it; a report the worker wrote inside that worktree is copied out next to the sidecar first (`report-from-worktree.md`).
+The JSON file `<run dir>/dispatch-<name>.json` (`<run dir>` is the Spec Run root) that `scripts/stage-dispatch.sh` writes for one dispatch and keeps current as the dispatch lives: the Stage route it took, the worktree, terminal and Orca dispatch id it got, whether the start was a Lean start and why not when it was not, the worker_done once `wait` recorded it (with the report path), the model read off the worker's terminal while it still existed (`actual_model`, taken by `release` or `verify`: Orca records none for an adopted terminal), and the release time. It lives in the Spec's run directory, outside every worktree, so that `release` removing the child worktree loses none of it; a report the worker wrote inside that worktree is copied out next to the sidecar first (`report-from-worktree.md`).
 _Avoid_: dispatch record, dispatch state (that is Orca's), status.json (a headless executor's own file, which the sidecar's report_path may name)

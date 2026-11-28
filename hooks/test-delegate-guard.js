@@ -716,7 +716,7 @@ testCase('bare codex exec denies in ordinary sessions', home => {
   for (const command of commands) {
     assert.match(
       parseDeny(runHook(hookPayload('Bash', { command }), home)),
-      /不要直接调 codex exec/
+      /不要直接调 codex exec：它没有卡死检测.*codex-worker\.sh 启动；票的实现由 scripts\/stage-dispatch\.sh 派发的 Orca worker 在自己的工作区里写，规格会话自己不写代码。$/
     );
   }
 });

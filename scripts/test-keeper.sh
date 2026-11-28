@@ -499,16 +499,222 @@ expect_without "launched" "limit: does not launch" "$WORK/launch.log"
 run_keeper "$WORK/limit-2.out"
 expect_count "" 1 "limit: notifies only once" "$NOTIFY_LOG"
 
-# --- interrupted claim -------------------------------------------------------
+# --- interrupted claim: Orca's liveness is asked first (规格 #26, 取舍 2) -------
+# An interrupted claim only says the claiming pid is gone: a Spec parked with
+# its reservation kept is found so once the reservation lapses, while its
+# session still works in the worktree. Before any resume -- into that same
+# worktree -- Orca is asked, by the rule of stall_check: a live worker is left
+# alone and reported once per Spec; every worker exited, or none at all for
+# the worktree, confirms the death and the Spec is resumed (its claim record
+# kept: launch-wave resumes through it); anything else is reported once per
+# Spec and evidence and left alone.
 
+interrupt_spec_19() { # an interrupted claim whose record names the Spec worktree
+  printf '[]' >"$FIXTURE/comments-19.json"
+  printf '19\tinterrupted\t{"spec":19,"branch":"spec-19","worktree":"%s"}\n' "$WT" >>"$FIXTURE/claims.txt"
+}
+
+# No worker for the worktree at all: nothing is alive there, resumed as before.
 new_fixture interrupted
-printf '[]' >"$FIXTURE/comments-19.json"
-printf '19\tinterrupted\t{"spec":19,"branch":"spec-19","worktree":"%s"}\n' "$WT" >>"$FIXTURE/claims.txt"
+interrupt_spec_19
 run_keeper "$WORK/interrupted.out"
-expect_exit 0 "interrupted: exits 0"
-expect_has $'\tRESUME\t' "interrupted: resumes" "$WORK/interrupted.out"
-expect_has "--only 19 --apply" "interrupted: launch-wave resumes spec 19" "$WORK/launch.log"
-expect_count "" 0 "interrupted: no notification" "$NOTIFY_LOG"
+expect_exit 0 "interrupted, no worker: exits 0"
+expect_has $'\tEXITED\t' "interrupted, no worker: logs the conclusion" "$WORK/interrupted.out"
+expect_has "没有 workspace 为 $WT 的 worker" "interrupted, no worker: the log line carries the evidence" "$WORK/interrupted.out"
+expect_has $'\tRESUME\t' "interrupted, no worker: resumes" "$WORK/interrupted.out"
+expect_has "--only 19 --apply" "interrupted, no worker: launch-wave resumes spec 19" "$WORK/launch.log"
+expect_count "release 19 --force" 0 "interrupted, no worker: keeps the claim record launch-wave resumes through" "$WORK/claim.log"
+expect_count "" 0 "interrupted, no worker: closes nothing" "$WORK/orca.log"
+expect_count "" 0 "interrupted, no worker: no notification" "$NOTIFY_LOG"
+expect_has "orchestration worker-list --json" "interrupted, no worker: asks Orca first" "$WORK/orca-query.log"
+
+# A session still working in the worktree: not resumed (launch-wave would start
+# a second one in the same worktree), reported once per Spec.
+new_fixture interrupted-live
+interrupt_spec_19
+write_workers '' "$(worker_record ctx_19 live)"
+write_worker_show ctx_19 live
+run_keeper "$WORK/interrupted-live-1.out"
+expect_exit 0 "interrupted, live: exits 0"
+expect_has $'\tLIVE\t' "interrupted, live: logs the conclusion" "$WORK/interrupted-live-1.out"
+expect_has "claim interrupted，Orca 报告会话仍在运行（liveness=live dispatch=ctx_19），不自动恢复" "interrupted, live: the log line carries the evidence" "$WORK/interrupted-live-1.out"
+expect_has "认领已断（claim interrupted）：Orca 报告会话仍在运行（liveness=live dispatch=ctx_19），未自动恢复" "interrupted, live: notifies with the evidence" "$NOTIFY_LOG"
+expect_count "" 1 "interrupted, live: notifies once" "$NOTIFY_LOG"
+expect_without "launched" "interrupted, live: launches nothing" "$WORK/launch.log"
+expect_count "release 19 --force" 0 "interrupted, live: releases nothing" "$WORK/claim.log"
+expect_count "" 0 "interrupted, live: closes nothing" "$WORK/orca.log"
+expect_file "$STATE" "interrupted, live: records the notification"
+expect_has '"interrupted-live:test/repo#19"' "interrupted, live: the record is keyed on the Spec" "$STATE"
+run_keeper "$WORK/interrupted-live-2.out"
+expect_exit 0 "interrupted, live second round: exits 0"
+expect_count "" 1 "interrupted, live: notifies only once" "$NOTIFY_LOG"
+expect_has $'\tSKIP\tclaim interrupted，' "interrupted, live second round: says it already told" "$WORK/interrupted-live-2.out"
+expect_without "launched" "interrupted, live second round: still launches nothing" "$WORK/launch.log"
+expect_count "" 0 "interrupted, live second round: still closes nothing" "$WORK/orca.log"
+
+# exited is the one conclusion keeper acts on: the terminal Orca has not
+# released is closed and the Spec resumed, the claim record left for
+# launch-wave's `reserve --resume` (a released claim reads free, and a resume
+# of a free claim is refused).
+new_fixture interrupted-exited
+interrupt_spec_19
+write_workers '' "$(worker_record ctx_19 exited term_19 active)"
+write_worker_show ctx_19 exited term_19 active
+run_keeper "$WORK/interrupted-exited.out"
+expect_exit 0 "interrupted, exited: exits 0"
+expect_has $'\tEXITED\tclaim interrupted，会话已死（liveness=exited dispatch=ctx_19）' "interrupted, exited: logs the conclusion with the evidence" "$WORK/interrupted-exited.out"
+expect_has "terminal close --terminal term_19 --tab" "interrupted, exited: closes the terminal Orca still lists" "$WORK/orca.log"
+expect_count "terminal close" 1 "interrupted, exited: closes it once" "$WORK/orca.log"
+expect_count "release 19 --force" 0 "interrupted, exited: keeps the claim record launch-wave resumes through" "$WORK/claim.log"
+expect_has "--repo test/repo --only 19 --apply" "interrupted, exited: launch-wave resumes the spec" "$WORK/launch.log"
+expect_has $'\tRESUME\t会话已死（claim interrupted，liveness=exited dispatch=ctx_19），没有新的报告' "interrupted, exited: the resume says why, with the evidence" "$WORK/interrupted-exited.out"
+expect_file "$STATE" "interrupted, exited: records the resume"
+expect_count "" 0 "interrupted, exited: no notification" "$NOTIFY_LOG"
+
+new_fixture interrupted-exited-released
+interrupt_spec_19
+write_workers '' "$(worker_record ctx_19 exited term_19 released)"
+write_worker_show ctx_19 exited term_19 released
+run_keeper "$WORK/interrupted-exited-released.out"
+expect_exit 0 "interrupted, exited, terminal released: exits 0"
+expect_has $'\tEXITED\t' "interrupted, exited, terminal released: logs the conclusion" "$WORK/interrupted-exited-released.out"
+expect_count "" 0 "interrupted, exited, terminal released: closes nothing" "$WORK/orca.log"
+expect_has "--only 19 --apply" "interrupted, exited, terminal released: resumes the spec" "$WORK/launch.log"
+
+# unverifiable: Orca's own rule is that nothing is stopped, retried or released
+# on it. The human is told once, with the evidence, and keeper stays out.
+new_fixture interrupted-unverifiable
+interrupt_spec_19
+write_workers '' "$(worker_record ctx_19 unverifiable)"
+write_worker_show ctx_19 unverifiable term_19 active
+run_keeper "$WORK/interrupted-unverifiable-1.out"
+expect_exit 0 "interrupted, unverifiable: exits 0"
+expect_has $'\tUNVERIFIABLE\t' "interrupted, unverifiable: logs the conclusion" "$WORK/interrupted-unverifiable-1.out"
+expect_has "claim interrupted，Orca 无法确认会话是否已退出（liveness=unverifiable dispatch=ctx_19），不自动恢复" "interrupted, unverifiable: the log line carries the evidence" "$WORK/interrupted-unverifiable-1.out"
+expect_has "认领已断（claim interrupted）：Orca 无法确认会话是否已退出（liveness=unverifiable dispatch=ctx_19），未自动恢复" "interrupted, unverifiable: notifies with the evidence" "$NOTIFY_LOG"
+expect_count "" 1 "interrupted, unverifiable: notifies once" "$NOTIFY_LOG"
+expect_count "release 19 --force" 0 "interrupted, unverifiable: releases nothing" "$WORK/claim.log"
+expect_without "launched" "interrupted, unverifiable: launches nothing" "$WORK/launch.log"
+expect_count "" 0 "interrupted, unverifiable: closes nothing" "$WORK/orca.log"
+expect_file "$STATE" "interrupted, unverifiable: records the notification"
+expect_has '"interrupted-unverifiable:test/repo#19:ctx_19"' "interrupted, unverifiable: the record is keyed on the Spec and the evidence" "$STATE"
+run_keeper "$WORK/interrupted-unverifiable-2.out"
+expect_exit 0 "interrupted, unverifiable second round: exits 0"
+expect_count "" 1 "interrupted, unverifiable: notifies only once" "$NOTIFY_LOG"
+expect_has $'\tSKIP\tclaim interrupted，' "interrupted, unverifiable second round: says it already told" "$WORK/interrupted-unverifiable-2.out"
+expect_count "release 19 --force" 0 "interrupted, unverifiable second round: still releases nothing" "$WORK/claim.log"
+expect_without "launched" "interrupted, unverifiable second round: still launches nothing" "$WORK/launch.log"
+
+# An Orca that cannot answer is not a confirmed death: reported once, not resumed.
+new_fixture interrupted-orca-down
+interrupt_spec_19
+touch "$FIXTURE/orca-worker-list-fail"
+run_keeper "$WORK/interrupted-orca-down.out"
+expect_exit 0 "interrupted, Orca down: exits 0"
+expect_has $'\tUNVERIFIABLE\t' "interrupted, Orca down: is unverifiable, not resumed" "$WORK/interrupted-orca-down.out"
+expect_has "orca worker-list 失败：orca offline" "interrupted, Orca down: carries Orca's message" "$WORK/interrupted-orca-down.out"
+expect_has "orca worker-list 失败：orca offline" "interrupted, Orca down: the notification carries Orca's message" "$NOTIFY_LOG"
+expect_count "" 1 "interrupted, Orca down: notifies once" "$NOTIFY_LOG"
+expect_without "launched" "interrupted, Orca down: resumes nothing" "$WORK/launch.log"
+
+# "No worker" out of a list cut short before its end is not "no worker": the
+# Spec's may sit behind the pages walked. Reported, not resumed.
+new_fixture interrupted-truncated-list
+interrupt_spec_19
+write_workers c2 "$(worker_record ctx_new live '' active "repo_test::$WORK/elsewhere")"
+WORKER_PAGES=1 run_keeper "$WORK/interrupted-truncated.out"
+expect_exit 0 "interrupted, list cut short: exits 0"
+expect_has $'\tUNVERIFIABLE\t' "interrupted, list cut short: is unverifiable, not resumed" "$WORK/interrupted-truncated.out"
+expect_has "只查了前 1 页" "interrupted, list cut short: the evidence says how far it looked" "$WORK/interrupted-truncated.out"
+expect_count "" 1 "interrupted, list cut short: notifies once" "$NOTIFY_LOG"
+expect_without "launched" "interrupted, list cut short: resumes nothing" "$WORK/launch.log"
+
+# The Spec worktree holds more than the session: a live fix worker in it means
+# the worktree is in use, whatever became of the session's own dispatch.
+new_fixture interrupted-mixed-live
+interrupt_spec_19
+write_workers '' "$(worker_record ctx_19 exited term_19 released)" "$(worker_record ctx_fix live term_fix retained)"
+write_worker_show ctx_19 exited term_19 released
+write_worker_show ctx_fix live term_fix retained
+run_keeper "$WORK/interrupted-mixed-live.out"
+expect_has $'\tLIVE\t' "interrupted, exited session with a live fix worker: the worktree is live" "$WORK/interrupted-mixed-live.out"
+expect_has "liveness=exited dispatch=ctx_19; liveness=live dispatch=ctx_fix" "interrupted, exited session with a live fix worker: the evidence names both" "$WORK/interrupted-mixed-live.out"
+expect_without "launched" "interrupted, exited session with a live fix worker: launches nothing" "$WORK/launch.log"
+expect_count "" 0 "interrupted, exited session with a live fix worker: closes nothing" "$WORK/orca.log"
+
+# No worktree to ask about: nothing can be live in it, resumed without a query.
+new_fixture interrupted-no-worktree
+printf '[]' >"$FIXTURE/comments-19.json"
+printf '19\tinterrupted\t{"spec":19,"branch":"spec-19"}\n' >>"$FIXTURE/claims.txt"
+run_keeper "$WORK/interrupted-no-worktree.out"
+expect_exit 0 "interrupted, no worktree: exits 0"
+expect_has $'\tRESUME\t会话已死（claim interrupted，找不到 spec-19 的 worktree），没有新的报告' "interrupted, no worktree: resumes, and says why" "$WORK/interrupted-no-worktree.out"
+expect_has "--only 19 --apply" "interrupted, no worktree: launch-wave is called" "$WORK/launch.log"
+expect_count "" 0 "interrupted, no worktree: asks Orca about nothing" "$WORK/orca-query.log"
+
+# --dry-run reaches the same conclusions from the same queries and only prints
+# what it would do.
+new_fixture interrupted-live-dry-run
+interrupt_spec_19
+write_workers '' "$(worker_record ctx_19 live)"
+write_worker_show ctx_19 live
+run_keeper "$WORK/interrupted-live-dry.out" --dry-run
+expect_exit 0 "interrupted, live dry-run: exits 0"
+expect_has $'\tLIVE\t' "interrupted, live dry-run: reaches the conclusion" "$WORK/interrupted-live-dry.out"
+expect_has $'\tWOULD_NOTIFY\t' "interrupted, live dry-run: would notify" "$WORK/interrupted-live-dry.out"
+expect_has "liveness=live dispatch=ctx_19" "interrupted, live dry-run: the notification it would send carries the evidence" "$WORK/interrupted-live-dry.out"
+expect_count "" 0 "interrupted, live dry-run: sends no notification" "$NOTIFY_LOG"
+expect_without "launched" "interrupted, live dry-run: launches nothing" "$WORK/launch.log"
+expect_no_file "$STATE" "interrupted, live dry-run: writes no state"
+
+new_fixture interrupted-exited-dry-run
+interrupt_spec_19
+write_workers '' "$(worker_record ctx_19 exited term_19)"
+write_worker_show ctx_19 exited term_19
+run_keeper "$WORK/interrupted-exited-dry.out" --dry-run
+expect_exit 0 "interrupted, exited dry-run: exits 0"
+expect_has $'\tEXITED\t' "interrupted, exited dry-run: reaches the conclusion" "$WORK/interrupted-exited-dry.out"
+expect_has $'\tWOULD_CLOSE_TERMINAL\tterm_19' "interrupted, exited dry-run: would close the terminal" "$WORK/interrupted-exited-dry.out"
+expect_has $'\tWOULD_RESUME\t会话已死（claim interrupted，liveness=exited dispatch=ctx_19），没有新的报告' "interrupted, exited dry-run: would resume, and says why" "$WORK/interrupted-exited-dry.out"
+expect_count "" 0 "interrupted, exited dry-run: closes nothing" "$WORK/orca.log"
+expect_count "release 19 --force" 0 "interrupted, exited dry-run: releases nothing" "$WORK/claim.log"
+expect_without "launched" "interrupted, exited dry-run: launches nothing" "$WORK/launch.log"
+expect_no_file "$STATE" "interrupted, exited dry-run: writes no state"
+
+new_fixture interrupted-unverifiable-dry-run
+interrupt_spec_19
+write_workers '' "$(worker_record ctx_19 unverifiable)"
+write_worker_show ctx_19 unverifiable
+run_keeper "$WORK/interrupted-unverifiable-dry.out" --dry-run
+expect_exit 0 "interrupted, unverifiable dry-run: exits 0"
+expect_has $'\tUNVERIFIABLE\t' "interrupted, unverifiable dry-run: reaches the conclusion" "$WORK/interrupted-unverifiable-dry.out"
+expect_has $'\tWOULD_NOTIFY\t' "interrupted, unverifiable dry-run: would notify" "$WORK/interrupted-unverifiable-dry.out"
+expect_has "liveness=unverifiable dispatch=ctx_19" "interrupted, unverifiable dry-run: the notification it would send carries the evidence" "$WORK/interrupted-unverifiable-dry.out"
+expect_count "" 0 "interrupted, unverifiable dry-run: sends no notification" "$NOTIFY_LOG"
+expect_without "launched" "interrupted, unverifiable dry-run: launches nothing" "$WORK/launch.log"
+expect_no_file "$STATE" "interrupted, unverifiable dry-run: writes no state"
+
+# Over the resume limit, an exited worker is still not touched: there is no
+# point closing a terminal for a resume that will not happen.
+new_fixture interrupted-exited-over-limit
+interrupt_spec_19
+write_workers '' "$(worker_record ctx_19 exited)"
+write_worker_show ctx_19 exited
+node -e '
+  const fs = require("fs");
+  const now = Math.floor(Date.now() / 1000);
+  fs.writeFileSync(process.argv[1], JSON.stringify({
+    version: 1,
+    resumes: {"test/repo#19": [now - 3600, now - 3600, now - 3600]},
+    notified: {}
+  }, null, 2));
+' "$STATE"
+run_keeper "$WORK/interrupted-exited-over-limit.out"
+expect_exit 0 "interrupted, exited over the limit: exits 0"
+expect_has $'\tEXITED\t' "interrupted, exited over the limit: still reaches the conclusion" "$WORK/interrupted-exited-over-limit.out"
+expect_has "今日自动恢复已达 3 次" "interrupted, exited over the limit: notifies instead" "$NOTIFY_LOG"
+expect_count "" 0 "interrupted, exited over the limit: closes nothing" "$WORK/orca.log"
+expect_without "launched" "interrupted, exited over the limit: launches nothing" "$WORK/launch.log"
 
 # --- stalled session: Orca's liveness decides (ticket #43) ---------------------
 # The second evidence (no write for KEEPER_STALL_MIN) only starts the question;

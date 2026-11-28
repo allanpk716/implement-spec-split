@@ -54,6 +54,7 @@ EOF
   printf '%s\n' 'wire_api = "responses"' >> "$CASE_CODEX/config.toml"
   printf '<!-- opus-codex-division: v2 -->\n' > "$CASE_CLAUDE/CLAUDE.md"
   hook_settings "$ROOT/hooks/delegate-guard.js" 'Edit|Write|NotebookEdit|Bash' > "$CASE_CLAUDE/settings.json"
+  with_subagent_guard "$ROOT/hooks/subagent-guard.js" 'Agent|Task'
 }
 
 hook_settings() {
@@ -71,6 +72,28 @@ process.stdout.write(JSON.stringify({
     }],
   },
 }, null, 2) + '\n');
+NODE
+}
+
+# Appends a subagent-guard PreToolUse entry (规格 #26) to the case's
+# settings.json; a case written with hook_settings alone has delegate-guard only.
+with_subagent_guard() { # path matcher [node-cmd]
+  SETTINGS=$CASE_CLAUDE/settings.json HOOK_PATH=$1 MATCHER=$2 NODE_CMD=${3:-node} node - <<'NODE'
+const fs = require('fs');
+const file = process.env.SETTINGS;
+const hookPath = process.env.HOOK_PATH;
+const normalized = process.platform === 'win32' && /^\/[A-Za-z]\//.test(hookPath)
+  ? hookPath.replace(/^\/([A-Za-z])\//, '$1:/')
+  : hookPath;
+let root = {};
+try { root = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
+root.hooks = root.hooks || {};
+root.hooks.PreToolUse = Array.isArray(root.hooks.PreToolUse) ? root.hooks.PreToolUse : [];
+root.hooks.PreToolUse.push({
+  matcher: process.env.MATCHER,
+  hooks: [{type: 'command', command: `${process.env.NODE_CMD} "${normalized}"`, timeout: 5}],
+});
+fs.writeFileSync(file, JSON.stringify(root, null, 2) + '\n');
 NODE
 }
 
@@ -157,6 +180,9 @@ expect_none FAIL "full configuration has no FAIL"
 expect_has PASS "覆盖 Edit 和 Write" "full configuration matcher covers Edit and Write"
 expect_has PASS "覆盖 Bash" "full configuration matcher covers Bash"
 expect_has PASS "delegate-guard 冒烟测试" "full configuration smoke hook"
+expect_has PASS "已注册 subagent-guard" "full configuration registers subagent-guard"
+expect_has PASS "subagent-guard matcher 覆盖 Agent" "full configuration subagent-guard matcher covers Agent"
+expect_has PASS "subagent-guard 冒烟测试" "full configuration subagent-guard smoke"
 
 # 2. Stage 3 entirely absent.
 new_case
@@ -208,6 +234,34 @@ if [ "$(cat "$CASE_CLAUDE/settings.json")" = "$SETTINGS_BEFORE" ]; then
 else
   record FAIL "doctor leaves settings.json unchanged" "settings.json was modified"
 fi
+
+# 5d. delegate-guard only: an install from before 规格 #26 has no
+# subagent-guard; that is a WARN, never a FAIL.
+new_case
+hook_settings "$ROOT/hooks/delegate-guard.js" 'Edit|Write|NotebookEdit|Bash' > "$CASE_CLAUDE/settings.json"
+run_doctor --json
+expect_exit 0 "without subagent-guard has no FAIL exit"
+expect_none FAIL "without subagent-guard reports no FAIL"
+expect_has WARN "未注册 subagent-guard" "without subagent-guard reports WARN"
+expect_hint WARN "docs/setup.md" "without subagent-guard hints at docs/setup.md"
+
+# 5e. subagent-guard on a matcher that does not cover Agent: it never fires.
+new_case
+hook_settings "$ROOT/hooks/delegate-guard.js" 'Edit|Write|NotebookEdit|Bash' > "$CASE_CLAUDE/settings.json"
+with_subagent_guard "$ROOT/hooks/subagent-guard.js" 'Task'
+run_doctor --json
+expect_exit 1 "subagent-guard matcher without Agent exits 1"
+expect_has PASS "已注册 subagent-guard" "subagent-guard matcher without Agent is still registered"
+expect_has FAIL "未覆盖 Agent" "subagent-guard matcher without Agent reports FAIL"
+expect_hint FAIL "hooks/README.md" "subagent-guard matcher without Agent hints at hooks/README.md"
+
+# 5f. subagent-guard path does not exist.
+new_case
+hook_settings "$ROOT/hooks/delegate-guard.js" 'Edit|Write|NotebookEdit|Bash' > "$CASE_CLAUDE/settings.json"
+with_subagent_guard "$CASE_DIR/missing/subagent-guard.js" 'Agent|Task'
+run_doctor --json
+expect_exit 1 "missing subagent-guard path exits 1"
+expect_has FAIL "subagent-guard.js 不存在" "missing subagent-guard path reports FAIL"
 
 # 6. Installed rule version is v0.
 new_case

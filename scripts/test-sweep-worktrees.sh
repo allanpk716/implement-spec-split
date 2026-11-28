@@ -16,7 +16,10 @@ WORK=$(cd "$WORK" && pwd -P)
 BIN=$WORK/bin
 ORCA_BIN=$WORK/orca-bin
 REPO=$WORK/repo
-ORIGIN=$WORK/origin.git
+# the bare origin is named test/repo.git: the Launch state is test__repo.json,
+# and the checkout fallback (~/orca/<name>) only accepts a checkout whose
+# origin is that owner/name
+ORIGIN=$WORK/test/repo.git
 RUNS=$WORK/runs
 LAUNCH=$WORK/launch-state
 FIXTURE=$WORK/fixture
@@ -93,6 +96,7 @@ git -C "$REPO" config commit.gpgsign false
 printf '%s\n' 'test repository' > "$REPO/README.md"
 git -C "$REPO" add README.md
 git -C "$REPO" commit --quiet -m 'initial commit'
+mkdir -p "$WORK/test"
 git init --quiet --bare --initial-branch=main "$ORIGIN"
 git -C "$REPO" remote add origin "$ORIGIN"
 git -C "$REPO" push --quiet origin main
@@ -482,6 +486,55 @@ git -C "$REPO" checkout --quiet main
 expect_exit 0 "a detached main worktree exits 0"
 expect_line keep "$REPO" "a detached main worktree is kept as the main one"
 expect_has '主工作区' "and says so" "$OUT"
+
+# --- without the repository's Orca id -------------------------------------------
+# Orca's repo list does not know the repository (its checkout is found through
+# ~/orca/<name>), so the worktree list cannot be filtered by repo id: it is
+# every repository's, and an entry counts only when git already lists its
+# path. The clean spec worktree of another repository -- on a branch this
+# repository does not have, so branch_merged reads it as merged -- is not a
+# candidate and is not removed; the git worktrees are judged all the same; a
+# registration only Orca knows is out of reach.
+new_fixture
+mkdir -p "$WORK/home/orca"
+ln -s "$REPO" "$WORK/home/orca/repo"
+OTHER=$WORK/other-repo
+OTHER_WT=$WORK/other-spec-99
+git init --quiet --initial-branch=main "$OTHER"
+git -C "$OTHER" config user.name 'Sweep Test'
+git -C "$OTHER" config user.email 'sweep@example.invalid'
+git -C "$OTHER" config commit.gpgsign false
+printf '%s\n' 'other repository' > "$OTHER/README.md"
+git -C "$OTHER" add README.md
+git -C "$OTHER" commit --quiet -m 'initial commit'
+git -C "$OTHER" worktree add --quiet -b spec-99 "$OTHER_WT" main
+printf '%s\n' '{"ok": true, "result": {"repos": [{"id": "repo-2", "path": "'"$OTHER"'", "gitRemoteIdentity": {"canonicalKey": "github.com/other/repo"}}]}}' > "$FIXTURE/orca-repos.json"
+node -e '
+  const fs = require("fs");
+  const [file, other, otherWt] = process.argv.slice(1);
+  const value = JSON.parse(fs.readFileSync(file, "utf8"));
+  const entry = (path, branch, extra) => Object.assign(
+    {id: "repo-2::" + path, repoId: "repo-2", path, branch, isMainWorktree: false, parentWorktreeId: "repo-2::" + other, childWorktreeIds: []}, extra);
+  value.result.worktrees.push(
+    entry(other, "refs/heads/main", {isMainWorktree: true, parentWorktreeId: null}),
+    entry(otherWt, "refs/heads/spec-99", {}));
+  fs.writeFileSync(file, JSON.stringify(value));
+' "$FIXTURE/orca-worktrees.json" "$OTHER" "$OTHER_WT"
+run_sweep "$WORK/no-id.out"
+expect_exit 0 "a repository Orca's repo list does not know exits 0"
+expect_line removed "$WT_22" "without the Orca id the git worktrees are judged all the same"
+expect_line removed "$WT_22T3" "without the Orca id an Orca entry git lists still counts as an orphan"
+expect_without "$STALE" "without the Orca id a registration only Orca knows is out of reach" "$OUT"
+expect_without "$OTHER" "another repository's main worktree is not a candidate" "$OUT"
+expect_without "$OTHER_WT" "another repository's spec worktree is not a candidate" "$OUT"
+expect_without "worktree rm --worktree path:$OTHER " "another repository's main worktree is not removed" "$ORCA_LOG"
+expect_without "worktree rm --worktree path:$OTHER_WT " "another repository's spec worktree is not removed" "$ORCA_LOG"
+expect_dir "$OTHER_WT" "another repository's spec worktree still exists"
+if git -C "$OTHER" show-ref --verify --quiet refs/heads/spec-99; then
+  ok "another repository's spec branch still exists"
+else
+  bad "another repository's spec branch still exists" "branch spec-99 is gone"
+fi
 
 printf '\n%d passed, %d failed\n' "$PASSED" "$FAILED"
 [ "$FAILED" -eq 0 ]

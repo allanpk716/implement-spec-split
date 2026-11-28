@@ -192,12 +192,18 @@ expect_test_not_run "usage errors run no tests"
 expect_head "$HEAD_AFTER_CLEAN" "usage errors merge nothing"
 
 # --- gate: no new commits -------------------------------------------------------
+# A Ticket branch already part of the Integration branch (a Recovery run of
+# step 5 finds the ticket landed) is not a gate failure: exit 5, apart from 2,
+# so the caller releases the Ticket worktree and goes on instead of
+# dispatching the ticket again.
 : > "$TEST_LOG"
 run_merge "$WORK/already.out" --worktree "$INTEGRATION" --integration spec-101 \
   --ticket spec-101-t7 --test 'fake-test'
-expect_exit 2 "an already merged ticket exits 2"
-expect_has 'has no commits' "an already merged ticket says why" "$WORK/already.out.err"
-expect_has 'gate not met' "an already merged ticket names the gate" "$WORK/already.out.err"
+expect_exit 5 "an already merged ticket exits 5"
+expect_has 'ticket branch spec-101-t7 is already part of spec-101 (behind a merge commit): the ticket has landed, nothing to merge' "an already merged ticket says why" "$WORK/already.out.err"
+expect_has 'do not dispatch the ticket again' "an already merged ticket tells the caller to go on" "$WORK/already.out.err"
+expect_without 'gate not met' "an already merged ticket is not a gate failure" "$WORK/already.out.err"
+expect_without 'has no commits' "an already merged ticket is not read as a ticket that is not done" "$WORK/already.out.err"
 expect_test_not_run "an already merged ticket runs no tests"
 expect_head "$HEAD_AFTER_CLEAN" "an already merged ticket changes nothing"
 
@@ -399,6 +405,29 @@ expect_exit 4 "a test command that cannot run exits 4"
 expect_has 'no-such-test-runner' "a test command that cannot run shows bash's message" "$WORK/no-runner.out.err"
 expect_has 'tests failed (exit 127)' "a test command that cannot run reports bash's exit code" "$WORK/no-runner.out.err"
 expect_merged "$TIP13" "a test command that cannot run keeps the merge commit"
+
+# --- no new commit: landed behind a merge is 5, a fresh branch is 2 -------------
+# t11 landed by a --no-ff merge and the Integration branch has moved on since:
+# its tip is behind a merge commit, on no first-parent line of spec-101.
+: > "$TEST_LOG"
+run_merge "$WORK/landed-moved.out" --worktree "$INTEGRATION" --integration spec-101 \
+  --ticket spec-101-t11 --test 'fake-test'
+expect_exit 5 "a landed ticket behind later merges exits 5"
+expect_has 'already part of spec-101 (behind a merge commit)' "a landed ticket behind later merges says why" "$WORK/landed-moved.out.err"
+expect_without 'gate not met' "a landed ticket behind later merges is not a gate failure" "$WORK/landed-moved.out.err"
+expect_test_not_run "a landed ticket behind later merges runs no tests"
+# A branch created off an older commit of the Integration branch with nothing
+# of its own: its tip sits on the first-parent line, so it is not "landed".
+HEAD_AFTER_T13=$(git -C "$INTEGRATION" rev-parse HEAD)
+TICKET14=$WORK/ticket14
+git -C "$MAIN" worktree add --quiet -b spec-101-t14 "$TICKET14" "$HEAD_AFTER_T11"
+run_merge "$WORK/fresh-old.out" --worktree "$INTEGRATION" --integration spec-101 \
+  --ticket spec-101-t14 --test 'fake-test'
+expect_exit 2 "a fresh branch off an older Integration commit exits 2"
+expect_has 'has no commits' "a fresh branch off an older Integration commit says why" "$WORK/fresh-old.out.err"
+expect_without 'already part of' "a fresh branch off an older Integration commit is not read as landed" "$WORK/fresh-old.out.err"
+expect_test_not_run "a fresh branch off an older Integration commit runs no tests"
+expect_head "$HEAD_AFTER_T13" "a fresh branch off an older Integration commit changes nothing"
 
 printf '\n%d passed, %d failed\n' "$PASSED" "$FAILED"
 [ "$FAILED" -eq 0 ]

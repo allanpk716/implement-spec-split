@@ -18,7 +18,7 @@ Stage 0 common foundation
  ├─ Stage 1 parallel spec implementation (Ticket workers are Orca workers on the 实现 route)
  │     └─ with Stage 2 added, the headless exploration before a Spec works too
  └─ Stage 2 codex backend
-       └─ Stage 3 global division (CLAUDE.md rules + delegate-guard / unattended-ask-guard / unattended-stop-guard / land-push-guard hook)
+       └─ Stage 3 global division (CLAUDE.md rules + delegate-guard / unattended-ask-guard / unattended-stop-guard / land-push-guard / subagent-guard hook)
 ```
 
 ---
@@ -110,7 +110,7 @@ A spec is a parent GitHub issue. Its child issues are tickets, and dependencies 
 - Merges happen serially, and a script goes first: `scripts/merge-ticket.sh` merges a ticket into the integration branch and runs the tests when there is no conflict; a worker is dispatched only to resolve a conflict.
 - Concurrency limit: governed by `GLM_MAX_PARALLEL` (default 2), and `--parallel n` overrides it for the current run only. A value of 2-3 is recommended, with 4 at most during quiet hours: Zhipu rate-limits at peak times, and any worker that hits a 429 stops the whole run to ask you.
 - After each ticket is complete, it must pass the verification gate and two Opus reviews (Standards and Spec) before it counts as done.
-- Several specs at once: open one session per Orca worktree of the same clone and run the skill in each. Without a spec number, the skill lists the candidates with their state (free / in progress / interrupted?) and lets you choose; once taken, it links the session's worktree to that issue and retitles the tab `spec-<n> …`. Choosing an in-progress or interrupted spec continues the unfinished work (Recovery). `--parallel` counts per run: the workers of parallel runs add up and share one GLM quota.
+- Several specs at once: open one session per Orca worktree of the same clone and run the skill in each. Without a spec number the skill does not scan or list candidates: it says "run `/find-next --batch` first; it gives the build order and the command to type in each worktree" and stops, since what to build is decided in one place (find-next) and several worktrees started at once never scan and pick in parallel. With a number, it links the session's worktree to that issue and retitles the tab `spec-<n> …`. An in-progress or interrupted spec is listed under "resume first" in find-next's build order with its command; running that continues the unfinished work (Recovery). `--parallel` counts per run: the workers of parallel runs add up and share one GLM quota.
 
 **The worktree tree and taking over**
 
@@ -232,6 +232,7 @@ This makes everyday sessions in **all projects** follow this division: Opus hand
 | unattended-ask-guard hook | `~/.claude/settings.json` | Deny `AskUserQuestion` in unattended `--auto-land` runs, without relying on the model remembering not to ask |
 | unattended-stop-guard hook | `~/.claude/settings.json` | Before an unattended `--auto-land` run ends, deny ending without self-closing and deny ending on a question to the user |
 | land-push-guard hook | `~/.claude/settings.json` | After a session has run `/implement-spec-split`, deny a push to the default branch unless this session holds the repo's land lock |
+| subagent-guard hook | `~/.claude/settings.json` | In the main thread of a flash session, deny opening a code-writing subagent with the Agent tool (implementation, fix and conflict resolution are dispatched through the dispatch module) |
 
 **Install**
 
@@ -314,6 +315,29 @@ This makes everyday sessions in **all projects** follow this division: Opus hand
 
    On macOS / Linux, use the absolute path as well. Like `unattended-ask-guard`, it decides from whether the last `/implement-spec-split` invocation in the transcript carries `--auto-land`; set `UNATTENDED_STOP_GUARD_DISABLE=1` to turn it off temporarily. See [hooks/README.md](../hooks/README.md).
 
+   **Register subagent-guard as well** (since 规格 #26): in the main thread of a flash session (`FLASH_ORCHESTRATOR=1`) this hook denies opening a code-writing subagent with the Agent tool — a Ticket's implementation, fix and conflict resolution are dispatched to Orca workers through `scripts/stage-dispatch.sh` on the 实现 route, and review goes through `scripts/opus-review.sh`; the prompt alone does not stop flash from opening a `general-purpose` subagent, so, like "not one line of source itself", it is enforced by a hook. Read-only subagents (`Explore`, `Plan`, `claude-code-guide`) are allowed as before; non-flash sessions are not affected. In `~/.claude/settings.json`, **append** one entry to the `hooks.PreToolUse` array (do not replace the entries delegate-guard, unattended-ask-guard and land-push-guard already have):
+
+   ```json
+   {
+     "hooks": {
+       "PreToolUse": [
+         {
+           "matcher": "Agent|Task",
+           "hooks": [
+             {
+               "type": "command",
+               "command": "node C:/Users/<you>/.claude/skills/implement-spec-split/hooks/subagent-guard.js",
+               "timeout": 5
+             }
+           ]
+         }
+       ]
+     }
+   }
+   ```
+
+   On macOS / Linux, use the absolute path as well. It acts only when `FLASH_ORCHESTRATOR=1` is set, so registering it at the user level affects neither the official session nor claude-glm. See [hooks/README.md](../hooks/README.md).
+
 3. Start a new Claude Code session so both the hook and the rules take full effect.
 
 **Hook decision rules**
@@ -341,16 +365,19 @@ This makes everyday sessions in **all projects** follow this division: Opus hand
 **Verify**
 
 ```bash
-# 1. Hook unit tests: should print Summary: 46 passed, 0 failed
+# 1. Hook unit tests: should print Summary: 60 passed, 0 failed
 node ~/.claude/skills/implement-spec-split/hooks/test-delegate-guard.js
 
-# 2. land-push-guard unit tests: should print Summary: 24 passed, 0 failed
+# 2. land-push-guard unit tests: should print Summary: 27 passed, 0 failed
 node ~/.claude/skills/implement-spec-split/hooks/test-land-push-guard.js
 
-# 3. unattended-stop-guard unit tests: should print Summary: 37 passed, 0 failed
+# 3. unattended-stop-guard unit tests: should print Summary: 41 passed, 0 failed
 node ~/.claude/skills/implement-spec-split/hooks/test-unattended-stop-guard.js
 
-# 4. Smoke test: should print a JSON object whose permissionDecision is deny
+# 4. subagent-guard unit tests: should print Summary: 14 passed, 0 failed
+node ~/.claude/skills/implement-spec-split/hooks/test-subagent-guard.js
+
+# 5. Smoke test: should print a JSON object whose permissionDecision is deny
 node -e 'console.log(JSON.stringify({tool_name:"Write",tool_input:{file_path:"C:/x/a.py",content:"l\n".repeat(15)}}))' \
   | node ~/.claude/skills/implement-spec-split/hooks/delegate-guard.js
 ```
@@ -383,7 +410,7 @@ Run records are stored in `~/.cache/codex-runs/<repository>-<time>-<task>/`, con
 
 ## Stage 4: flash mode (cheap Orchestrator)
 
-Everyday scheduling spends no subscription quota: the main session (Orchestrator) runs on Zhipu `glm-5.3-flash` and only executes and relays within a whitelist; source changes and bulk reading go to glm-5.4 subagents; every judgment call (review, root cause, trade-offs, landability, stop-or-go) leaves the session for the official-subscription Opus ([ADR 0001](adr/0001-cheap-orchestrator-default-deny.md)). This stage targets mini6 (macOS) only.
+Everyday scheduling spends no subscription quota: the main session (Orchestrator) runs on Zhipu `glm-5.3-flash` and only executes and relays within a whitelist; source changes and bulk reading are dispatched by the Spec session through `scripts/stage-dispatch.sh` on the Stage route table (实现 / 调研起草) to glm-5.4 workers that work in their own worktrees (since 规格 #26 there are no in-session subagents for this: the hook denies them); every judgment call (review, root cause, trade-offs, landability, stop-or-go) leaves the session for the official-subscription Opus ([ADR 0001](adr/0001-cheap-orchestrator-default-deny.md)). This stage targets mini6 (macOS) only.
 
 **Prerequisites**
 
@@ -397,7 +424,7 @@ Everyday scheduling spends no subscription quota: the main session (Orchestrator
 
 **Starting a flash main session**
 
-- Run `claude-flash` in a terminal (it sets `FLASH_ORCHESTRATOR=1` and injects flash-only settings and a system prompt: the whitelist, judgments go to Opus, source changes go to subagents; the official sessions' Opus/codex division rules are excluded and the codex plugin is disabled).
+- Run `claude-flash` in a terminal (it sets `FLASH_ORCHESTRATOR=1` and injects flash-only settings and a system prompt: the whitelist, judgments go to Opus, source changes go to workers through the dispatch module; the official sessions' Opus/codex division rules are excluded and the codex plugin is disabled).
 - Permission mode: the launcher appends `--dangerously-skip-permissions` to ordinary sessions (never twice), so flash sessions always run in bypass. Orca's OpenClaude slot does not add the flag itself; without it a session falls into auto mode, where the classifier can stall an unattended spec session and, through the Zhipu gateway, triggers a billing notice.
 - To take over the Orca slot: repoint the `/opt/homebrew/bin/openclaude` symlink at `~/ops/services/claude-flash/claude-flash` (or fill Orca Settings → Agents → OpenClaude's command override with the absolute path of `claude-flash`). The OpenClaude slot then opens flash main sessions; the original `claude-glm` stays available side by side.
 - Smoke test:
@@ -453,9 +480,9 @@ $S migrate                                                              # carry 
 
 **The flash boundary**
 
-- Whitelisted: run scripts and branch on exit codes, read short structured output, write tickets from prepared text, relay questions with prepared options, start sessions/subagents/Opus reviews, conflict-free merges and commits, and follow findings item by item.
+- Whitelisted: run scripts and branch on exit codes, read short structured output, write tickets from prepared text, relay questions with prepared options, start and finish workers through the dispatch module (`stage-dispatch.sh dispatch` / `wait` / `release`), start sessions, run Opus reviews, conflict-free merges and commits, and follow findings item by item.
 - It writes no source line, ever: the Stage 3 delegate-guard hard-blocks source writes in flash sessions (threshold 0; `~/.claude/state/allow-direct-edit` does not apply).
-- Every conclusion cites its source (a subagent result or an Opus findings path); when unsure who to hand to, default to Opus; push, tagging and releases ask you first (Design-session doc pushes excepted).
+- Every conclusion cites its source (a dispatched role's report path, the sidecar's `worker_done.report_path`, or an Opus findings path); when unsure who to hand to, default to Opus; push, tagging and releases ask you first (Design-session doc pushes excepted).
 
 **Rollback**
 

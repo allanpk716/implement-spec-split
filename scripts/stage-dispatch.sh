@@ -162,7 +162,7 @@
 # the start was one, and why not when it was not), brief, repo,
 # parent_worktree, base_branch, branch, worktree, worktree_created, spec_file,
 # report_path (where the worker was told to write), launch_command, terminal,
-# dispatch_id, task_id; headless: script, brief|input, kind (review), cwd,
+# dispatch_id, task_id; headless: script, brief|input, kind (review, diagnosis), cwd,
 # report_path (the executor's report once it ran), exit_code, finished_at;
 # after a wait: worker_done {outcome, report_path, message_id, received_at};
 # after a reading: actual_model (see verify); after a release: released_at
@@ -1076,7 +1076,7 @@ ensure_model_recorded() { # sidecar dispatch_dir
   record_model "$1" "$2"
 }
 
-# `<role> #<ticket>（第 <n> 次）` for a check line: implement #41, 修复, 解冲突 #41（第 2 次）.
+# `<role> #<ticket>（第 <n> 次）` for a check line: 实现 #41, 修复, 解冲突 #41（第 2 次）.
 dispatch_label() { # role ticket attempt
   local label=$1
   case "$1" in

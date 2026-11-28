@@ -17,7 +17,7 @@ English: [setup.en.md](setup.en.md)
  ├─ 阶段 1 spec 并行实现（票的实现是 Orca worker，按「实现」路由派发）
  │     └─ 加上阶段 2 后，规格开始前的 headless 探索也可用
  └─ 阶段 2 codex 后端
-       └─ 阶段 3 全局分工（CLAUDE.md 规则 + delegate-guard / unattended-ask-guard / unattended-stop-guard / land-push-guard hook）
+       └─ 阶段 3 全局分工（CLAUDE.md 规则 + delegate-guard / unattended-ask-guard / unattended-stop-guard / land-push-guard / subagent-guard hook）
 ```
 
 ---
@@ -109,7 +109,7 @@ spec 是一个 GitHub 父 issue，它的子 issue 就是 ticket，ticket 之间�
 - 合并串行进行，而且先由脚本合：`scripts/merge-ticket.sh` 没冲突就直接合进集成分支并跑测试，有冲突才派一个 worker 解。
 - 并发上限：`GLM_MAX_PARALLEL` 控制（默认 2），可以用 `--parallel n` 只对本次运行覆盖。建议 2–3，闲时最多 4：智谱高峰期会限流，任何一个 worker 撞上 429 都会让整个运行停下来问你。
 - 每个 ticket 完成后都要经过验证关口和两个 Opus 审查（Standards、Spec）才算完。
-- 多个 spec 同时做：在同一个 clone 的多个 Orca worktree 里各开一个会话、各跑一次技能。不带 spec 编号时，技能会列出候选和状态（空闲 / 进行中 / 疑似中断），由你选；领到后会把会话的 worktree 关联到该 issue、标签页改名为 `spec-<n> …`。选一个"进行中"或"疑似中断"的 spec 就是接着做上次没做完的（Recovery）。`--parallel` 按每个运行计，几个运行的 worker 数相加，共享 GLM 额度。
+- 多个 spec 同时做：在同一个 clone 的多个 Orca worktree 里各开一个会话、各跑一次技能。不带 spec 编号时，技能不扫描、也不列候选，只提示「先运行 `/find-next --batch`，它给出开发顺序和每个 worktree 要敲的命令」然后停下：选哪个开发只在 find-next 一处决定，几个 worktree 同时启动也不会各自扫描、各选一个。带上编号后，会话的 worktree 关联到该 issue、标签页改名为 `spec-<n> …`。进行中或疑似中断的 spec 由 find-next 的开发顺序列进「先恢复」并给出命令，照着敲就是接着做上次没做完的（Recovery）。`--parallel` 按每个运行计，几个运行的 worker 数相加，共享 GLM 额度。
 
 **工作区三层与接管**
 
@@ -238,6 +238,7 @@ scripts/selftest-codex.sh --only L1   # 真连一次 GLM，花极少 token；失
 | unattended-ask-guard hook | `~/.claude/settings.json` | 无人值守的 `--auto-land` Run 里拒绝 `AskUserQuestion`，不依赖模型记得不问人 |
 | unattended-stop-guard hook | `~/.claude/settings.json` | 无人值守的 `--auto-land` Run 结束前，没自关不许结束，也不许以问人结束 |
 | land-push-guard hook | `~/.claude/settings.json` | 会话跑过 `/implement-spec-split` 后，没持本仓库 land 锁就不许 push 默认分支 |
+| subagent-guard hook | `~/.claude/settings.json` | flash 会话主线程里拦住用 Agent 工具开能写代码的子代理（实现、fix、冲突解算经派发模块派发） |
 
 **安装**
 
@@ -320,6 +321,29 @@ scripts/selftest-codex.sh --only L1   # 真连一次 GLM，花极少 token；失
 
    macOS / Linux 同样换成绝对路径。它和 `unattended-ask-guard` 一样按 transcript 里最后一次 `/implement-spec-split` 调用是否带 `--auto-land` 判定；`UNATTENDED_STOP_GUARD_DISABLE=1` 可临时关闭；详见 [hooks/README.md](../hooks/README.md)。
 
+   **同时注册 subagent-guard**（规格 #26 起）：flash 会话（`FLASH_ORCHESTRATOR=1`）的主线程里，这个 hook 拦住用 Agent 工具开能写代码的子代理——票的实现、fix、冲突解算固定经 `scripts/stage-dispatch.sh` 按「实现」路由派发给 Orca worker，审查走 `scripts/opus-review.sh`，提示词管不住 flash 自己开 `general-purpose` 子代理，所以和「一行源码不写」一样靠 hook 硬拦。只读子代理（`Explore`、`Plan`、`claude-code-guide`）照常放行；非 flash 会话不受影响。在 `~/.claude/settings.json` 的 `hooks.PreToolUse` 数组里**追加**一项（不要覆盖 delegate-guard、unattended-ask-guard、land-push-guard 已有的项）：
+
+   ```json
+   {
+     "hooks": {
+       "PreToolUse": [
+         {
+           "matcher": "Agent|Task",
+           "hooks": [
+             {
+               "type": "command",
+               "command": "node C:/Users/<you>/.claude/skills/implement-spec-split/hooks/subagent-guard.js",
+               "timeout": 5
+             }
+           ]
+         }
+       ]
+     }
+   }
+   ```
+
+   macOS / Linux 同样换成绝对路径。它只在 `FLASH_ORCHESTRATOR=1` 时生效，注册在用户级对官方会话和 claude-glm 没有影响；详见 [hooks/README.md](../hooks/README.md)。
+
 3. 新开一个 Claude Code 会话，hook 和规则才会完整生效。
 
 **hook 的判定规则**
@@ -347,16 +371,19 @@ scripts/selftest-codex.sh --only L1   # 真连一次 GLM，花极少 token；失
 **验证**
 
 ```bash
-# 1. hook 单元测试：应输出 Summary: 46 passed, 0 failed
+# 1. hook 单元测试：应输出 Summary: 60 passed, 0 failed
 node ~/.claude/skills/implement-spec-split/hooks/test-delegate-guard.js
 
-# 2. land-push-guard 单元测试：应输出 Summary: 24 passed, 0 failed
+# 2. land-push-guard 单元测试：应输出 Summary: 27 passed, 0 failed
 node ~/.claude/skills/implement-spec-split/hooks/test-land-push-guard.js
 
-# 3. unattended-stop-guard 单元测试：应输出 Summary: 37 passed, 0 failed
+# 3. unattended-stop-guard 单元测试：应输出 Summary: 41 passed, 0 failed
 node ~/.claude/skills/implement-spec-split/hooks/test-unattended-stop-guard.js
 
-# 4. 冒烟：应输出一段 permissionDecision 为 deny 的 JSON
+# 4. subagent-guard 单元测试：应输出 Summary: 14 passed, 0 failed
+node ~/.claude/skills/implement-spec-split/hooks/test-subagent-guard.js
+
+# 5. 冒烟：应输出一段 permissionDecision 为 deny 的 JSON
 node -e 'console.log(JSON.stringify({tool_name:"Write",tool_input:{file_path:"C:/x/a.py",content:"l\n".repeat(15)}}))' \
   | node ~/.claude/skills/implement-spec-split/hooks/delegate-guard.js
 ```
@@ -389,7 +416,7 @@ node -e 'console.log(JSON.stringify({tool_name:"Write",tool_input:{file_path:"C:
 
 ## 阶段 4：flash 模式（便宜主会话）
 
-日常调度不花订阅额度：主会话（Orchestrator）由智谱 `glm-5.3-flash` 驱动，只做白名单内的执行与转述；源码修改和大量阅读交给 glm-5.4 子代理；所有结论性判断（审核、根因、取舍、能否落地、是否停车）出会话交给官方订阅的 Opus（[ADR 0001](adr/0001-cheap-orchestrator-default-deny.md)）。本阶段只适配 mini6（macOS）。
+日常调度不花订阅额度：主会话（Orchestrator）由智谱 `glm-5.3-flash` 驱动，只做白名单内的执行与转述；源码修改和大量阅读由规格会话经 `scripts/stage-dispatch.sh` 按路由表（「实现」「调研起草」）派给 glm-5.4 worker 在各自的工作区里做（规格 #26 起不再用会话内子代理，hook 会拦）；所有结论性判断（审核、根因、取舍、能否落地、是否停车）出会话交给官方订阅的 Opus（[ADR 0001](adr/0001-cheap-orchestrator-default-deny.md)）。本阶段只适配 mini6（macOS）。
 
 **前提**
 
@@ -403,7 +430,7 @@ node -e 'console.log(JSON.stringify({tool_name:"Write",tool_input:{file_path:"C:
 
 **开 flash 主会话**
 
-- 终端直接跑 `claude-flash`（它注入 `FLASH_ORCHESTRATOR=1`、flash 专用 settings 和系统提示词：白名单、判断上交 Opus、源码交给子代理；排除官方会话的 Opus/codex 分工规则，关闭 codex 插件）。
+- 终端直接跑 `claude-flash`（它注入 `FLASH_ORCHESTRATOR=1`、flash 专用 settings 和系统提示词：白名单、判断上交 Opus、源码经派发模块交给 worker；排除官方会话的 Opus/codex 分工规则，关闭 codex 插件）。
 - 权限模式：启动器给普通会话自动补 `--dangerously-skip-permissions`（已带则不重复），flash 会话一律 bypass。Orca 的 OpenClaude 槽位不会替它加这个参数，缺了会落到 auto mode：无人值守的规格会话可能被分类器拦下，分类器请求走智谱网关还会弹计费通知。
 - 挂到 Orca 槽位：把 `/opt/homebrew/bin/openclaude` 软链改指 `~/ops/services/claude-flash/claude-flash`（Orca 设置 → Agents → OpenClaude 的命令覆盖填 `claude-flash` 绝对路径亦可）。此后 Orca 的 OpenClaude 槽位开出的就是 flash 主会话；原 `claude-glm` 会话不受影响，仍可手动使用。
 - 冒烟验证：
@@ -459,9 +486,9 @@ $S migrate                                                              # 迁移
 
 **flash 的边界**
 
-- 白名单内：跑脚本并按退出码分支、读短的结构化输出、照现成文本写票、转述已备好选项的问题、启动会话/子代理/Opus review、无冲突合并与 commit、逐条执行 findings。
+- 白名单内：跑脚本并按退出码分支、读短的结构化输出、照现成文本写票、转述已备好选项的问题、经派发模块（`stage-dispatch.sh dispatch` / `wait` / `release`）启动与收尾 worker、启动会话、跑 Opus review、无冲突合并与 commit、逐条执行 findings。
 - 一行源码都不写：阶段 3 的 delegate-guard 在 flash 会话里对源码写入硬拦（阈值 0，`~/.claude/state/allow-direct-edit` 不生效）。
-- 每个结论注明出处（子代理 result 或 Opus findings 路径）；拿不准交给谁时默认上交 Opus；push、打 tag、发版先问用户（Design session 推送文档除外）。
+- 每个结论注明出处（派发角色的报告路径——sidecar 里的 `worker_done.report_path`——或 Opus findings 路径）；拿不准交给谁时默认上交 Opus；push、打 tag、发版先问用户（Design session 推送文档除外）。
 
 **回退**
 

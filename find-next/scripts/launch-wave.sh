@@ -51,8 +51,10 @@
 # prints it and records it in the launch state (a run with nothing to launch
 # creates none and keeps the recorded one: the keeper asks for a Spec every few
 # minutes, and must not leave empty Runs behind). The Run exists to dispatch
-# the Spec sessions; each session creates its own Run for its ticket workers
-# and reports to the wave's. Run creation and dispatch run in this process, so
+# the Spec sessions and to take the wave over; each session creates its own Run
+# for its ticket workers, and no Spec session reports into the wave's Run --
+# whether a Spec is done is read from `pipeline-status.sh` and the keeper. Run
+# creation and dispatch run in this process, so
 # Orca binds the Run to the terminal this script runs in. Not verified: a
 # caller without a terminal identity (keeper under launchd) being accepted as
 # that Run's coordinator (规格 #26, probe 4 of #39); an Orca that refuses shows
@@ -105,8 +107,8 @@ resumed Spec keeps its worktree), then `worker-start --run <wave Run>
 --worktree path:<it> --agent openclaude --spec-file <spec>` starts the session
 there. The agent slot is the route table's 编排 route (locked to flash). Each
 --apply creates one Orca Run for the wave, prints it and records it in the
-launch state; the Spec sessions report to it, and a new terminal takes it over
-with `orca orchestration run-use --id <run>`.
+launch state; the Spec sessions are dispatched from it (none reports into it),
+and a new terminal takes the wave over with `orca orchestration run-use --id <run>`.
 A session is reported 已启动 only once its claim record carries a pid, since
 the Handoff reservation is written before the session starts. ISS_CLAIM_WAIT
 (seconds, default 900) bounds that wait per Spec and ISS_CLAIM_POLL (seconds,
@@ -832,7 +834,7 @@ if [ "${#DISPATCH_ENTRIES[@]}" -gt 0 ]; then
     if (typeof id === "string" && id !== "") process.stdout.write(id);
   ' < "$run_out")
   [ -n "$RUN_ID" ] || die "could not read the Orca Run id from run-create: $(first_error_line "$run_err" "$run_out")"
-  printf 'Orca Run：%s（规格会话向它汇报；接管用 orca orchestration run-use --id %s）\n' "$RUN_ID" "$RUN_ID"
+  printf 'Orca Run：%s（只用于派发与接管；接管用 orca orchestration run-use --id %s）\n' "$RUN_ID" "$RUN_ID"
 fi
 
 write_launch_state
