@@ -12,6 +12,10 @@
 # fail-open wording. Ticket #60 (规格 #58) adds the partial-landing wording
 # (tickets left to a human), the Brief-hygiene sentence and the 环境约束
 # section the three root Brief templates share verbatim with find-next's.
+# Ticket #69 (规格 #58) pins find-next's decision round: step 6 decides each
+# item by the recommendation instead of asking, the wrap-up and the supervisor
+# list every auto-decision with its reversal recipe, and the three-round cap is
+# gone.
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -150,6 +154,35 @@ has '等人工票 #<t>' 'GLOSSARY: the landing report names the tickets left to 
 # 环境约束 section is the worker-side half of it.
 has '**Brief 卫生**：往 Brief 里引用仓库外的文件' 'SKILL.md: Brief hygiene before naming a file outside the repo' "$SKILL"
 has '「环境约束（找文件与子进程）」一节是 worker 侧的对应约束' 'SKILL.md: the templates 环境约束 section is the worker-side rule' "$SKILL"
+
+# --- find-next 推进模式：the question round became a decision round (票 #69, 规格 #58) ---
+
+# Step 6 no longer asks: each item is decided by the worker's recommendation, a
+# missing one by the reversibility rule, and the two kinds of item left to the
+# human (a personal identity, credential or physical action; a subjective
+# reaction) go to the wrap-up's 要你做. The message is a report with a reversal
+# recipe, the reply prompt is gone, and the three-round cap — a protection for
+# the human being asked — went with it. The user's own entries (都同意 / 展开 /
+# 先到这) stay.
+has '6. **一轮拍板（自动、可推翻；没有要拍的就跳过）**' 'find-next step 6 is a decision round' "$FIND_NEXT"
+has '**每条按 worker 给出的推荐答案自动采纳，不等用户回答**' 'find-next step 6 adopts each recommendation without waiting' "$FIND_NEXT"
+has '按「可逆性高 > 改动面小 > 与现有 ADR 一致」自选一个' 'find-next step 6 settles a missing recommendation by reversibility' "$FIND_NEXT"
+has '**要本人身份、凭据或物理动作**（task 票 `## 需要本人做的`），做不了；**要主观反应**（prototype 的反应题），agent 替不了' \
+  'find-next step 6 names the two reasons for not deciding' "$FIND_NEXT"
+has '列出的选项里没有可逆的，那一条不拍板' 'find-next step 6 invents no option when none is reversible' "$FIND_NEXT"
+has '`可自动采纳：是` 且有推荐的按推荐；`可自动采纳：否` 或 `推荐：无` 的按上面的可逆性规则自选' \
+  'find-next step 6 routes draft-review items the way the Spec session does' "$FIND_NEXT"
+has '推进器 · <仓库名> · 已自动拍板 <N> 条（可推翻）' 'find-next step 6 titles the message as decisions taken' "$FIND_NEXT"
+has '要推翻就回「推翻 #<票号> <条目> 改选 <X>」' 'find-next step 6 ends with the reversal recipe' "$FIND_NEXT"
+has '用户没说就不等' 'find-next step 6 does not wait for a reply' "$FIND_NEXT"
+has '对某条回「展开」时，当前会话就地对那张票调用 grilling 和 domain-modeling 技能' 'find-next step 6 keeps 展开 as the in-place grilling entry' "$FIND_NEXT"
+has '回「先到这」时按第 7 步立即收尾' 'find-next step 6 keeps 先到这 as the early hand-off' "$FIND_NEXT"
+has '拍完不等回复，直接做第 7 步' 'find-next step 6 goes straight on to the write-back' "$FIND_NEXT"
+without '单次运行累计最多问用户 3 轮' 'find-next step 6 no longer caps the rounds' "$FIND_NEXT"
+without '请回复「都同意」' 'find-next step 6 no longer asks for a reply' "$FIND_NEXT"
+without '需要拍板 <N> 条' 'find-next step 6 no longer titles the message as questions' "$FIND_NEXT"
+without '有问题就一轮问用户' 'find-next usage no longer describes a question round' "$FIND_NEXT"
+without '并入本轮最后一个问题问用户' 'find-next usage no longer asks for the worker cap' "$FIND_NEXT"
 
 # --- the Ticket Brief template --------------------------------------------------
 

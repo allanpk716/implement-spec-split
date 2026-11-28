@@ -1,22 +1,22 @@
 ---
 name: find-next
-description: 默认进入推进模式：循环扫描当前 GitHub 仓库的 wayfinder 地图与票，自动调查并关闭可关的 research 票、为决策票准备选项、推进没讨论完的地图（迷雾毕业、task/prototype 票）、分流地图外散票（等待时机 / 开地图 / 单个决策 / 重复或过时）、批量起草规格和执行票，把所有需要人拍板的问题合成一轮，答完后自动发布并启动第 1 波 implement-spec-split 会话；规格合入 main 后可由 implement-spec-split 调 --next-wave 自动开下一波。--suggest 保留原先只推荐一个下一步的只读行为；--list 列出待办清单；--batch 是推进模式别名。用户问"下一步做什么""推进仓库""该推哪张票""哪个该 to-spec / to-tickets / grill 了""还有什么没做完""给我待办清单""批量写规格 / 批量拆票""接下来开发哪几份规格""开发顺序"，或输入 /find-next 时使用。参数 --suggest、--list、--batch、--workers N（可选）、--specs K、--worker codex|self|agent、--agent-model sonnet|opus|haiku|fable（仅 agent）、--no-auto-land（本批不做无人值守落地；默认无人值守，适合通宵运行）、--auto-land（兼容别名，等同默认）、--watch（只进入总控：汇报各规格落地进度、集中问停车规格要拍板的事、全部完成时给总结；推进模式收尾后也自动进入）。用户问"进度怎样""盯着开发""总控"时也用 --watch。
+description: 默认进入推进模式：循环扫描当前 GitHub 仓库的 wayfinder 地图与票，自动调查并关闭可关的 research 票、为决策票准备选项、推进没讨论完的地图（迷雾毕业、task/prototype 票）、分流地图外散票（等待时机 / 开地图 / 单个决策 / 重复或过时）、批量起草规格和执行票，把所有要拍板的取舍合成一轮按推荐自动拍板（可推翻），拍完后自动发布并启动第 1 波 implement-spec-split 会话；规格合入 main 后可由 implement-spec-split 调 --next-wave 自动开下一波。--suggest 保留原先只推荐一个下一步的只读行为；--list 列出待办清单；--batch 是推进模式别名。用户问"下一步做什么""推进仓库""该推哪张票""哪个该 to-spec / to-tickets / grill 了""还有什么没做完""给我待办清单""批量写规格 / 批量拆票""接下来开发哪几份规格""开发顺序"，或输入 /find-next 时使用。参数 --suggest、--list、--batch、--workers N（可选）、--specs K、--worker codex|self|agent、--agent-model sonnet|opus|haiku|fable（仅 agent）、--no-auto-land（本批不做无人值守落地；默认无人值守，适合通宵运行）、--auto-land（兼容别名，等同默认）、--watch（只进入总控：汇报各规格落地进度、对停车规格的待拍板事项按推荐自动拍板、全部完成时给总结；推进模式收尾后也自动进入）。用户问"进度怎样""盯着开发""总控"时也用 --watch。
 ---
 
 # find-next
 
-默认在当前仓库进入**推进模式**：把 wayfinder 地图（包括还有 Map fog 的地图）、规格、散票和开发尽可能推进到可开发状态，只在真正需要人拍板时把所有问题合成一轮。`--suggest` 才是原先的只读建议模式，**只给出一个 Next step**和要敲的命令，外加最多 3 行备选。术语（Spec、Closing ticket、Decision ticket、Map frontier、Map fog、Fog graduation、Loose ticket triage、Waiting on timing、Next step、推进模式）见 implement-spec-split 的 `GLOSSARY.md`，设计理由见其 `MAINTAINING.md`「find-next 设计要点」。
+默认在当前仓库进入**推进模式**：把 wayfinder 地图（包括还有 Map fog 的地图）、规格、散票和开发尽可能推进到可开发状态；要拍板的取舍合成一轮按推荐自动拍板（可推翻），只有需要本人身份、凭据、物理动作或主观反应的才留给用户。`--suggest` 才是原先的只读建议模式，**只给出一个 Next step**和要敲的命令，外加最多 3 行备选。术语（Spec、Closing ticket、Decision ticket、Map frontier、Map fog、Fog graduation、Loose ticket triage、Waiting on timing、Next step、推进模式）见 implement-spec-split 的 `GLOSSARY.md`，设计理由见其 `MAINTAINING.md`「find-next 设计要点」。
 
-对跟踪器的写操作只允许出现在推进模式：按用户答案为调研票/决策票/task 票/散票写 Resolution、关票、更新地图；迷雾毕业后建票、接阻塞、改地图；散票分流同意后建地图和子票、接 sub-issue 与阻塞、评论并关原散票；发布草稿时新建规格票和执行票；启动规格前写领取记录。`--suggest` 和 `--list` 恒为只读。
+对跟踪器的写操作只允许出现在推进模式：按拍板结果（自动拍板，可推翻）为调研票/决策票/task 票/散票写 Resolution、关票、更新地图；迷雾毕业后建票、接阻塞、改地图；散票分流拍板后建地图和子票、接 sub-issue 与阻塞、评论并关原散票；发布草稿时新建规格票和执行票；启动规格前写领取记录。`--suggest` 和 `--list` 恒为只读。
 
 ## 用法
 
-- `/find-next [--workers N] [--specs K] [--worker codex|agent] [--agent-model <model>] [--no-auto-land] [地图号、实现票号或规格号…]`：默认推进模式（见「推进模式」），也是地图、规格、票、开发的通用入口。它循环执行：扫描 → 自动调查/关闭 research 票 → 准备决策题 / 迷雾毕业建议 / task 清单 / prototype 反应题 / 散票分流建议 → 起草规格和执行票 → 有问题就一轮问用户 → 应用答案并再扫描 → 发布 → 启动第 1 波。起草、调研、决策准备、迷雾毕业、散票分流、task 和 prototype 交给 worker：不给 `--worker` 或给 `codex` 时照旧派 codex worker；`agent` 时改由主会话开 Agent 子代理执行这些步骤（`model` 显式传 `--agent-model`，默认 `sonnet`）。只支持 GitHub 跟踪器；本地 markdown 跟踪器请用 `--suggest` 或 `--list`
+- `/find-next [--workers N] [--specs K] [--worker codex|agent] [--agent-model <model>] [--no-auto-land] [地图号、实现票号或规格号…]`：默认推进模式（见「推进模式」），也是地图、规格、票、开发的通用入口。它循环执行：扫描 → 自动调查/关闭 research 票 → 准备决策题 / 迷雾毕业建议 / task 清单 / prototype 反应题 / 散票分流建议 → 起草规格和执行票 → 有取舍就一轮自动拍板（可推翻） → 应用拍板并再扫描 → 发布 → 启动第 1 波。起草、调研、决策准备、迷雾毕业、散票分流、task 和 prototype 交给 worker：不给 `--worker` 或给 `codex` 时照旧派 codex worker；`agent` 时改由主会话开 Agent 子代理执行这些步骤（`model` 显式传 `--agent-model`，默认 `sonnet`）。只支持 GitHub 跟踪器；本地 markdown 跟踪器请用 `--suggest` 或 `--list`
 - `/find-next --suggest [--worker codex|self|agent] [--agent-model <model>]`：原先的默认行为，只读挑一个 Next step（见「建议模式流程」）；未给 `--worker` 时等同于 `codex`。支持 GitHub 和本地 markdown 跟踪器
 - `/find-next --list`：不挑一个，列出当前仓库的全部待办清单（见「清单模式」）。总是我自己做，不派 worker，`--worker` 被忽略
 - `/find-next --batch …`：推进模式别名，兼容旧用法
 - `/find-next --watch`：只进入**总控**（见「总控」一节），不推进、不起草；推进模式第 11 步收尾后自动进入同一节。grill-feature / grill-map 启动规格后，本仓库没有总控在跑时也走这里
-- `--workers N` 可选，是全机 GLM worker 总数；每份规格的 `--parallel` = N ÷ K（至少 1）。没给时读 `~/.cache/implement-spec-split/max-workers`（`scripts/max-workers.sh` 用的同一文件）；文件也没有就把 worker 上限并入本轮最后一个问题问用户。`--specs K` 是同时开几份规格，默认 2。**同一仓库同一时间只在一个会话里运行推进模式**：推进模式全程持仓库级 `find-next-advance` 锁（见「推进模式」第 1 步），第二个会话会被拦下；持锁会话被意外关闭后锁自动失效
+- `--workers N` 可选，是全机 GLM worker 总数；每份规格的 `--parallel` = N ÷ K（至少 1）。没给时读 `~/.cache/implement-spec-split/max-workers`（`scripts/max-workers.sh` 用的同一文件）；文件也没有就把 worker 上限并入本轮拍板轮的最后一个条目，按建议值拍板（可推翻）。`--specs K` 是同时开几份规格，默认 2。**同一仓库同一时间只在一个会话里运行推进模式**：推进模式全程持仓库级 `find-next-advance` 锁（见「推进模式」第 1 步），第二个会话会被拦下；持锁会话被意外关闭后锁自动失效
 - `--agent-model <sonnet|opus|haiku|fable>` 只在 `--worker agent` 时有效，默认 `sonnet`；给了 `--worker codex`/`self`（或不给 `--worker`）却给 `--agent-model` 是参数冲突，报错让用户改。一个开关管全程：`--worker agent` 决定本技能自己的调研/决策/起草方式，不提供混搭；生成的开发命令不带后端参数（实现走路由表）。
 - **无人值守落地**（GLOSSARY.md）默认开启：本批规格（含之后自动开的波次）不停下问人；Opus 审查里带推荐、标「可自动采纳：是」的取舍按推荐落地并记为「自动拍板（可推翻）」，只有真要人决定的事才停车。落地、部分落地、停车都在规格 issue 下留报告，由本会话的总控汇总给用户。`--no-auto-land` 只在推进模式有效，用来让本批保留 push 前确认：第 10 步把它透传给 launch-wave.sh，`--apply` 会把 `auto_land: false` 写进启动状态，`--next-wave` 沿用；`--auto-land` 保留为兼容别名，等同默认。
 
@@ -131,7 +131,7 @@ I. 散票（bug / needs-triage 等；含等待时机、疑似重复和推进模�
 
 ## 推进模式（默认；`--batch` 是别名）
 
-用途：把用户从「逐张判断、逐个技能、逐轮确认」里解放出来。主会话只保留必须跨全批做的判断：分组、审稿、把关 Resolution、判断 `--apart`；读长材料和写长文都交给 worker——默认（不给 `--worker` 或给 `codex`）是新的 codex worker；`--worker agent` 时（仅非 flash 会话）是主会话开的 Agent 子代理（`model` 显式传 `--agent-model`，默认 `sonnet`）。每一轮尽可能自动推进，只有真正的取舍题才问用户，而且所有问题合成一轮。
+用途：把用户从「逐张判断、逐个技能、逐轮确认」里解放出来。主会话只保留必须跨全批做的判断：分组、审稿、把关 Resolution、判断 `--apart`；读长材料和写长文都交给 worker——默认（不给 `--worker` 或给 `codex`）是新的 codex worker；`--worker agent` 时（仅非 flash 会话）是主会话开的 Agent 子代理（`model` 显式传 `--agent-model`，默认 `sonnet`）。每一轮尽可能自动推进：取舍题按推荐自动拍板（可推翻），所有拍板合成一轮汇报，不等用户回答。
 
 flash 模式下，本节所有原本由主会话审读或复核的结论都按「flash 模式」一节交给 Opus review。
 
@@ -228,33 +228,39 @@ flash 模式下，本节所有原本由主会话审读或复核的结论都按�
       草稿只在运行目录，不在仓库内。不能调用 `/to-spec`、`/to-tickets` 本身；worker 直接读最新上游技能规则。
 
       flash 模式下，起草结果出现未决地图条目时按「flash 模式」一节改推荐 `/grill-map`。
-   4. **审稿（我做）**：读 `result.md`、`manifest.json`、`spec.md` 和执行票正文，检查实现决定都有出处且出处确实这么定了；`实现票：`、`地图：`两行正确；执行票是竖切、阻塞合理、碰同一计数器的票已串行并带 `shared-counter` 标签、跨组阻塞对得上；`blocked_by` 不挂还没有规格的实现票，该交接的写进 `handoffs`；`unresolved` 只留真正要用户拍板的事，每条带推荐答案；标题格式与仓库一致。用 `publish-batch.sh <全部 manifest.json>` 试运行核对计划。小问题直接改；大问题换新 Brief 重派那一组。
+   4. **审稿（我做）**：读 `result.md`、`manifest.json`、`spec.md` 和执行票正文，检查实现决定都有出处且出处确实这么定了；`实现票：`、`地图：`两行正确；执行票是竖切、阻塞合理、碰同一计数器的票已串行并带 `shared-counter` 标签、跨组阻塞对得上；`blocked_by` 不挂还没有规格的实现票，该交接的写进 `handoffs`；`unresolved` 只留真正有取舍的事，每条带推荐答案；没有推荐的列全选项和各自代价，交给第 6 步拍板轮按可逆性规则自选；标题格式与仓库一致。用 `publish-batch.sh <全部 manifest.json>` 试运行核对计划。小问题直接改；大问题换新 Brief 重派那一组。
 
       flash 模式下，本段审稿按「flash 模式」一节并入当轮 Opus review。
 
-6. **一轮问用户（没有问题就跳过）**：把第 3 步决策题、迷雾毕业建议、task 人工清单、prototype 反应题、`staleClaims` 与 `orphanClaims` 处理题（后者问「#N 认领了但 Orca 里没有活会话在处理，取消认领并纳入推进吗？」）、第 2 步转来的取舍题、第 4 步散票分流建议、第 5 步每组 `unresolved`、缺少的全机 worker 上限，合成一条手机友好的消息。编号全批连续（a、b、c…），每组只给一两行摘要和必要上下文，选项各占一行；最后一个问题可以是「全机 GLM worker 总数用 N 吗？」。**无人值守落地**（GLOSSARY.md）不再提问：launch-wave.sh 默认带 `--auto-land`，本批规格（含之后自动开的波次）会不停下问人；调用时带了 `--no-auto-land` 才保留 push 前确认，第 10 步原样透传。**单次运行累计最多问用户 3 轮**；第 3 轮结束后不再发起第 4 轮，剩余待拍板事项留到收尾，下次 `/find-next --batch` 接着推。结尾写：
+6. **一轮拍板（自动、可推翻；没有要拍的就跳过）**：把第 3 步决策题与迷雾毕业建议、`staleClaims` 与 `orphanClaims` 处理题（「#N 认领了但 Orca 里没有活会话在处理，取消认领并纳入推进」）、第 2 步转来的取舍题、第 4 步散票分流建议（含放宽项散票的「单个决策」）、第 5 步每组 `unresolved`、缺少的全机 worker 上限，合成一轮；**每条按 worker 给出的推荐答案自动采纳，不等用户回答**。没有推荐或推荐不明确时，按「可逆性高 > 改动面小 > 与现有 ADR 一致」自选一个，并在条目里写一句理由；审查者的推荐可逆且不对外（不发版、不 push、不动外部服务）时优先用它。不拍板的条目分两种理由写：**要本人身份、凭据或物理动作**（task 票 `## 需要本人做的`），做不了；**要主观反应**（prototype 的反应题），agent 替不了——都不占拍板编号，列入收尾的「要你做」。不自己发明选项：列出的选项里没有可逆的，那一条不拍板，草稿组不发布，同样列入「要你做」。草稿审稿（flash 模式的 Opus review `--kind draft`）里「需要人取舍」的条目同一口径：`可自动采纳：是` 且有推荐的按推荐；`可自动采纳：否` 或 `推荐：无` 的按上面的可逆性规则自选（flash 模式下交 Opus review 选）；理由是要本人身份或凭据的不拍板。**无人值守落地**（GLOSSARY.md）不变：launch-wave.sh 默认带 `--auto-land`，本批规格（含之后自动开的波次）会不停下问人；调用时带了 `--no-auto-land` 才保留 push 前确认，第 10 步原样透传。不设轮数上限：问用户的轮数上限是给人的保护，自动拍板后没有保护对象。消息仍是手机友好的编号格式，但它是**汇报不是提问**：编号全批连续（a、b、c…），每组只给一两行摘要和必要上下文，每条写选了什么；最后一个条目可以是「全机 GLM worker 总数 → 用 N」。拍完不等回复，直接做第 7 步。
 
-   flash 模式下，本步只直接转述选择题；「展开」处理见「flash 模式」一节。
+   flash 模式下，本步只直接转述：按推荐的条目照抄推荐，没有推荐或推荐不明确的条目交一次 Opus review 自选、flash 照结论填；「展开」处理见「flash 模式」一节。
 
    ```
-   推进器 · <仓库名> · 需要拍板 <N> 条
+   推进器 · <仓库名> · 已自动拍板 <N> 条（可推翻）
 
-   a. #<票号> <票名>：<问题一两句>
+   a. #<票号> <票名>：<问题一两句> → 选 A：<推荐理由一句>
       A. <选项> — <代价>
       B. <选项> — <代价>
-      建议 A：<理由>
-   b. 地图 #<地图号> <地图名> 迷雾毕业：<建议新建 / 建议判出范围的一行摘要> → 建议：<采纳/修改>
-   c. #<票号> <task 票名>：<需要人做的一步> → 建议：<动作>
-   d. #<票号> <prototype 票名>：<原型链接；要用户反应的一句>
-   e. #<票号> <已认领票名>：取消认领并纳入本次推进吗？→ 建议：<是/否>
-   f. S1 <规格标题>：<未决问题> → 建议：<推荐答案>
-   g. #<散票号> <散票名>：为它建地图？Destination：<一句>；首批：<票标题摘要> → 建议：<是/否>
-   h. #<散票号> <散票名>：<单个决策问题；可用与决策票相同的选项格式>
-   i. #<散票号> <散票名>：建议关：<重复/过时依据一句>
+   b. 地图 #<地图号> <地图名> 迷雾毕业：<建议新建 / 建议判出范围的一行摘要> → 按建议
+   c. #<票号> <已认领票名>：取消认领并纳入本次推进 → 是
+   d. S1 <规格标题>：<未决问题> → 选 B：<理由；无推荐时写自选依据（可逆性 / 改动面 / ADR）>
+   e. #<散票号> <散票名>：建地图。Destination：<一句>；首批：<票标题摘要> → 是
+   f. #<散票号> <散票名>：<单个决策问题；可用与决策票相同的选项格式> → 选 A：<理由>
+   g. #<散票号> <散票名>：关票，依据：<重复/过时依据一句>
+   h. 全机 GLM worker 总数 → 用 N
    ...
    ```
 
-   「等待时机」不占拍板编号、不提问，单独列在问题后（第 4 步写回票面的票也要在这里可见）：
+   不拍板的条目不占拍板编号，单独列在拍板条目后（收尾的「要你做」里给动作）：
+
+   ```
+   不拍板（收尾「要你做」里列）：
+   - #<票号> <task 票名>：<要本人做的一步> — 要本人身份 / 凭据 / 物理动作
+   - #<票号> <prototype 票名>：<原型链接> — 要主观反应
+   ```
+
+   「等待时机」不占拍板编号、不问，单独列在拍板条目后（第 4 步写回票面的票也要在这里可见）：
 
    ```
    等待时机（不提问）：
@@ -264,11 +270,10 @@ flash 模式下，本节所有原本由主会话审读或复核的结论都按�
    条件是人要做的动作（发版、实机验证等）时，把它归入最终收尾顶部完成度结论的「👉 要你做」/「发版后会解冻」，不要只写成被动等待。
 
    ```
-   请回复「都同意」，或指出要改哪几条（例如：a 选 B、f 再想想、worker 用 6）。
-   也可以回「展开 <条目>」就地讨论；回「先到这」立即收尾。
+   要推翻就回「推翻 #<票号> <条目> 改选 <X>」（例如：推翻 #142 a 改选 B）。
    ```
 
-   用户对某条回「展开」时，当前会话就地对那张票调用 grilling 和 domain-modeling 技能，写完 Resolution 后继续推进，不要求另开 `/wayfinder`；单个决策类散票同样可「展开」。没有任何要问的，直接做第 8 步的复查扫描。
+   不催答，但用户主动说「都同意 / 展开 / 先到这」的入口保留：回「都同意」时条目不变；对某条回「展开」时，当前会话就地对那张票调用 grilling 和 domain-modeling 技能，按讨论结果重写 Resolution 后继续推进，不要求另开 `/wayfinder`，单个决策类散票同样可「展开」；回「先到这」时按第 7 步立即收尾。用户没说就不等。没有任何要拍板的，直接做第 8 步的复查扫描。
 
    flash 模式下，「展开」条目改开 Design session，见「flash 模式」一节。
 
