@@ -481,7 +481,9 @@ const issues = [
   issue(441, 'Implementation-ref dependency ticket', 'open', [], ''),
   issue(399, 'Loose external blocker', 'open', [], ''),
   issue(400, 'Needs tickets spec', 'open', [], '## Problem Statement\n实现票：#401。'),
-  issue(401, 'Unsplit implementation ticket', 'open', [], ''),
+  // A child of its own keeps #401 out of the loose-source rule (#83), so the
+  // 实现票 line of #400 names no implementation and #400 still needs tickets.
+  issue(401, 'Implementation ticket with children', 'open', [], '', sub(1, 1)),
   spec(410, 'Blocked by needs tickets', 1),
   issue(411, 'Needs tickets dependency ticket', 'open', [], ''),
 ];
@@ -526,7 +528,7 @@ const responses = {
   'blocker-422': [],
   'blocker-431': [issue(420, 'Spec-owned blocker root', 'open', [], '## Problem Statement\n实现票：#423。', sub(2, 0))],
   'blocker-441': [issue(423, 'Referenced implementation', 'open', [], '')],
-  'blocker-411': [issue(401, 'Unsplit implementation ticket', 'open', [], '')],
+  'blocker-411': [issue(401, 'Implementation ticket with children', 'open', [], '', sub(1, 1))],
 };
 
 fs.writeFileSync(`${directory}/issues.json`, JSON.stringify(issues, null, 2));
@@ -1604,6 +1606,292 @@ RUN_EXIT=$?
 expect_exit 0 "graph carries shared-counter as a ticket-level flag on every path"
 [ "$RUN_EXIT" -eq 0 ] || cat "$WORK/counter-graph-check.txt"
 expect_has 'shared_counter' 'help documents the shared_counter graph flag' "$WORK/help.out"
+
+# A 实现票 line may name a loose ticket (#83): the source ticket a Spec was
+# drafted from. It is covered like a map implementation ticket — the Ticket of
+# a single-ticket Spec, in the graph, out of 散票 — and once every Spec naming
+# it has closed, --all lists it under 规格已落地、源票未关 for find-next to close.
+LOOSE_FIXTURE=$WORK/loose-source-fixture
+mkdir -p "$LOOSE_FIXTURE" || exit 1
+
+LOOSE_FIXTURE=$LOOSE_FIXTURE node > /dev/null <<'NODE'
+const fs = require('fs');
+const directory = process.env.LOOSE_FIXTURE;
+
+function sub(total, completed = total) {
+  return {total, completed, percent_completed: total ? Math.round(100 * completed / total) : 0};
+}
+
+function issue(number, title, state, labels, body = '', children = sub(0)) {
+  return {
+    number,
+    title,
+    state,
+    labels: labels.map((name) => ({name})),
+    body,
+    sub_issues_summary: children,
+    issue_dependencies_summary: {blocked_by: 0, total_blocked_by: 0, blocking: 0, total_blocking: 0},
+    assignees: [],
+  };
+}
+
+const issues = [
+  issue(800, 'Open loose-source spec', 'open', [], '## Problem Statement\n实现票：#801。'),
+  issue(801, 'Loose source of an open spec', 'open', [], ''),
+  issue(810, 'Landed loose-source spec', 'closed', [], '## Problem Statement\n实现票：#811、#812。'),
+  issue(811, 'Loose source covered by a landed spec', 'open', ['needs-triage'], ''),
+  issue(812, 'Closed loose source of a landed spec', 'closed', [], ''),
+  issue(820, 'Landed spec that split its source', 'closed', [], '## Problem Statement\n来自散票的迷雾。\n实现票：#821。', sub(1, 1)),
+  issue(821, 'Split loose source covered by a landed spec', 'open', [], ''),
+  issue(822, 'Execution ticket of the landed spec', 'closed', [], ''),
+  issue(830, 'Landed spec sharing a source', 'closed', [], '## Problem Statement\n实现票：#841。'),
+  issue(840, 'Open spec sharing a source', 'open', [], '## Problem Statement\n实现票：#841。'),
+  issue(841, 'Loose source shared by an open and a landed spec', 'open', [], ''),
+  issue(850, 'Loose ticket without a spec', 'open', ['needs-triage'], ''),
+];
+
+const responses = {
+  'sub-820': [issues[7]],
+  'blocker-801': [],
+  'blocker-841': [],
+};
+
+fs.writeFileSync(`${directory}/issues.json`, JSON.stringify(issues, null, 2));
+for (const [name, value] of Object.entries(responses)) {
+  fs.writeFileSync(`${directory}/${name}.json`, JSON.stringify(value, null, 2));
+}
+NODE
+
+run_loose_status() {
+  output=$1
+  shift
+  (
+    cd "$REPO" || exit 125
+    env FIXTURE_DIR="$LOOSE_FIXTURE" PATH="$BIN:$PATH" \
+      bash "$SCRIPT" --repo test/repo "$@"
+  ) > "$output" 2> "${output}.err"
+  RUN_EXIT=$?
+}
+
+run_loose_status "$WORK/loose-source.out"
+expect_exit 0 "loose-source scan succeeds"
+expect_has '- #800 0/1 空闲 Open loose-source spec [票：#801] → /implement-spec-split 800' \
+  'a Spec naming a loose ticket is a single-ticket Spec' "$WORK/loose-source.out"
+expect_has '- #840 0/1 空闲 Open spec sharing a source [票：#841] → /implement-spec-split 840' \
+  'a loose source shared with a landed Spec still makes its open Spec implementable' "$WORK/loose-source.out"
+expect_section_without '有规格、未拆票' '#8' 'no loose-source Spec needs to-tickets' "$WORK/loose-source.out"
+expect_without '规格已落地、源票未关' 'default output omits the landed-source section' "$WORK/loose-source.out"
+expect_without '散票' 'default output omits the loose section' "$WORK/loose-source.out"
+
+run_loose_status "$WORK/loose-source-all.out" --all
+expect_exit 0 "loose-source --all scan succeeds"
+expect_has '规格已落地、源票未关' 'all output includes the landed-source heading' "$WORK/loose-source-all.out"
+expect_has '- 散票 #811 Loose source covered by a landed spec 的规格 #810 已关闭，源票还开着 → 关票并留言' \
+  'a loose source named only by a landed Spec is listed to close' "$WORK/loose-source-all.out"
+expect_has '- 散票 #821 Split loose source covered by a landed spec 的规格 #820 已关闭，源票还开着 → 关票并留言' \
+  'a landed Spec that split its own tickets still counts for its source' "$WORK/loose-source-all.out"
+expect_section_without '规格已落地、源票未关' '#841 ' \
+  'a source still named by an open Spec is not listed to close' "$WORK/loose-source-all.out"
+expect_section_without '规格已落地、源票未关' '#812 ' \
+  'a closed source is not listed to close' "$WORK/loose-source-all.out"
+expect_has '- #850 [needs-triage] Loose ticket without a spec' \
+  'a loose ticket named by no Spec is still listed as loose' "$WORK/loose-source-all.out"
+expect_section_without '散票' '#801 ' 'the source of an open Spec is not loose' "$WORK/loose-source-all.out"
+expect_section_without '散票' '#811 ' 'the source of a landed Spec is not loose' "$WORK/loose-source-all.out"
+expect_section_without '散票' '#841 ' 'a source shared with a landed Spec is not loose' "$WORK/loose-source-all.out"
+expect_section_without '状态没收尾' '#811 ' \
+  'a loose source is not reported as a map implementation ticket' "$WORK/loose-source-all.out"
+
+run_loose_status "$WORK/loose-source-graph.json" --graph
+expect_exit 0 "loose-source graph succeeds"
+node - "$WORK/loose-source-graph.json" > "$WORK/loose-source-graph-check.txt" 2>&1 <<'NODE'
+const fs = require('fs');
+const assert = require('assert');
+const graph = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const spec = (n) => graph.specs.find((item) => item.number === n);
+// A loose source is its Spec's Ticket in the graph, open and landed alike.
+assert.deepStrictEqual(spec(800).tickets.map((t) => [t.number, t.state]), [[801, 'open']]);
+assert.strictEqual(spec(800).status, 'ready');
+assert.deepStrictEqual(spec(840).tickets.map((t) => [t.number, t.state]), [[841, 'open']]);
+assert.deepStrictEqual(spec(810).tickets.map((t) => [t.number, t.state]), [[811, 'open'], [812, 'closed']]);
+assert.strictEqual(spec(810).tickets_closed, 1);
+assert.deepStrictEqual(spec(820).tickets.map((t) => [t.number, t.state]), [[822, 'closed']]);
+assert.deepStrictEqual(spec(830).tickets.map((t) => [t.number, t.state]), [[841, 'open']]);
+for (const n of [800, 810, 820, 830, 840]) assert.strictEqual(spec(n).map, null);
+assert.deepStrictEqual(graph.counts.specs, {total: 5, landed: 3, needs_tickets: 0, ready: 2, running: 0, interrupted: 0, shelved: 0});
+assert.deepStrictEqual(graph.counts.tickets, {total: 5, closed: 2});
+assert.deepStrictEqual(graph.loose_specs, [800, 810, 820, 830, 840]);
+NODE
+RUN_EXIT=$?
+expect_exit 0 "graph counts a loose source as its Spec's Ticket"
+[ "$RUN_EXIT" -eq 0 ] || cat "$WORK/loose-source-graph-check.txt"
+
+run_loose_status "$WORK/loose-source-order.json" --order --parallel 20 --json
+expect_exit 0 "loose-source order JSON succeeds"
+node - "$WORK/loose-source-order.json" > "$WORK/loose-source-order-check.txt" 2>&1 <<'NODE'
+const fs = require('fs');
+const assert = require('assert');
+const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+assert.deepStrictEqual(plan.wave1.map((item) => item.spec), [800, 840]);
+NODE
+RUN_EXIT=$?
+expect_exit 0 "order JSON enters both loose-source Specs into wave 1"
+[ "$RUN_EXIT" -eq 0 ] || cat "$WORK/loose-source-order-check.txt"
+
+# The loose-source rule (#83) has guards, and the source ticket's own flags
+# decide where its Spec lands. Only a line that starts with the 实现票 label
+# names a source ticket: prose that mentions the label mid-line changes
+# nothing, whether that Spec is open or landed, and a landed Spec that only
+# narrates a source is not named when the source is listed to close. A line
+# that names another issue's child (here an open Spec's execution tickets)
+# names no source either. A source with unfinished children keeps the role
+# the scanner gave it, a legacy parent; a shelved or ready-for-human source
+# keeps its Spec out of 可以实现.
+LOOSE_GUARD_FIXTURE=$WORK/loose-guard-fixture
+mkdir -p "$LOOSE_GUARD_FIXTURE" || exit 1
+
+LOOSE_GUARD_FIXTURE=$LOOSE_GUARD_FIXTURE node > /dev/null <<'NODE'
+const fs = require('fs');
+const directory = process.env.LOOSE_GUARD_FIXTURE;
+
+function sub(total, completed = total) {
+  return {total, completed, percent_completed: total ? Math.round(100 * completed / total) : 0};
+}
+
+function issue(number, title, state, labels, body = '', children = sub(0)) {
+  return {
+    number,
+    title,
+    state,
+    labels: labels.map((name) => ({name})),
+    body,
+    sub_issues_summary: children,
+    issue_dependencies_summary: {blocked_by: 0, total_blocked_by: 0, blocking: 0, total_blocking: 0},
+    assignees: [],
+  };
+}
+
+const issues = [
+  issue(860, 'Loose ticket narrated mid-line', 'open', ['needs-triage'], ''),
+  issue(861, 'Loose ticket narrated by a landed spec', 'open', [], ''),
+  issue(862, 'Spec narrating a loose ticket', 'open', [], '## Problem Statement\n这个功能拆成 实现票：#860 之后再做。'),
+  issue(863, 'Landed spec narrating loose tickets', 'closed', [], '## Problem Statement\n当时讨论过 实现票：#861 的拆法，也提到 实现票：#865。'),
+  issue(864, 'Landed spec owning a narrated source', 'closed', [], '## Problem Statement\n实现票：#865。'),
+  issue(865, 'Source owned by one landed spec, narrated by another', 'open', [], ''),
+  issue(870, 'Spec owning the misnamed tickets', 'open', [], '## Problem Statement\nOwn children.', sub(2, 0)),
+  issue(871, 'Execution ticket misnamed by an open spec', 'open', [], ''),
+  issue(872, 'Execution ticket misnamed by a landed spec', 'open', [], ''),
+  issue(873, 'Spec misnaming an execution ticket', 'open', [], '## Problem Statement\n实现票：#871。'),
+  issue(874, 'Landed spec misnaming an execution ticket', 'closed', [], '## Problem Statement\n实现票：#872。'),
+  issue(880, 'Spec of a source with children', 'open', [], '## Problem Statement\n实现票：#881。'),
+  issue(881, 'Source with unfinished children', 'open', [], '', sub(1, 0)),
+  issue(882, 'Child of the source', 'open', [], ''),
+  issue(883, 'Spec of a shelved source', 'open', [], '## Problem Statement\n实现票：#884。'),
+  issue(884, '【搁置】Shelved source', 'open', [], ''),
+  issue(885, 'Spec of a human source', 'open', [], '## Problem Statement\n实现票：#886。'),
+  issue(886, 'Human source', 'open', ['ready-for-human'], ''),
+];
+
+const responses = {
+  'sub-870': [
+    issue(871, 'Execution ticket misnamed by an open spec', 'open', [], ''),
+    issue(872, 'Execution ticket misnamed by a landed spec', 'open', [], ''),
+  ],
+  'sub-881': [issue(882, 'Child of the source', 'open', [], '')],
+  'blocker-871': [],
+  'blocker-872': [],
+  'blocker-882': [],
+  'blocker-886': [],
+};
+
+fs.writeFileSync(`${directory}/issues.json`, JSON.stringify(issues, null, 2));
+for (const [name, value] of Object.entries(responses)) {
+  fs.writeFileSync(`${directory}/${name}.json`, JSON.stringify(value, null, 2));
+}
+NODE
+
+run_loose_guard_status() {
+  output=$1
+  shift
+  (
+    cd "$REPO" || exit 125
+    env FIXTURE_DIR="$LOOSE_GUARD_FIXTURE" PATH="$BIN:$PATH" \
+      bash "$SCRIPT" --repo test/repo "$@"
+  ) > "$output" 2> "${output}.err"
+  RUN_EXIT=$?
+}
+
+run_loose_guard_status "$WORK/loose-guard.out"
+expect_exit 0 "loose-guard scan succeeds"
+expect_has '- #862 Spec narrating a loose ticket → to-tickets' \
+  'a 实现票 label mentioned mid-line leaves the Spec needing tickets' "$WORK/loose-guard.out"
+expect_has '- #873 Spec misnaming an execution ticket → to-tickets' \
+  "a 实现票 line naming another Spec's execution ticket leaves the Spec needing tickets" "$WORK/loose-guard.out"
+expect_has '- #880 Spec of a source with children → to-tickets' \
+  'a source with children of its own leaves the Spec needing tickets' "$WORK/loose-guard.out"
+expect_has '- #881 0/1 空闲 Source with unfinished children [票：#882] → /implement-spec-split 881' \
+  'a source with unfinished children keeps its legacy parent role' "$WORK/loose-guard.out"
+expect_section_without '可以实现' '#862 ' 'a Spec narrating a loose ticket is not implementable' "$WORK/loose-guard.out"
+expect_section_without '可以实现' '#873 ' "a Spec misnaming an execution ticket is not implementable" "$WORK/loose-guard.out"
+expect_section_without '可以实现' '#880 ' 'a Spec of a source with children is not implementable' "$WORK/loose-guard.out"
+expect_section_without '可以实现' '#883 ' 'a Spec whose only source is shelved is not implementable' "$WORK/loose-guard.out"
+expect_section_without '可以实现' '#885 ' 'a Spec whose only source is ready-for-human is not implementable' "$WORK/loose-guard.out"
+
+run_loose_guard_status "$WORK/loose-guard-all.out" --all
+expect_exit 0 "loose-guard --all scan succeeds"
+expect_has '- #860 [needs-triage] Loose ticket narrated mid-line' \
+  'a ticket the prose mentions mid-line is still loose' "$WORK/loose-guard-all.out"
+expect_has '- #861 Loose ticket narrated by a landed spec' \
+  'a ticket a landed Spec narrates mid-line is still loose' "$WORK/loose-guard-all.out"
+expect_section_without '规格已落地、源票未关' '#861 ' \
+  'a ticket only a landed Spec narrates is not listed to close' "$WORK/loose-guard-all.out"
+expect_has '- 散票 #865 Source owned by one landed spec, narrated by another 的规格 #864 已关闭，源票还开着 → 关票并留言' \
+  'a landed Spec that only narrates a source is not named as its Spec' "$WORK/loose-guard-all.out"
+expect_section_without '规格已落地、源票未关' '#87' \
+  "another Spec's execution ticket is never listed to close, landed Spec or not" "$WORK/loose-guard-all.out"
+expect_has '- 规格 #883 Spec of a shelved source：未关执行票只剩搁置票 #884，可关闭规格（核对后由用户确认）' \
+  'a Spec whose only source is shelved is reported as closable' "$WORK/loose-guard-all.out"
+expect_has '- 规格 #885 Spec of a human source：人工票待做：#886 → 由人工完成，agent 不派发' \
+  'a Spec whose only source is ready-for-human is reported human-only' "$WORK/loose-guard-all.out"
+
+run_loose_guard_status "$WORK/loose-guard-graph.json" --graph
+expect_exit 0 "loose-guard graph succeeds"
+node - "$WORK/loose-guard-graph.json" > "$WORK/loose-guard-graph-check.txt" 2>&1 <<'NODE'
+const fs = require('fs');
+const assert = require('assert');
+const graph = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const spec = (n) => graph.specs.find((item) => item.number === n);
+assert.strictEqual(spec(862).status, 'needs_tickets');
+assert.strictEqual(spec(873).status, 'needs_tickets');
+// The source with children is a legacy Spec of its own, not a Ticket of #880.
+assert.strictEqual(spec(880).status, 'needs_tickets');
+assert.strictEqual(spec(880).has_tickets, false);
+assert.deepStrictEqual(spec(880).tickets, []);
+assert.strictEqual(spec(881).kind, 'legacy');
+assert.deepStrictEqual(spec(881).tickets.map((t) => t.number), [882]);
+assert.deepStrictEqual(spec(870).tickets.map((t) => t.number), [871, 872]);
+assert.strictEqual(spec(883).status, 'shelved');
+assert.deepStrictEqual(spec(883).tickets.map((t) => [t.number, t.shelved]), [[884, true]]);
+assert.strictEqual(spec(885).status, 'human');
+assert.strictEqual(spec(885).human_only, true);
+assert.deepStrictEqual(spec(885).tickets.map((t) => [t.number, t.human]), [[886, true]]);
+NODE
+RUN_EXIT=$?
+expect_exit 0 "graph keeps guarded Specs unimplemented and flags shelved and human sources"
+[ "$RUN_EXIT" -eq 0 ] || cat "$WORK/loose-guard-graph-check.txt"
+
+run_loose_guard_status "$WORK/loose-guard-order.json" --order --parallel 20 --json
+expect_exit 0 "loose-guard order JSON succeeds"
+node - "$WORK/loose-guard-order.json" > "$WORK/loose-guard-order-check.txt" 2>&1 <<'NODE'
+const fs = require('fs');
+const assert = require('assert');
+const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+assert.deepStrictEqual(plan.wave1.map((item) => item.spec), [870, 881]);
+assert.deepStrictEqual(plan.later, []);
+NODE
+RUN_EXIT=$?
+expect_exit 0 "order enters only the Spec with own tickets and the legacy parent"
+[ "$RUN_EXIT" -eq 0 ] || cat "$WORK/loose-guard-order-check.txt"
 
 (
   cd "$REPO" || exit 125

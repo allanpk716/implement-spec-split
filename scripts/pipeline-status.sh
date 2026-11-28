@@ -21,6 +21,8 @@ tracker documentation instead.
                          listed as orphan claims; without Orca they are left unchecked.
                          Hygiene reports `人工票待做：#n` for a Spec whose open execution
                          tickets are all `ready-for-human`; such tickets are never dispatched.
+                         规格已落地、源票未关 lists an open loose ticket that a 实现票 line
+                         names only on closed Specs.
   --order                Print a deterministic development order for implementable Specs.
   --parallel K           With --order, plan for K concurrent Specs (default: 2).
   --workers N            With --order, split N total workers across K concurrent Specs.
@@ -255,6 +257,25 @@ function bodyReferences(issue) {
   return [...refs].sort((a, b) => a - b);
 }
 
+// The line-anchored twin of bodyReferences, read the way publish-batch.sh
+// reads the line: only a line that starts with the 实现票 label names
+// tickets. It serves the #83 loose-source semantics (source-ticket
+// registration, the 散票 exclusion, landedSourceTickets); bodyReferences
+// stays the looser set that every map-ticket path and its pinned
+// expectations are built on.
+function lineReferences(issue) {
+  const refs = new Set();
+  const pattern = /^[ \t]*(?:[-*][ \t]+)?(?:\*\*[ \t]*)?(?:实现票[ \t]*(?:[:：]|为|是)|Implementation[ \t]+tickets?[ \t]*[:：])[ \t]*#[0-9]+(?:[ \t]*(?:[,，、和]|and)[ \t]*#[0-9]+)*/i;
+  for (const line of String(issue.body || '').split(/\r?\n/)) {
+    const match = pattern.exec(line);
+    if (!match) continue;
+    for (const numberMatch of match[0].matchAll(/#([0-9]+)/g)) {
+      refs.add(Number(numberMatch[1]));
+    }
+  }
+  return [...refs].sort((a, b) => a - b);
+}
+
 function bodyMapReferences(issue) {
   const refs = new Set();
   const pattern = /^\s*(?:[-*]\s+)?(?:\*\*\s*)?(?:(?:来源)?地图|Map)\s*(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*#([0-9]+)(?![0-9])/i;
@@ -450,7 +471,6 @@ if (mode === 'plan') {
     }
   }
 
-  const implementationValues = [...implementations.values()];
   const allProblemSpecs = issues.filter((issue) => (
     !issue.pull_request && hasProblemStatement(issue)
   )).map((issue) => ({
@@ -458,12 +478,36 @@ if (mode === 'plan') {
     state: issue.state,
     title: issue.title || '',
     refs: bodyReferences(issue),
+    lineRefs: lineReferences(issue),
     ownChildren: Number(summary(issue).total || 0) > 0,
     ownChildCount: Number(summary(issue).total || 0),
     ownChildCompleted: Number(summary(issue).completed || 0),
     mapRefs: bodyMapReferences(issue),
   })).sort((a, b) => a.number - b.number);
+
+  // A 实现票 line may also name a loose ticket: the source ticket a Spec was
+  // drafted from (#83). It is the Spec's implementation the way a map ticket
+  // is, only without a map (mapNumber null): it counts as covered, becomes the
+  // Ticket of a single-ticket Spec, and is reported once its Spec has landed.
+  // Only a line-anchored reference counts (lineReferences), so prose that
+  // mentions the label mid-line registers nothing. Only an open ticket without
+  // children counts; one with children keeps the role the scanner already gave
+  // it (a legacy parent, a map's child).
+  for (const spec of allProblemSpecs) {
+    for (const ref of spec.lineRefs) {
+      const issue = byNumber.get(Number(ref));
+      if (!issue || mapChildNumbers.has(Number(ref))) continue;
+      if (!isOpen(issue) || isMap(issue) || hasProblemStatement(issue)) continue;
+      if (Number(summary(issue).total || 0) > 0) continue;
+      const record = compactIssue(issue);
+      record.mapNumber = null;
+      implementations.set(Number(ref), record);
+    }
+  }
+
+  const implementationValues = [...implementations.values()];
   const coveredRefs = uniqueNumbers(allProblemSpecs.flatMap((spec) => spec.refs));
+  const coveredLineRefs = uniqueNumbers(allProblemSpecs.flatMap((spec) => spec.lineRefs));
   const coveredMapRefs = uniqueNumbers(allProblemSpecs.flatMap((spec) => spec.mapRefs));
   const problemSpecs = allProblemSpecs.filter((spec) => isOpen(spec));
 
@@ -508,6 +552,7 @@ if (mode === 'plan') {
     specs: problemSpecs,
     allProblemSpecs: all ? allProblemSpecs : [],
     coveredRefs,
+    coveredLineRefs,
     coveredMapRefs,
     oldCandidates,
     subRequests: requests,
@@ -554,11 +599,46 @@ if (mode === 'collect') {
       openTickets.some((ticket) => ticket.human);
   }
 
+  // Every issue that is somebody's child: a map's, a Spec's (its own, or an
+  // implementation's), a legacy parent's. Known in every mode: the map and
+  // subRequests endpoints are always loaded; closed Specs' sub endpoints
+  // exist only under --all and --graph, and add nothing otherwise.
+  const knownChildren = new Set();
+  const mapChildren = new Set();
+  for (const map of stage.maps) {
+    for (const child of readEndpoint(endpointDir, 'map', map.number)) {
+      knownChildren.add(Number(child.number));
+      mapChildren.add(Number(child.number));
+    }
+  }
+  const endpointNumbers = uniqueNumbers([
+    ...(stage.subRequests || []),
+    ...(stage.closedSpecRequests || []),
+  ]);
+  for (const number of endpointNumbers) {
+    for (const child of readEndpoint(endpointDir, 'sub', number)) {
+      knownChildren.add(Number(child.number));
+    }
+  }
+  for (const oldSpec of stage.oldCandidates || []) {
+    knownChildren.add(Number(oldSpec.number));
+  }
+
+  // The implementation a 实现票 reference names, for a childless Spec. A map
+  // ticket always counts. A loose source ticket (#83, mapNumber null) counts
+  // only when it is nobody's child: a line that misnames another issue's
+  // child names no implementation, and the Spec stays in 有规格、未拆票.
+  function implementationOf(ref) {
+    const impl = implementations.get(Number(ref));
+    if (!impl || impl.mapNumber !== null) return impl;
+    return knownChildren.has(Number(ref)) ? undefined : impl;
+  }
+
   const shelvedOnlySpecs = [];
   const humanOnlySpecs = [];
   const implement = [];
   for (const spec of stage.specs) {
-    const referencesImplementation = spec.refs.some((ref) => implementations.has(Number(ref)));
+    const referencesImplementation = spec.refs.some((ref) => implementationOf(ref));
     if (!spec.ownChildren && !referencesImplementation) continue;
     const tickets = [];
     const ticketSet = new Set();
@@ -575,7 +655,7 @@ if (mode === 'collect') {
       addTickets(readEndpoint(endpointDir, 'sub', spec.number).map((issue) => issue.number));
     } else {
       for (const ref of spec.refs) {
-        const impl = implementations.get(Number(ref));
+        const impl = implementationOf(ref);
         if (!impl) continue;
         if (impl.childTotal > 0) {
           addTickets(readEndpoint(endpointDir, 'sub', impl.number).map((issue) => issue.number));
@@ -625,7 +705,7 @@ if (mode === 'collect') {
   implement.sort((a, b) => a.number - b.number);
 
   const needsTickets = stage.specs
-    .filter((spec) => !spec.ownChildren && !spec.refs.some((ref) => implementations.has(Number(ref))))
+    .filter((spec) => !spec.ownChildren && !spec.refs.some((ref) => implementationOf(ref)))
     .map((spec) => ({number: spec.number, title: spec.title, refs: spec.refs}))
     .sort((a, b) => a.number - b.number);
 
@@ -718,6 +798,7 @@ if (mode === 'collect') {
       ticket.state === 'open' && ticket.shelved
     )).sort((a, b) => a.number - b.number),
   })) : [];
+  const landedSourceTickets = [];
   if (all) {
     for (const spec of humanOnlySpecs) {
       hygiene.push({
@@ -750,15 +831,22 @@ if (mode === 'collect') {
 
     const openReferences = new Set(stage.specs.flatMap((spec) => spec.refs));
     const closedReferences = new Map();
+    // The same two sets over line-anchored references, for loose source
+    // tickets: a line that merely mentions the label names no source.
+    const openLineReferences = new Set(stage.specs.flatMap((spec) => spec.lineRefs));
+    const closedLineReferences = new Map();
+    const rememberReference = (table, number, specNumber) => {
+      if (!table.has(number)) table.set(number, []);
+      table.get(number).push(specNumber);
+    };
     for (const spec of stage.allProblemSpecs) {
       if (isOpen(spec)) continue;
-      for (const ref of spec.refs) {
-        const number = Number(ref);
-        if (!closedReferences.has(number)) closedReferences.set(number, []);
-        closedReferences.get(number).push(spec.number);
-      }
+      for (const ref of spec.refs) rememberReference(closedReferences, Number(ref), spec.number);
+      for (const ref of spec.lineRefs) rememberReference(closedLineReferences, Number(ref), spec.number);
     }
     for (const impl of implementations.values()) {
+      // A loose source ticket is reported as landedSourceTickets below.
+      if (impl.mapNumber === null) continue;
       const specNumbers = uniqueNumbers(closedReferences.get(Number(impl.number)) || []);
       if (
         impl.childTotal === 0 &&
@@ -773,37 +861,34 @@ if (mode === 'collect') {
         });
       }
     }
+    // A loose source ticket (#83) stays open until its Spec lands; once every
+    // Spec naming it on a 实现票 line is closed, the only thing left is to
+    // close it with a comment, which find-next does from this list. Only a
+    // line-anchored reference counts, and another issue's child is never a
+    // source ticket, however a 实现票 line spells it.
+    for (const impl of implementations.values()) {
+      if (impl.mapNumber !== null) continue;
+      if (knownChildren.has(Number(impl.number))) continue;
+      const specNumbers = uniqueNumbers(closedLineReferences.get(Number(impl.number)) || []);
+      if (specNumbers.length > 0 && !openLineReferences.has(Number(impl.number))) {
+        landedSourceTickets.push({number: impl.number, title: impl.title, specNumbers});
+      }
+    }
   }
 
   const loose = [];
   if (all) {
-    const knownChildren = new Set();
-    const mapChildren = new Set();
-    for (const map of stage.maps) {
-      for (const child of readEndpoint(endpointDir, 'map', map.number)) {
-        knownChildren.add(Number(child.number));
-        mapChildren.add(Number(child.number));
-      }
-    }
-    const endpointNumbers = uniqueNumbers([
-      ...(stage.subRequests || []),
-      ...(stage.closedSpecRequests || []),
-    ]);
-    for (const number of endpointNumbers) {
-      for (const child of readEndpoint(endpointDir, 'sub', number)) {
-        knownChildren.add(Number(child.number));
-      }
-    }
-    for (const oldSpec of stage.oldCandidates || []) {
-      knownChildren.add(Number(oldSpec.number));
-    }
+    // A ticket named on a 实现票 line has a Spec (open or landed); it is not
+    // loose work to triage, whichever state that Spec is in.
+    const coveredLineRefs = new Set((stage.coveredLineRefs || []).map(Number));
     for (const issue of issues) {
       if (
         isOpen(issue) &&
         !isMap(issue) &&
         !mapChildren.has(Number(issue.number)) &&
         !hasProblemStatement(issue) &&
-        !knownChildren.has(Number(issue.number))
+        !knownChildren.has(Number(issue.number)) &&
+        !coveredLineRefs.has(Number(issue.number))
       ) {
         loose.push({
           number: Number(issue.number),
@@ -945,6 +1030,7 @@ if (mode === 'collect') {
     orphanClaimsUnchecked,
     blockerRequests,
     hygiene: all ? hygiene : [],
+    landedSourceTickets: all ? landedSourceTickets : [],
     loose: all ? loose : [],
   };
   process.stdout.write(JSON.stringify(output, null, 2));
@@ -1156,6 +1242,17 @@ if (mode === 'render') {
           const specs = item.specNumbers.map((number) => `#${number}`).join('、');
           lines.push(`- 实现票 #${item.number} ${clean(item.title)} 的规格 ${specs} 已关闭，票还开着 → 核对后关票`);
         }
+      }
+    }
+
+    lines.push('');
+    lines.push('规格已落地、源票未关');
+    if ((pipeline.landedSourceTickets || []).length === 0) {
+      lines.push('（无）');
+    } else {
+      for (const item of pipeline.landedSourceTickets) {
+        const specs = item.specNumbers.map((number) => `#${number}`).join('、');
+        lines.push(`- 散票 #${item.number} ${clean(item.title)} 的规格 ${specs} 已关闭，源票还开着 → 关票并留言`);
       }
     }
 

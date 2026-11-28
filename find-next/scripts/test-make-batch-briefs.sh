@@ -127,6 +127,8 @@ const issues = new Map([
   [63, {number: 63, title: 'Ticket beta', parent: 22}],
   [64, {number: 64, title: 'Ticket other map', parent: 23}],
   [74, {number: 74, title: 'Ticket gamma', parent: 23}],
+  [75, {number: 75, title: 'Loose ticket alpha'}],
+  [76, {number: 76, title: 'Loose ticket beta'}],
   [65, {number: 65, title: 'Existing spec implementation', parent: 22}],
   [66, {number: 66, title: 'Blocked spec implementation', parent: 22}],
   [224, {
@@ -383,6 +385,57 @@ expect_without 'hand-written spec without a map' \
   'map-linked spec is not reported as hand-written' "$WORK/map-linked-spec.out.err"
 expect_pattern_without '@@[A-Z_]+@@' 'map-linked spec brief has no variable left' \
   "$MAP_LINKED/S1/brief.md"
+
+LOOSE=$WORK/loose-spec
+run_brief "$WORK/loose-spec.out" --example 205 "$LOOSE" S1=62,63 S2=loose:75
+expect_exit 0 'loose group generates alongside a map group'
+expect_first_line '# 任务：为散票 #75 起草一份规格和它的执行票（只写草稿，不发布）' \
+  'loose-spec template opening is used' "$LOOSE/S2/brief.md"
+expect_has '散票 #75「Loose ticket alpha」 不属于任何地图，也还没有规格' \
+  'loose ticket is substituted' "$LOOSE/S2/brief.md"
+expect_has '  实现票：#75' 'loose-spec brief fixes the 实现票 line to the source ticket' \
+  "$LOOSE/S2/brief.md"
+expect_has '**不写 `地图：` / `来源地图：` 行**' 'loose-spec brief forbids a map line' \
+  "$LOOSE/S2/brief.md"
+expect_without '地图：#' 'loose-spec brief names no map line' "$LOOSE/S2/brief.md"
+expect_has '- S2 · 散票 #75「Loose ticket alpha」' 'loose group appears in every groups list' \
+  "$LOOSE/S1/brief.md"
+expect_has '- S1 · 地图 #22 · 覆盖 #62「Ticket alpha」、#63「Ticket beta」' \
+  'map group appears in the loose-spec brief' "$LOOSE/S2/brief.md"
+expect_has '规格：<标题>（源票 #75）' 'loose-spec report line names the source ticket' \
+  "$LOOSE/S2/brief.md"
+expect_has '源票本身不是执行票' 'loose-spec brief keeps the source ticket out of tickets' \
+  "$LOOSE/S2/brief.md"
+expect_has "${COUNTER_RULE}" 'loose-spec brief carries the shared-counter rule' "$LOOSE/S2/brief.md"
+expect_has "${COUNTER_LABEL_RULE}" \
+  'loose-spec brief tells the drafter to label shared-counter tickets' "$LOOSE/S2/brief.md"
+expect_pattern_without '@@[A-Z_]+@@' 'loose-spec brief has no variable left' "$LOOSE/S2/brief.md"
+
+LOOSE_TWO=$WORK/loose-spec-two
+run_brief "$WORK/loose-spec-two.out" --example 205 "$LOOSE_TWO" S1=loose:75,76
+expect_exit 0 'two loose tickets in one group generate'
+expect_first_line '# 任务：为散票 #75、#76 起草一份规格和它的执行票（只写草稿，不发布）' \
+  'loose group lists every source ticket' "$LOOSE_TWO/S1/brief.md"
+expect_has '  实现票：#75、#76' 'loose-spec 实现票 line lists every source ticket' \
+  "$LOOSE_TWO/S1/brief.md"
+
+NOT_LOOSE=$WORK/loose-with-map-ticket
+run_brief "$WORK/loose-with-map-ticket.out" "$NOT_LOOSE" S1=loose:62
+expect_exit 1 'a map implementation ticket in a loose group is rejected'
+expect_has 'issue #62 in loose group S1 has parent #22; pass map implementation tickets as S1=62' \
+  'loose-with-map-ticket error is explained' "$WORK/loose-with-map-ticket.out.err"
+expect_no_directory "$NOT_LOOSE" 'loose-with-map-ticket failure writes no files' "$NOT_LOOSE"
+
+LOOSE_OVERLAP=$WORK/loose-overlap
+run_brief "$WORK/loose-overlap.out" "$LOOSE_OVERLAP" S1=loose:75 S2=75
+expect_exit 1 'a loose ticket in two groups is rejected'
+expect_has 'ticket #75 appears in more than one group' 'loose-overlap error is explained' \
+  "$WORK/loose-overlap.out.err"
+
+LOOSE_EMPTY=$WORK/loose-empty
+run_brief "$WORK/loose-empty.out" "$LOOSE_EMPTY" S1=loose:
+expect_exit 1 'an empty loose group is rejected'
+expect_has 'group S1 has no tickets' 'loose-empty error is explained' "$WORK/loose-empty.out.err"
 
 MISMATCH=$WORK/mismatch
 run_brief "$WORK/mismatch.out" --example 205 "$MISMATCH" S1=62,64
