@@ -16,6 +16,10 @@
 # item by the recommendation instead of asking, the wrap-up and the supervisor
 # list every auto-decision with its reversal recipe, and the three-round cap is
 # gone.
+# Ticket #70 (规格 #58) pins the narrowed parking of the spec session: a
+# trade-off is never parked on (a recommendation is applied, anything else takes
+# the reversibility rule), the category table is down to quota / transient /
+# auth / error, and the hooks README's rule B says the same.
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -116,7 +120,7 @@ without '**Route**, two lines written every time' 'the final report no longer as
 without 'names it in `projection.provider`' 'the session no longer reads the model off worker-show by hand' "$SKILL"
 # What stays: the two machine-readable lines and the section keeper and the
 # supervisor read.
-has '停车类别：decision' 'the parking report keeps its category line' "$SKILL"
+has '停车类别：error' 'the parking report keeps its category line' "$SKILL"
 has '可恢复时间：无' 'the parking report keeps its recovery-time line' "$SKILL"
 has '### 需要你决定' 'the parking report keeps its decision section' "$SKILL"
 has '### 现状' 'the parking report keeps its status section' "$SKILL"
@@ -154,6 +158,49 @@ has '等人工票 #<t>' 'GLOSSARY: the landing report names the tickets left to 
 # 环境约束 section is the worker-side half of it.
 has '**Brief 卫生**：往 Brief 里引用仓库外的文件' 'SKILL.md: Brief hygiene before naming a file outside the repo' "$SKILL"
 has '「环境约束（找文件与子进程）」一节是 worker 侧的对应约束' 'SKILL.md: the templates 环境约束 section is the worker-side rule' "$SKILL"
+
+# --- the spec session parks only when it truly cannot go on (票 #70, 规格 #58) ---
+
+# Step 8: an item under 需要人取舍 is decided, never parked on. A usable
+# recommendation is applied; 可自动采纳：否 and 推荐：无 take the reversibility
+# rule, a recommendation that is reversible and not outward-facing first; only
+# an item that needs the owner's identity (auth) or lists no reversible option
+# (error) parks; an option that loosens a safety boundary is recorded under
+# 未执行的放宽项 and never taken. The two marks stay the reviewer's wording, so
+# the pins name the outcomes, not the marks.
+has 'never parks the Run for being a trade-off' 'SKILL.md step 8 never parks on a trade-off' "$SKILL"
+has 'pick a reversible option by 「可逆性高 > 改动面小 > 与现有 ADR 一致」' \
+  'SKILL.md step 8 decides an item without a usable recommendation by the reversibility rule' "$SKILL"
+has 'preferring the reviewer' 'SKILL.md step 8 prefers a recommendation that is reversible and not outward-facing' "$SKILL"
+has 'parks with category `auth`' 'SKILL.md step 8 parks an item that needs the owner identity as auth' "$SKILL"
+has 'never invent an option' 'SKILL.md step 8 parks an item with no reversible option instead of inventing one' "$SKILL"
+has '「未执行的放宽项」' 'SKILL.md records a loosening option as not executed' "$SKILL"
+without 'Park only for an item that is marked `可自动采纳：否`' 'SKILL.md step 8 no longer parks on 可自动采纳：否' "$SKILL"
+# The category table is down to quota / transient / auth / error, the same four
+# in the machine-readable line, the table and the keeper bullet; auth covers an
+# action that needs the owner's identity; the two cases that had no category
+# now have one (the landing lock after 2 hours → transient, opus-review exits
+# other than 2 / 3 / 4 → error), and every non-zero opus-review exit names its
+# category (test-opus-review.sh pins the whole sentence in SKILL.md and in
+# find-next/SKILL.md alike).
+has '停车类别：quota|transient|auth|error' 'the parking category line names the four categories left' "$SKILL"
+without '停车类别：quota|transient|decision|error|other' 'the parking category line no longer names decision or other' "$SKILL"
+has '| `auth` | 需要本人身份或凭据的操作：首次登录授权、付款、验证码 | `无` |' 'the parking category table has the auth row' "$SKILL"
+has '三轮审查后仍有正确性问题、护栏违反' 'the error row names a correctness problem left after three rounds and a guardrail violation' "$SKILL"
+has '`opus-review.sh` 非 0 退出且不是 2 / 3 / 4' 'the error row names the opus-review exits' "$SKILL"
+has '`auth` and `error` still need a human' 'keeper resumes only quota and transient' "$SKILL"
+without '`decision`, `error` and `other` still need a human' 'the keeper sentence no longer names decision or other' "$SKILL"
+has '- `auth` / `error` parks are only notified, once per report' 'the keeper section lists auth among the notified-only parks' "$SKILL"
+has 'after 2 hours, park with category `transient`' 'the landing lock wait parks as transient' "$SKILL"
+OPUS_REVIEW_EXIT_SENTENCE='退出码为 3（额度或 429）时按 quota 停车，2（认证失败）按 auth 停车，4 按 transient 停车，其余非 0 退出码按 error 停车并说明'
+has "$OPUS_REVIEW_EXIT_SENTENCE" 'SKILL.md names the category of every non-zero opus-review exit' "$SKILL"
+# Flash mode: the flash session still picks nothing itself; an item without a
+# usable mark goes to one more Opus review instead of parking the Run.
+without 'parks the Run, and its parking report' 'flash Stopping no longer parks on 可自动采纳：否' "$SKILL"
+has 'only an item that review marks as needing the owner' 'flash Stopping parks only what the Opus review marks as auth' "$SKILL"
+# The hooks' reasons and the hooks README say the same (MAINTAINING 第 39 条).
+has '`可自动采纳：否` 或 `推荐：无` 的按可逆性规则自选一个可逆选项并写理由' 'hooks README rule B names the reversibility rule' "$HOOKS"
+has '（停车类别 `auth`）、或列出的选项里没有可逆的（停车类别 `error`）' 'hooks README rule B names the two categories that still park' "$HOOKS"
 
 # --- find-next 推进模式：the question round became a decision round (票 #69, 规格 #58) ---
 

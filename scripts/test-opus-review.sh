@@ -644,7 +644,7 @@ expect_rc "a route that prints nothing is a usage error" 64 "$RUN_RC"
 check "the empty route read is reported" grep -Fq 'printed nothing' "$WORK/run.err"
 check "an empty route calls neither model" bash -c "test ! -e '$FAKE_CLAUDE_LOG' && test ! -e '$FAKE_GLM_LOG'"
 
-EXIT_CODE_SENTENCE='退出码为 3（额度或 429）时按 quota 停车，其余非 0 退出码仍按原规则停车并说明（退出码含义见 scripts/opus-review.sh 头注释）'
+EXIT_CODE_SENTENCE='退出码为 3（额度或 429）时按 quota 停车，2（认证失败）按 auth 停车，4 按 transient 停车，其余非 0 退出码按 error 停车并说明（退出码含义见 scripts/opus-review.sh 头注释）'
 check "SKILL delegates exit codes to the wrapper header" \
   grep -Fq "$EXIT_CODE_SENTENCE" "$HERE/../SKILL.md"
 check "find-next delegates exit codes to the wrapper header" \
