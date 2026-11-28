@@ -12,6 +12,10 @@
 # fail-open wording. Ticket #60 (规格 #58) adds the partial-landing wording
 # (tickets left to a human), the Brief-hygiene sentence and the 环境约束
 # section the three root Brief templates share verbatim with find-next's.
+# Ticket #69 (规格 #58) pins find-next's decision round: step 6 decides each
+# item by the recommendation instead of asking, the wrap-up and the supervisor
+# list every auto-decision with its reversal recipe, and the three-round cap is
+# gone.
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -150,6 +154,112 @@ has '等人工票 #<t>' 'GLOSSARY: the landing report names the tickets left to 
 # 环境约束 section is the worker-side half of it.
 has '**Brief 卫生**：往 Brief 里引用仓库外的文件' 'SKILL.md: Brief hygiene before naming a file outside the repo' "$SKILL"
 has '「环境约束（找文件与子进程）」一节是 worker 侧的对应约束' 'SKILL.md: the templates 环境约束 section is the worker-side rule' "$SKILL"
+
+# --- find-next 推进模式：the question round became a decision round (票 #69, 规格 #58) ---
+
+# Step 6 no longer asks: each item is decided by the worker's recommendation, a
+# missing one by the reversibility rule, and the two kinds of item left to the
+# human (a personal identity, credential or physical action; a subjective
+# reaction) go to the wrap-up's 要你做. The message is a report with a reversal
+# recipe, the reply prompt is gone, and the three-round cap — a protection for
+# the human being asked — went with it. The user's own entries (都同意 / 展开 /
+# 先到这) stay.
+has '6. **一轮拍板（自动、可推翻；没有要拍的就跳过）**' 'find-next step 6 is a decision round' "$FIND_NEXT"
+has '**每条按 worker 给出的推荐答案自动采纳，不等用户回答**' 'find-next step 6 adopts each recommendation without waiting' "$FIND_NEXT"
+has '按「可逆性高 > 改动面小 > 与现有 ADR 一致」自选一个' 'find-next step 6 settles a missing recommendation by reversibility' "$FIND_NEXT"
+has '**要本人身份、凭据或物理动作**（task 票 `## 需要本人做的`），做不了；**要主观反应**（prototype 的反应题），agent 替不了' \
+  'find-next step 6 names the two reasons for not deciding' "$FIND_NEXT"
+has '列出的选项里没有可逆的，那一条不拍板' 'find-next step 6 invents no option when none is reversible' "$FIND_NEXT"
+has '`可自动采纳：是` 且有推荐的按推荐；`可自动采纳：否` 或 `推荐：无` 的按上面的可逆性规则自选' \
+  'find-next step 6 routes draft-review items the way the Spec session does' "$FIND_NEXT"
+has '推进器 · <仓库名> · 已自动拍板 <N> 条（可推翻）' 'find-next step 6 titles the message as decisions taken' "$FIND_NEXT"
+has '要推翻就回「推翻 #<票号> <条目> 改选 <X>」' 'find-next step 6 ends with the reversal recipe' "$FIND_NEXT"
+has '用户没说就不等' 'find-next step 6 does not wait for a reply' "$FIND_NEXT"
+has '对某条回「展开」时，当前会话就地对那张票调用 grilling 和 domain-modeling 技能' 'find-next step 6 keeps 展开 as the in-place grilling entry' "$FIND_NEXT"
+has '回「先到这」时按第 7 步立即收尾' 'find-next step 6 keeps 先到这 as the early hand-off' "$FIND_NEXT"
+has '拍完不等回复，直接做第 7 步' 'find-next step 6 goes straight on to the write-back' "$FIND_NEXT"
+without '单次运行累计最多问用户 3 轮' 'find-next step 6 no longer caps the rounds' "$FIND_NEXT"
+without '请回复「都同意」' 'find-next step 6 no longer asks for a reply' "$FIND_NEXT"
+without '需要拍板 <N> 条' 'find-next step 6 no longer titles the message as questions' "$FIND_NEXT"
+without '有问题就一轮问用户' 'find-next usage no longer describes a question round' "$FIND_NEXT"
+without '并入本轮最后一个问题问用户' 'find-next usage no longer asks for the worker cap' "$FIND_NEXT"
+
+# Step 7 writes the decisions back the way a human's answers used to be written,
+# marked as an auto-decision; stale and orphan claims are released on the
+# recommendation, a loose ticket's map is built on the draft, and the 再想想
+# branch is gone. Step 8's re-scan decides new items the same way, with no cap.
+has '7. **应用拍板、迷雾毕业与散票分流**' 'find-next step 7 applies the decisions' "$FIND_NEXT"
+has '出处标「（推进器自动拍板 <日期>，可推翻）」' 'find-next step 7 marks the write-back as an auto-decision' "$FIND_NEXT"
+has '`staleClaims`、`orphanClaims` 按推荐自动取消认领' 'find-next step 7 releases stale and orphan claims on the recommendation' "$FIND_NEXT"
+has '散票分流「该开地图」按草案自动拍板后' 'find-next step 7 builds a loose ticket map on the draft' "$FIND_NEXT"
+has '没有可逆选项、没拍板的组不发布' 'find-next step 7 does not publish a group with no reversible option' "$FIND_NEXT"
+has '`unresolved` 已在拍板轮处理并写回的组随后发布' 'find-next step 9 publishes a group after its decisions are written back' "$FIND_NEXT"
+has '脚本按第 6 步拍板的全机 worker 上限传入' 'find-next step 10 passes the decided worker cap' "$FIND_NEXT"
+without '只有用户同意才取消认领' 'find-next step 7 no longer waits for consent to release a claim' "$FIND_NEXT"
+without '（owner <日期> 推进器确认）' 'find-next step 7 no longer cites a human confirmation' "$FIND_NEXT"
+without '再想想' 'find-next no longer has the 再想想 branch' "$FIND_NEXT"
+without '并继续遵守单次 3 轮上限' 'find-next step 8 no longer names the three-round cap' "$FIND_NEXT"
+
+# Steps 3 and 4: a decision ticket with a recommendation goes to the round instead
+# of waiting for the human. A task ticket's human-checklist.md is read by its two
+# #68 sections: 需要本人做的 is left to the human, 运维步骤 is find-next's first
+# writable dispatch and follows the Ops tickets codex backend — no --read-only,
+# --mcp ssh-manager for a remote server, the guardrails copied verbatim, only the
+# Brief's scope, the result written back to the task ticket's Resolution. A
+# prototype's reaction is not decided. A loosening ticket is triaged as a single
+# decision whose outcome is never the loosening itself.
+has '3. **决策、迷雾、task 与 prototype 票（worker 准备，一轮拍板）**' 'find-next step 3 feeds the decision round' "$FIND_NEXT"
+has '决策题带推荐就进第 6 步拍板轮：按推荐写 Resolution 评论、关票、更新地图，标「自动拍板（可推翻）」' \
+  'find-next step 3 sends a decision ticket with a recommendation to the round' "$FIND_NEXT"
+has '我按它的固定两节读：`## 需要本人做的`' 'find-next step 3 reads the human-only section by name' "$FIND_NEXT"
+has '`## 运维步骤（带护栏，主会话派实现者执行）`（每步含执行方式' 'find-next step 3 reads the ops-steps section by name' "$FIND_NEXT"
+has '**运维步骤的非只读派发**（find-next 的第一种非只读派发' 'find-next step 3 names the ops dispatch as its first writable one' "$FIND_NEXT"
+has '沿用 implement-spec-split Ops tickets 的 codex 后端写法' 'find-next step 3 follows the Ops tickets codex backend' "$FIND_NEXT"
+has '--run-dir <运行目录>/task-<票号>/ops --time-limit 2400 --idle-timeout 600' 'find-next step 3 dispatches the ops worker without --read-only' "$FIND_NEXT"
+has '的步骤必传 `--mcp ssh-manager`' 'find-next step 3 passes ssh-manager MCP for remote steps' "$FIND_NEXT"
+has '以及**原文照抄**的护栏，只允许改 Brief 写明的范围' 'find-next step 3 copies the guardrails verbatim into the Brief' "$FIND_NEXT"
+has '实现者要越出护栏或验收达不到时只报告、不硬推' 'find-next step 3 keeps the ops worker inside the guardrails' "$FIND_NEXT"
+has '该步标了放宽项的不执行、只记录（写进该 task 票的 Resolution 与收尾的「未执行的放宽项」），不替用户决定放宽' \
+  'find-next step 3 records a loosening item instead of loosening' "$FIND_NEXT"
+has 'prototype 的反应题要的是用户的主观反应，agent 替不了：不拍板' 'find-next step 3 does not decide a prototype reaction' "$FIND_NEXT"
+has '决策题带推荐就进拍板轮，没有推荐或推荐不明确的按第 6 步的可逆性规则自选' \
+  'find-next step 4 sends a loose ticket decision to the round' "$FIND_NEXT"
+has '同样分流为「单个决策」进拍板轮，结论不得是直接放宽，最多是「改写方案避免放宽」' \
+  'find-next step 4 routes a loosening ticket as a single decision' "$FIND_NEXT"
+without 'worker 准备，一轮问用户' 'find-next step 3 no longer names a question round' "$FIND_NEXT"
+without '决策题仍是 HITL' 'find-next step 4 no longer holds a decision for the user' "$FIND_NEXT"
+without 'grilling 是 HITL' 'find-next step 3 no longer holds grilling for the user' "$FIND_NEXT"
+without '人工清单放进第 6 步那一轮' 'find-next step 3 no longer puts the human list in a question round' "$FIND_NEXT"
+without '其他三类仍按第 6 步问用户后处理' 'find-next step 4 no longer asks about the other three classes' "$FIND_NEXT"
+
+# The wrap-up lists every auto-decision of the round with its reversal recipe and
+# the items left to the human; the supervisor decides a parked Spec's recommended
+# items itself (a 拍板 comment marked 总控自动拍板, then --only), asks only for
+# auth, and ALL_DONE lists every auto-decision of the supervision. The error
+# handling no longer asks the user to choose between waiting and stopping, and
+# no longer names the three-round cap.
+has '完成度结论之下列「**本轮自动拍板**」' 'find-next step 11 lists the round auto-decisions' "$FIND_NEXT"
+has '逐条带推翻回法「推翻 #<票号> <条目> 改选 <X>」' 'find-next step 11 gives each auto-decision its reversal recipe' "$FIND_NEXT"
+has '再列「**要你做**」：没拍板的本人事项' 'find-next step 11 lists the undecided human items' "$FIND_NEXT"
+has '「<条目>：选 <X>（总控自动拍板 <日期>，可推翻）」' 'the supervisor writes its own 拍板 comment for recommended items' "$FIND_NEXT"
+has '只有条目需要本人身份或凭据（停车类别 `auth`）才问用户' 'the supervisor asks only for auth' "$FIND_NEXT"
+has '已自动拍板 w · 要你做 v' 'the SUMMARY line counts auto-decisions and human to-dos' "$FIND_NEXT"
+has '集中列出本次总控期间的全部自动拍板' 'ALL_DONE lists every auto-decision of the supervision' "$FIND_NEXT"
+has '或拍的是决策票、地图条目（迷雾毕业、散票建地图）和散票分流时' 'the reversal recipe reaches decision tickets, map entries and loose tickets' "$FIND_NEXT"
+without '待你拍板 w' 'the SUMMARY line no longer counts items waiting for the user' "$FIND_NEXT"
+without '按推进模式第 6 步的问题轮格式问用户' 'the supervisor no longer asks the parked items' "$FIND_NEXT"
+without '因 3 轮问询上限' 'the wrap-up no longer names the three-round cap' "$FIND_NEXT"
+without '已问满 3 轮' 'the error handling no longer names the three-round cap' "$FIND_NEXT"
+without '问是等还是停止' 'the error handling no longer asks the user to choose' "$FIND_NEXT"
+
+# In a flash session the reversibility choice is a judgement, so the items without
+# a recommendation go to one more Opus review and flash copies the result; a
+# 推荐 stays 推荐无 as written. The exit-code sentence and the three worker
+# backend sentences above are unchanged (test-opus-review.sh pins the former).
+has 'flash 不自己选' 'flash mode does not choose itself' "$FIND_NEXT"
+has '再交给**一次** Opus review' 'flash mode hands the reversibility choice to one more Opus review' "$FIND_NEXT"
+has '拍板轮与「展开」' 'flash mode names the decision round' "$FIND_NEXT"
+without '本步只直接转述选择题' 'flash mode no longer describes step 6 as relaying questions' "$FIND_NEXT"
 
 # --- the Ticket Brief template --------------------------------------------------
 
