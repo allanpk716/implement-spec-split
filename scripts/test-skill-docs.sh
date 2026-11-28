@@ -19,9 +19,13 @@
 # from Unattended landing and Flash mode, and the --attempt of a step 5
 # re-dispatch and of 9.1's fix roles taken as the next free one. So are the two
 # rules of ticket #79: tests and verification finish in the foreground before
-# the final report (the Brief templates and the step 5 dispatch texts), and a
-# main session verifies a worker gone idle without a report itself (ps, git)
-# instead of waiting again.
+# the final report (the Brief templates and the dispatch texts of steps 5, 8
+# and 9.1), and a main session verifies a worker gone idle without a report
+# itself (ps, git) instead of waiting again. Its review settled where each is
+# written and pointed to, and that is pinned too: the rule once in step 5's
+# `3` line and once in the section every find-next Brief template shares,
+# Recovery's never-stop rule with that worker as its one exception, Orca's
+# mail read by its body, and the evidence of such a worker in a file of its own.
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -32,9 +36,9 @@ set -u
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SKILL=$ROOT/SKILL.md
-BRIEF=$ROOT/find-next/templates/brief-implement.md
-# The root template of the Opus / codex division, a different file from BRIEF.
-BRIEF_ROOT=$ROOT/templates/brief-implement.md
+BRIEF_FIND_NEXT=$ROOT/find-next/templates/brief-implement.md
+# The root template of the Opus / codex division, a different file from BRIEF_FIND_NEXT.
+BRIEF_ROOT_TEMPLATE=$ROOT/templates/brief-implement.md
 HOOKS=$ROOT/hooks/README.md
 GLOSSARY=$ROOT/GLOSSARY.md
 FIND_NEXT=$ROOT/find-next/SKILL.md
@@ -62,7 +66,7 @@ without() { # text name file
   if grep -Fq -- "$1" "$3" 2>/dev/null; then bad "$2" "unexpected [$1] in ${3#$ROOT/}"; else ok "$2"; fi
 }
 
-for file in "$SKILL" "$BRIEF" "$BRIEF_ROOT" "$HOOKS" "$GLOSSARY" "$FIND_NEXT" "$LIB_TRANSCRIPT" "$DELEGATE_GUARD"; do
+for file in "$SKILL" "$BRIEF_FIND_NEXT" "$BRIEF_ROOT_TEMPLATE" "$HOOKS" "$GLOSSARY" "$FIND_NEXT" "$LIB_TRANSCRIPT" "$DELEGATE_GUARD"; do
   [ -f "$file" ] || { bad "file exists" "$file"; printf '\n%d passed, %d failed\n' "$PASSED" "$FAILED"; exit "$FAILED"; }
 done
 
@@ -233,9 +237,9 @@ for text in 'worker_done' '--task-id' '## 护栏' '探索笔记' '规格内容' 
   '不带规格会话的过程' '不写在工作区里' 'If a source-write hook blocks you' \
   'Run any `rm` as its own Bash command' 'mcp__ssh-manager__list_servers' \
   'templates/lean-rules.md' '调用关系' '--report-path'; do
-  has "$text" "Brief template has [$text]" "$BRIEF"
+  has "$text" "Brief template has [$text]" "$BRIEF_FIND_NEXT"
 done
-without '不要 `git commit`' 'Brief template requires the worker to commit' "$BRIEF"
+without '不要 `git commit`' 'Brief template requires the worker to commit' "$BRIEF_FIND_NEXT"
 
 # --- tests finish in the foreground; an idle worker is verified, not waited for (票 #79)
 
@@ -243,20 +247,20 @@ without '不要 `git commit`' 'Brief template requires the worker to commit' "$B
 # tests running in the background, wrote that they would report when those had
 # finished, and ended their turn. Nothing wakes an idle worker: the report never
 # came and each session waited. So the Brief templates say that tests and
-# verification finish in the foreground before the final report, the step 5
-# dispatch texts for the merge role and the fix roles carry the same rule, and
-# a main session that meets a worker gone idle without a report verifies it
-# itself (ps, git) instead of waiting again. Each place is pinned where the
-# rule is written.
+# verification finish in the foreground before the final report, the dispatch
+# texts of steps 5, 8 and 9.1 for the merge, re-bump and fix roles carry the
+# same rule, and a main session that meets a worker gone idle without a report
+# verifies it itself (ps, git) instead of waiting again. Each place is pinned
+# where the rule is written; what the review of #79 changed is pinned below.
 
 # The Ticket Brief template every dispatched role's Brief is written from, and
 # the root template of the Opus / codex division: the same sentence in both.
 has '测试与验证一律前台跑完再交最终报告；不得把测试放到后台然后结束回合' \
-  'Ticket Brief template runs its tests in the foreground before the final report' "$BRIEF"
+  'Ticket Brief template runs its tests in the foreground before the final report' "$BRIEF_FIND_NEXT"
 has 'worker 空闲后不会被唤醒，后台收尾等于失联' \
-  'Ticket Brief template says why: nothing wakes an idle worker' "$BRIEF"
+  'Ticket Brief template says why: nothing wakes an idle worker' "$BRIEF_FIND_NEXT"
 has '测试与验证一律前台跑完再交最终报告；不得把测试放到后台然后结束回合' \
-  'root Brief template runs its tests in the foreground before the final report' "$BRIEF_ROOT"
+  'root Brief template runs its tests in the foreground before the final report' "$BRIEF_ROOT_TEMPLATE"
 # Step 5: the merge role's Brief and each fix role's Brief carry the rule.
 has 'carrying the foreground-test rule (票 #79: its tests and verification finish in the foreground before its final report' \
   'SKILL.md step 5 merge-role Brief carries the foreground-test rule' "$SKILL"
@@ -290,6 +294,92 @@ has '自己核实，按证据判定完成或失败并收尾，不无限等待' \
   'find-next SKILL.md verifies itself instead of waiting' "$FIND_NEXT"
 has '按「推进模式」开头的核实规则自己核实' \
   'find-next error handling points an idle subagent to the rule' "$FIND_NEXT"
+
+# --- #79 review r2: each rule written once, and pointed to from everywhere else ----
+
+# The Ticket Brief template states the rule once, in item 3 of its 要求 next to
+# the rule against re-delegation that it repeats; the separate item 8 is gone.
+has '不要起后台进程后就结束。测试与验证一律前台跑完再交最终报告；不得把测试放到后台然后结束回合' \
+  'Ticket Brief template joins the foreground-test rule to item 3' "$BRIEF_FIND_NEXT"
+without '8. 测试与验证一律前台跑完再交最终报告' \
+  'Ticket Brief template no longer has a separate item 8 for the rule' "$BRIEF_FIND_NEXT"
+# The worker-side process rules live in the environment section that every
+# find-next Brief template shares, so the rule reaches every worker a template
+# is written for — the task and prototype subagents too, which find-next's
+# SKILL.md names as leaving background tests behind as well. It is worded for
+# a test or a long command. test-make-batch-briefs.sh checks that the section
+# is identical in every template; this checks that it holds the rule.
+FG_COMMON='测试或长命令要在前台等它跑完再收尾：不得把它放到后台然后结束回合'
+has "${FG_COMMON}" \
+  'Ticket Brief template keeps a worker from leaving a test or a long command in the background' \
+  "$BRIEF_FIND_NEXT"
+templates_with_rule=0
+templates_total=0
+for template in "$ROOT"/find-next/templates/*.md; do
+  templates_total=$((templates_total + 1))
+  grep -Fq -- "${FG_COMMON}" "$template" && templates_with_rule=$((templates_with_rule + 1))
+done
+if [ "${templates_total}" -ge 12 ] && [ "${templates_with_rule}" -eq "${templates_total}" ]; then
+  ok "every find-next Brief template (${templates_total}) carries the rule in the section they share"
+else
+  bad "every find-next Brief template carries the rule in the section they share" \
+    "${templates_with_rule} of ${templates_total} templates have [${FG_COMMON}]"
+fi
+# Step 5's `3` line keeps the rule and leaves the reason to "Dispatching a role"
+# item 6, which writes it once; its `6` and `4` lines already point back to it.
+has 'and then ends its turn; the reason is "Dispatching a role" item 6' \
+  'SKILL.md step 5 `3` line points the reason to item 6' "$SKILL"
+without 'a worker never puts a test in the background and then ends its turn: nothing wakes an idle worker' \
+  'SKILL.md step 5 `3` line no longer repeats the reason' "$SKILL"
+# Steps 8 and 9.1 dispatch fix, re-bump and conflict roles too: their Briefs
+# carry the same rule.
+has "dispatch a single fix role with that file as its context pointer and a Brief that carries the foreground-test rule of step 5's \`3\` line (票 #79)" \
+  'SKILL.md step 8 fix-role Brief carries the foreground-test rule' "$SKILL"
+has "step 5's re-bump rules and the foreground-test rule of step 5's \`3\` line (票 #79), main in place of the integration branch" \
+  'SKILL.md step 9.1 re-bump Brief carries the foreground-test rule' "$SKILL"
+has "re-increments on \`spec-<n>\`, runs the test command in the foreground before its final report and commits" \
+  'SKILL.md step 9.1 re-bump role runs the test command in the foreground' "$SKILL"
+has "those paths with both sides' intent and carries the foreground-test rule of step 5's \`3\` line (票 #79)" \
+  'SKILL.md step 9.1 conflict fix-role Brief carries the foreground-test rule' "$SKILL"
+has "each round with the next free \`--attempt <n>\`) and a Brief that carries the foreground-test rule of step 5's \`3\` line (票 #79)" \
+  'SKILL.md step 9.1 test-failure fix Brief carries the foreground-test rule' "$SKILL"
+# Recovery said "never stop it" of a live worker and item 6 said "never wait for
+# it again" of the same one. A live worker is still waited for and never
+# stopped, with item 6's case as the one exception, judged by Orca's evidence.
+has "never stop it — unless Orca's evidence says it went idle without a report (\"Dispatching a role\" item 6: the Run's mail says it stopped without reporting" \
+  'SKILL.md Recovery makes a worker gone idle without a report the exception to never stopping a live one' "$SKILL"
+has "is the message that it would report when its background tests finished): such a worker is never waited for again — verify it in the foreground as item 6 says, then \`orca orchestration worker-stop --dispatch <id>\`" \
+  'SKILL.md Recovery verifies a worker gone idle in the foreground and stops it' "$SKILL"
+has "that exception is judged by Orca's evidence, never by the clock" \
+  'SKILL.md Recovery judges the exception by evidence, never by the clock' "$SKILL"
+# Orca's mail is known by its body. The first version named an escalation with
+# a `stopReason` field; no field of that name could be verified (`orca
+# orchestration send --help` lists escalation among its mail types and names no
+# field), so nothing is pinned on a mail type or a field name.
+without '`stopReason`' 'SKILL.md names no stopReason field' "$SKILL"
+has "a mail of the Run's that is no \`worker_done\` — one \`wait\` hands such mail over with exit 8 — says in its body that the worker stopped without reporting" \
+  'SKILL.md knows a worker gone idle from the body of a mail that is no worker_done' "$SKILL"
+has "stopped without reporting (read by its body: no mail type or field name of Orca's is relied on): that worker is item 6's" \
+  "SKILL.md wait mail is read by its body" "$SKILL"
+has "stopped without reporting (read by its body: no mail type or field name of Orca's is relied on), or the last thing the worker wrote" \
+  'SKILL.md item 6 mail is read by its body' "$SKILL"
+# A worker gone idle never reports, so the evidence gets a file of its own that
+# the final report cites; its line there says 主会话核实 where another's says
+# the outcome, and the gate's three script checks stand in for its fourth.
+has "Put the evidence either way in \`<dispatch dir>/session-verify.md\`" \
+  'SKILL.md puts the evidence of a worker gone idle in session-verify.md' "$SKILL"
+has "and cite that file in the Run's final report, the one \"Report at the end\" describes after step 10" \
+  "SKILL.md cites session-verify.md in the Run's final report" "$SKILL"
+has "this dispatch's line there says 主会话核实 where another's says \`worker_done.outcome\`" \
+  "SKILL.md item 6 puts 主会话核实 in place of worker_done.outcome on that dispatch's line" "$SKILL"
+has "it never reported, so the gate's fourth check is not its to meet: the three script checks stand in for it" \
+  "SKILL.md item 6 lets the gate's three script checks stand in for its fourth" "$SKILL"
+has "item 6 says, 主会话核实 in its place, with \`<dispatch dir>/session-verify.md\` as the report path" \
+  "the final report's per-dispatch line takes 主会话核实 and session-verify.md for such a worker" "$SKILL"
+# The test a worker gone idle left running is ended by the pid from that same
+# `ps`: the next step re-runs the test in the foreground, and a leftover run of
+# it would interfere with that.
+has "end it, \`kill <pid>\`)" 'SKILL.md ends the test a worker gone idle left running' "$SKILL"
 
 # --- hooks README ----------------------------------------------------------------
 

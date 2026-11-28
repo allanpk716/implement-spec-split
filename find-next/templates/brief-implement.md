@@ -36,12 +36,11 @@ fix / 冲突角色（--role fix / --role merge）沿用本模板：把「票内�
 
 1. 测试先行：先写会失败的测试，再写实现让它通过，再重构；每一步都跑测试。测试命令见「验收命令」。
 2. 自己提交：每个逻辑步骤一个 commit（消息用仓库惯用的语言，写明票号 `#<m>`）；结束前工作区必须干净（`git status --porcelain` 为空），不留未提交或未跟踪的文件。
-3. 不要再派发任何 worker 或子代理，不要启动另一个 claude / codex 进程；必须等待时在前台等够，不要起后台进程后就结束。
+3. 不要再派发任何 worker 或子代理，不要启动另一个 claude / codex 进程；必须等待时在前台等够，不要起后台进程后就结束。测试与验证一律前台跑完再交最终报告；不得把测试放到后台然后结束回合——worker 空闲后不会被唤醒，后台收尾等于失联。「验收命令」在前台逐条跑完、看到退出码，再写报告、再发 `worker_done`；命令太久被挪到后台的，继续在前台等它结束。
 4. If a source-write hook blocks you, stop and state that in your report. Do not work around it: do not use `env -u FLASH_ORCHESTRATOR`, do not start another `claude`, `claude-glm`, or `codex` process, do not use `orca orchestration worker-start`, and do not write source through Bash to bypass the hook.
 5. Run any `rm` as its own Bash command with literal paths: no variables, globs, `$(...)`, or `sh -c` strings, and never chained with `&&`, `;` or pipes. Do not pass `rm` as an argument to a wrapper script; call `docker rm <name>` directly. Prefer fresh directory names over deleting and recreating one.
 6. 范围：只做「期望改动」列出的修改点。范围外的问题写进报告，不要顺手改。设计级或微妙正确性的问题不要猜，写进报告交回，由调用方决定。
 7. git 命令因已存在的 `.lock` 文件失败时（多个 Run 共用一个仓库），等几秒重试，最多 3 次；绝不删 `.lock` 文件。
-8. 测试与验证一律前台跑完再交最终报告；不得把测试放到后台然后结束回合——worker 空闲后不会被唤醒，后台收尾等于失联。「验收命令」在前台逐条跑完、看到退出码，再写报告、再发 `worker_done`；命令太久被挪到后台的，继续在前台等它结束。
 
 ### ops 票（仅在票是 ops 票时保留本节；ops 票不要求第 1、2 条）
 
@@ -69,6 +68,7 @@ fix / 冲突角色（--role fix / --role merge）沿用本模板：把「票内�
 
 - Brief 里引用的仓库外文件都是确切路径（写 Brief 前已用系统索引或 `ls` 核实存在）。某个路径定位不到时，在输出里明写「未定位到，不作为依据」，不要按模糊路径自行全盘搜索。
 - 不对 `$HOME` 或仓库目录之外做无边界 `find`：云盘同步目录（如 macOS 的 `~/Library/CloudStorage`）会被它触发按需拉取，看起来就像卡死。要搜系统用系统索引（macOS 用 `mdfind`；其他平台用系统索引工具或对已知子目录定点查找）；非用 `find` 不可时，剪枝挂载点本身，如 `find "$HOME" -path "$HOME/Library/CloudStorage" -prune -o …`。注意 `-not -path` 只过滤输出、不剪枝，照样会走进挂载。
+- 测试或长命令要在前台等它跑完再收尾：不得把它放到后台然后结束回合——空闲后不会被唤醒，后台收尾等于失联。
 - 结束前收割自己起的、仍在跑的长子进程（起时记下 pid，结束时 kill），不要留下卡死的孤儿进程。
 
 ## 禁区
