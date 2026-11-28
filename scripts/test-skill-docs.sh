@@ -184,6 +184,22 @@ without '需要拍板 <N> 条' 'find-next step 6 no longer titles the message as
 without '有问题就一轮问用户' 'find-next usage no longer describes a question round' "$FIND_NEXT"
 without '并入本轮最后一个问题问用户' 'find-next usage no longer asks for the worker cap' "$FIND_NEXT"
 
+# Step 7 writes the decisions back the way a human's answers used to be written,
+# marked as an auto-decision; stale and orphan claims are released on the
+# recommendation, a loose ticket's map is built on the draft, and the 再想想
+# branch is gone. Step 8's re-scan decides new items the same way, with no cap.
+has '7. **应用拍板、迷雾毕业与散票分流**' 'find-next step 7 applies the decisions' "$FIND_NEXT"
+has '出处标「（推进器自动拍板 <日期>，可推翻）」' 'find-next step 7 marks the write-back as an auto-decision' "$FIND_NEXT"
+has '`staleClaims`、`orphanClaims` 按推荐自动取消认领' 'find-next step 7 releases stale and orphan claims on the recommendation' "$FIND_NEXT"
+has '散票分流「该开地图」按草案自动拍板后' 'find-next step 7 builds a loose ticket map on the draft' "$FIND_NEXT"
+has '没有可逆选项、没拍板的组不发布' 'find-next step 7 does not publish a group with no reversible option' "$FIND_NEXT"
+has '`unresolved` 已在拍板轮处理并写回的组随后发布' 'find-next step 9 publishes a group after its decisions are written back' "$FIND_NEXT"
+has '脚本按第 6 步拍板的全机 worker 上限传入' 'find-next step 10 passes the decided worker cap' "$FIND_NEXT"
+without '只有用户同意才取消认领' 'find-next step 7 no longer waits for consent to release a claim' "$FIND_NEXT"
+without '（owner <日期> 推进器确认）' 'find-next step 7 no longer cites a human confirmation' "$FIND_NEXT"
+without '再想想' 'find-next no longer has the 再想想 branch' "$FIND_NEXT"
+without '并继续遵守单次 3 轮上限' 'find-next step 8 no longer names the three-round cap' "$FIND_NEXT"
+
 # --- the Ticket Brief template --------------------------------------------------
 
 for text in 'worker_done' '--task-id' '## 护栏' '探索笔记' '规格内容' '票内容' \

@@ -277,19 +277,19 @@ flash 模式下，本节所有原本由主会话审读或复核的结论都按�
 
    flash 模式下，「展开」条目改开 Design session，见「flash 模式」一节。
 
-7. **应用答案、迷雾毕业与散票分流**：用户同意的决策票/取舍题，把答案写进 Resolution 评论、关票、更新地图 Decisions so far；「展开」条目按第 6 步的 grilling + domain-modeling 结果同样收票。task 票按用户完成的人工步骤或确认过的 AFK 结果写 Resolution、关票、更新地图；prototype 按用户反应写 Resolution、关票并链接原型资产。`staleClaims`、`orphanClaims` 只有用户同意才取消认领；取消后它按前沿规则进入后续扫描，不自动视为已处理。草稿未决按原批量规则处理：对应草稿去掉「（待确认）」，出处写「（owner <日期> 推进器确认）」，清空该组 `unresolved`；小改动我直接改草稿，大改动重派该组；用户说「再想想」的那张票或那组草稿不发布、不再追问，保留给 `/wayfinder` 或后续推进。用户给出的 worker 数在启动时传给 `launch-wave.sh`，由脚本写入全机 worker 上限文件。
+7. **应用拍板、迷雾毕业与散票分流**：拍板的决策票/取舍题，把选定的答案写进 Resolution 评论、关票、更新地图 Decisions so far——写法与原来的人工拍板一致，出处标「（推进器自动拍板 <日期>，可推翻）」；「展开」条目按第 6 步的 grilling + domain-modeling 结果同样收票。task 票：AFK 结果复核通过就写 Resolution、关票、更新地图；`human-checklist.md` 的 `## 运维步骤（带护栏，主会话派实现者执行）` 按第 3 步的非只读派发执行，结果（预期证据、远端改了什么、怎么回滚）写回该 task 票的 Resolution；`## 需要本人做的` 不拍板：不为空时 task 票先不关，AFK 与运维步骤的结果先评论在票下，列入「要你做」，用户做完回传后再写 Resolution、关票。prototype 不拍板，用户表态后按其反应写 Resolution、关票并链接原型资产。`staleClaims`、`orphanClaims` 按推荐自动取消认领（标「自动拍板（可推翻）」）；取消后它按前沿规则进入后续扫描，不自动视为已处理。草稿未决按原批量规则处理：对应草稿去掉「（待确认）」，出处写「（推进器自动拍板 <日期>，可推翻）」，清空该组 `unresolved`；小改动我直接改草稿，大改动重派该组；没有可逆选项、没拍板的组不发布，列入「要你做」。拍板的全机 worker 数在启动时传给 `launch-wave.sh`，由脚本写入全机 worker 上限文件。用户回「推翻 #<票号> <条目> 改选 <X>」时，那条按新答案重写（Resolution 评论注明「推翻自动拍板 <日期>」，地图和草稿同步改），已发布或已进入总控的按「总控」第 4 条处理。
 
-   flash 模式下，用户「再想想」后的地图入口按「flash 模式」一节改推荐 `/grill-map`。
+   flash 模式下，不发布的组的地图入口按「flash 模式」一节改推荐 `/grill-map`。
 
-   用户同意迷雾毕业建议后，按 wayfinder 规则**先建新票**（每张票正文一个精确 Question、带正确的 `wayfinder:<type>` 标签、挂到地图下），**第二遍**再接阻塞并写真实编号的交叉引用；然后改地图：毕业的段落从 `Not yet specified` 删除，只留在新票里；建议判出范围的票关掉，并在 `Out of scope` 写一行原因和链接；建议作废的票按 wayfinder 规则关闭或改正，说明依据。未获同意的雾留在原段，不代删。用户回「先到这」时立即进入收尾，不再应用未确认事项。
+   迷雾毕业建议按建议拍板后，按 wayfinder 规则**先建新票**（每张票正文一个精确 Question、带正确的 `wayfinder:<type>` 标签、挂到地图下），**第二遍**再接阻塞并写真实编号的交叉引用；然后改地图：毕业的段落从 `Not yet specified` 删除，只留在新票里；建议判出范围的票关掉，并在 `Out of scope` 写一行原因和链接；建议作废的票按 wayfinder 规则关闭或改正，说明依据；地图上注明「推进器自动拍板 <日期>，可推翻」。建议里没提到的雾留在原段，不代删。用户回「先到这」时立即进入收尾，不再应用尚未写回的拍板。
 
-   用户同意为散票建地图后，我按 wayfinder 地图格式建 `wayfinder:map` 票（正文含 `Destination`、`Decisions so far`、`Not yet specified`，并写「来源散票：#N」），按草案建子票、接 sub-issue 与阻塞。默认在原散票下评论指向新地图后关闭它；若草案明确说明「把原散票挂为子票并改成该地图首张 decision/research 票」更好，才采用该方案。单个决策同意后写 Resolution、关票；重复或过时同意后评论依据并关票。用户对等待时机票回「开 #N」时，先把正文首行的时机行去掉（保留其余正文、按第 4 步的记录方式留评说明提前开工），再视为它进入第 4 步的 worker 分流，下一轮呈现结果；回「再想想」则不动、不再追问。
+   散票分流「该开地图」按草案自动拍板后，我按 wayfinder 地图格式建 `wayfinder:map` 票（正文含 `Destination`、`Decisions so far`、`Not yet specified`，并写「来源散票：#N」和「推进器自动拍板 <日期>，可推翻：关这张地图、重开原散票」），按草案建子票、接 sub-issue 与阻塞。默认在原散票下评论指向新地图后关闭它；若草案明确说明「把原散票挂为子票并改成该地图首张 decision/research 票」更好，才采用该方案。「单个决策」按推荐拍板后写 Resolution、关票（没有推荐或推荐不明确的按可逆性规则自选并写理由；放宽项散票的结论不得是直接放宽，最多是「改写方案避免放宽」）；「重复或过时」按依据拍板后评论依据并关票。用户对等待时机票回「开 #N」时，先把正文首行的时机行去掉（保留其余正文、按第 4 步的记录方式留评说明提前开工），再视为它进入第 4 步的 worker 分流，下一轮呈现结果。
 
-8. **再扫描**：第 7 步关票可能解锁新的 research/决策/task/prototype 票，或让某张地图决策票全关；此时若 Map fog 仍非空，它会出现在 `fogMaps` 而不是 `mapSpecs`。新建的散票地图也进入同一轮扫描，按地图规则继续推进（research 自动、决策出题、迷雾毕业）。重新运行 `pipeline-status.sh --all`：有新可自动处理的对象就回到第 2 步；新 `fogMaps` 按第 3 步派迷雾 worker；新对象带来新取舍时，只把新增问题问一轮，并继续遵守单次 3 轮上限；扫描不再出现新对象就往下走。若某张票反复生成同一未决问题、或用户明确说再想想，终止这条分支并在收尾说明阻塞点，不循环追问。
+8. **再扫描**：第 7 步关票可能解锁新的 research/决策/task/prototype 票，或让某张地图决策票全关；此时若 Map fog 仍非空，它会出现在 `fogMaps` 而不是 `mapSpecs`。新建的散票地图也进入同一轮扫描，按地图规则继续推进（research 自动、决策出题、迷雾毕业）。重新运行 `pipeline-status.sh --all`：有新可自动处理的对象就回到第 2 步；新 `fogMaps` 按第 3 步派迷雾 worker；新对象带来新取舍时，只把新增条目再拍一轮（同样的汇报格式，不等回复）；扫描不再出现新对象就往下走。若某张票或那张地图反复生成同一条已拍板的问题，终止这条分支并在收尾说明阻塞点，不循环重拍。
 
    flash 模式下，本步新产生的审读材料按「flash 模式」一节重新合成一轮 Opus review。
 
-9. **发布**：没有 `unresolved` 的组直接发布，**不再确认**（owner 2026-11-14 定）。有问题但用户已答的组在应用答案后发布；用户说再想想的组不发布。发布用：
+9. **发布**：没有 `unresolved` 的组直接发布，**不再确认**（owner 2026-11-14 定）。`unresolved` 已在拍板轮处理并写回的组随后发布；没有可逆选项、没拍板的组不发布。发布用：
 
    ```bash
    <本技能目录>/scripts/publish-batch.sh --apply --no-order [--only S1,S3] <运行目录>/S*/manifest.json
@@ -303,7 +303,7 @@ flash 模式下，本节所有原本由主会话审读或复核的结论都按�
    <本技能目录>/scripts/launch-wave.sh --repo <owner/name> [--workers N] [--specs K] [--apart 224:239 …] [--no-auto-land]
    ```
 
-   排序由 `pipeline-status.sh --order` 确定性计算：被依赖的先做 → 解锁下游多的先做 → 编号小的先做；完全被挡住的不进第 1 波；进行中的不排；中断的标「先恢复」；搁置执行票不算待实现，未关执行票全是搁置票的规格不进顺序或波次。我只补「改同一块代码」或「都改同一计数器」的 `--apart A:B` 判断，依据规格正文里的模块和起草 worker 在 `result.md` 里的共享计数器提示；拿不准不传。有 `--apart` 时按重跑后的结果为准。`--apply` 会把本次 workers/specs/apart 和这一波的 Orca Run 写入 `~/.cache/implement-spec-split/launch/<owner>__<name>.json`，供合入后的 `--next-wave` 复用；开发顺序本身每次重算。没给 `--workers` 时脚本按第 6 步得到的答案传入；第 6 步也没问（已有 max-workers 文件）就不传，让脚本读状态文件或 max-workers 文件。
+   排序由 `pipeline-status.sh --order` 确定性计算：被依赖的先做 → 解锁下游多的先做 → 编号小的先做；完全被挡住的不进第 1 波；进行中的不排；中断的标「先恢复」；搁置执行票不算待实现，未关执行票全是搁置票的规格不进顺序或波次。我只补「改同一块代码」或「都改同一计数器」的 `--apart A:B` 判断，依据规格正文里的模块和起草 worker 在 `result.md` 里的共享计数器提示；拿不准不传。有 `--apart` 时按重跑后的结果为准。`--apply` 会把本次 workers/specs/apart 和这一波的 Orca Run 写入 `~/.cache/implement-spec-split/launch/<owner>__<name>.json`，供合入后的 `--next-wave` 复用；开发顺序本身每次重算。没给 `--workers` 时脚本按第 6 步拍板的全机 worker 上限传入；第 6 步没拍（已有 max-workers 文件）就不传，让脚本读状态文件或 max-workers 文件。
 
    默认无人值守落地：试运行和 `--apply` 不带参数时每条命令末尾带 `--auto-land`，`--apply` 把 `auto_land: true` 写进启动状态，`--next-wave` 沿用；显式 `--no-auto-land` 时命令不带它，状态写 `auto_land: false`，`--next-wave` 也沿用它（旧状态文件没有该字段时按开启处理）。`--auto-land` 仍可接受，等同默认。命令里不再有实现后端参数：规格会话按路由表「编排」项经 Orca 托管启动，票的实现按路由表「实现」项派发，都不在这里选。
 
