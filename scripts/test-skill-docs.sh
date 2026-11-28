@@ -11,8 +11,9 @@
 # reason, the === TASK === form the guards read and the hooks README's
 # fail-open wording. So is the merger's exit 6 wiring (规格 #61 票 #74 and the
 # review fixes after it): the step 5 / 9.1 re-bump dispatch forms, the one
-# review of the re-bump and the conflict resolution, and every 9.1 round
-# taking the next free --attempt.
+# review of the re-bump and the conflict resolution, every 9.1 round taking
+# the next free --attempt, a failed-gate re-dispatch counting as a 9.1 round,
+# and the re-bump Brief named after its dispatch.
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -152,6 +153,11 @@ has 'every round takes the next free `--attempt <n>`' \
   'SKILL.md step 9.1 re-bump rounds each take the next free attempt' "$SKILL"
 without 'each later round as `--attempt <n>`' \
   'SKILL.md step 9.1 no longer leaves the first re-bump round without an attempt' "$SKILL"
+# The cap counts what step 5 counts: a re-dispatch after the re-bump role's
+# failed gate is a round too, so 9.1 cannot be read as three dispatches
+# (规格 #61 review r2, Spec a-1).
+has 'at most 2 rounds, a re-dispatch after a failed gate counting as a round (every round takes the next free `--attempt <n>`' \
+  'SKILL.md step 9.1 counts a re-dispatch after a failed gate as a round' "$SKILL"
 has 'git ls-tree origin/<main branch>:docs/adr/' 'SKILL.md step 9.1 re-bump role reads main only' "$SKILL"
 has 'the re-bump commits and the conflict resolution together' \
   'SKILL.md reviews the step 9.1 re-bump and the conflict resolution once' "$SKILL"
