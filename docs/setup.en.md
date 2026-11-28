@@ -482,7 +482,7 @@ $S migrate                                                              # carry 
 
 - Whitelisted: run scripts and branch on exit codes, read short structured output, write tickets from prepared text, relay questions with prepared options, start and finish workers through the dispatch module (`stage-dispatch.sh dispatch` / `wait` / `release`), start sessions, run Opus reviews, conflict-free merges and commits, and follow findings item by item.
 - It writes no source line, ever: the Stage 3 delegate-guard hard-blocks source writes in flash sessions (threshold 0; `~/.claude/state/allow-direct-edit` does not apply).
-- Every conclusion cites its source (a dispatched role's report path, the sidecar's `worker_done.report_path`, or an Opus findings path); when unsure who to hand to, default to Opus; push, tagging and releases ask you first (Design-session doc pushes excepted).
+- Every conclusion cites its source (a dispatched role's report path — the sidecar's `worker_done.report_path`, or, for a worker gone idle without a report, the session's own `<dispatch dir>/session-verify.md` — or an Opus findings path); when unsure who to hand to, default to Opus; push, tagging and releases ask you first (Design-session doc pushes excepted).
 
 **Rollback**
 

@@ -18,7 +18,7 @@ description: 默认进入推进模式：循环扫描当前 GitHub 仓库的 wayf
 - `/find-next --watch`：只进入**总控**（见「总控」一节），不推进、不起草；推进模式第 11 步收尾后自动进入同一节。grill-feature / grill-map 启动规格后，本仓库没有总控在跑时也走这里
 - `--workers N` 可选，是全机 GLM worker 总数；每份规格的 `--parallel` = N ÷ K（至少 1）。没给时读 `~/.cache/implement-spec-split/max-workers`（`scripts/max-workers.sh` 用的同一文件）；文件也没有就把 worker 上限并入本轮最后一个问题问用户。`--specs K` 是同时开几份规格，默认 2。**同一仓库同一时间只在一个会话里运行推进模式**：推进模式全程持仓库级 `find-next-advance` 锁（见「推进模式」第 1 步），第二个会话会被拦下；持锁会话被意外关闭后锁自动失效
 - `--agent-model <sonnet|opus|haiku|fable>` 只在 `--worker agent` 时有效，默认 `sonnet`；给了 `--worker codex`/`self`（或不给 `--worker`）却给 `--agent-model` 是参数冲突，报错让用户改。一个开关管全程：`--worker agent` 决定本技能自己的调研/决策/起草方式，不提供混搭；生成的开发命令不带后端参数（实现走路由表）。
-- **无人值守落地**（GLOSSARY.md）默认开启：本批规格（含之后自动开的波次）不停下问人；Opus 审查里带推荐、标「可自动采纳：是」的取舍按推荐落地并记为「自动拍板（可推翻）」，只有真要人决定的事才停车。落地、部分落地、停车都在规格 issue 下留报告，由本会话的总控汇总给用户。`--no-auto-land` 只在推进模式有效，用来让本批保留 push 前确认：第 10 步把它透传给 launch-wave.sh，`--apply` 会把 `auto_land: false` 写进启动状态，`--next-wave` 沿用；`--auto-land` 保留为兼容别名，等同默认。
+- **无人值守落地**（GLOSSARY.md）默认开启：本批规格（含之后自动开的波次）不停下问人；审查（按「审查」路由跑）的 findings 里带推荐、标「可自动采纳：是」的取舍按推荐落地并记为「自动拍板（可推翻）」，只有真要人决定的事才停车。落地、部分落地、停车都在规格 issue 下留报告，由本会话的总控汇总给用户。`--no-auto-land` 只在推进模式有效，用来让本批保留 push 前确认：第 10 步把它透传给 launch-wave.sh，`--apply` 会把 `auto_land: false` 写进启动状态，`--next-wave` 沿用；`--auto-land` 保留为兼容别名，等同默认。
 
 只扫当前仓库，不跨仓库汇总。
 
@@ -133,9 +133,11 @@ I. 散票（bug / needs-triage 等；含等待时机、疑似重复和推进模�
 
 用途：把用户从「逐张判断、逐个技能、逐轮确认」里解放出来。主会话只保留必须跨全批做的判断：分组、审稿、把关 Resolution、判断 `--apart`；读长材料和写长文都交给 worker——默认（不给 `--worker` 或给 `codex`）是新的 codex worker；`--worker agent` 时（仅非 flash 会话）是主会话开的 Agent 子代理（`model` 显式传 `--agent-model`，默认 `sonnet`）。每一轮尽可能自动推进，只有真正的取舍题才问用户，而且所有问题合成一轮。
 
-flash 模式下，本节所有原本由主会话审读或复核的结论都按「flash 模式」一节交给 Opus review。
+flash 模式下，本节所有原本由主会话审读或复核的结论都按「flash 模式」一节交给按路由跑的审查（review）。
 
 `--worker agent` 时的同构做法（适用于本节所有原本派 codex-worker.sh 的步骤；仅非 flash 会话，flash 模式下这些步骤照旧派 codex worker，见「flash 模式」一节的「worker 后端」）：照旧建运行目录和子目录、照旧写 `brief.md`，然后开一个 Agent 子代理，`model` 显式传 `--agent-model` 的值，prompt 固定为：「读 <该子目录>/brief.md 并照做，把最终报告写到 <该子目录>/result.md，同时作为你的最终回复」。Brief 里「wrapper 会把最终回复存成 result.md，不要自己写」这类话是对 codex worker 说的，agent 模式下以 prompt 为准：子代理自己写 `result.md`。没有 `status.json`，主会话以子代理的返回和 `result.md` 为准；失败时把原因补进 Brief、换新运行目录重派一次，再失败就停下报告，不自动改用 codex 或 self。
+
+**子代理空闲却没交最终报告**（票 #79）：`--worker agent` 的子代理留下「测试在后台跑，跑完再报」之类的话、结束回合返回时，没有机制会再唤醒它，后台任务结束也没人来报——主会话不等这份报告，自己核实，按证据判定完成或失败并收尾，不无限等待。核实在前台做：`ps` 看它留下的进程还在不在（`ps -axo pid,etime,time,command`；还在跑的后台任务不是进展——它的回合已经结束，没人会去读结果——结束它）；看它该交的产物在不在、全不全（`result.md`，以及 Brief 要求的 `resolution.md`、草稿）；它会改仓库时（task、prototype）再看分支最近提交时间和工作区状态（`git for-each-ref --sort=-committerdate --format='%(refname:short) %(committerdate:relative)' 'refs/heads/<分支>'`、`git status --porcelain`）。产物齐全、该提交的已提交，就当作它交了报告，照常复核；产物缺失或没提交，按失败处理——把原因补进 Brief、换新运行目录重派一次，再失败就停下报告。
 
 **Brief 卫生**：往 Brief 里引用仓库外的文件（调研文档、别处的笔记、`~/ops` 下的脚本这类）前，先用系统索引（macOS 的 `mdfind`）或 `ls` 定位到确切路径并确认存在再写；定位不到就在 Brief 里明写「未定位到，不作为依据」，不给模糊路径让 worker 自行全盘搜索。各 Brief 模板的「环境约束（找文件与子进程）」一节是 worker 侧的对应约束。
 
@@ -170,7 +172,7 @@ flash 模式下，本节所有原本由主会话审读或复核的结论都按�
 
    我审读 `result.md` 和 `resolution.md`：事实有出处、没有把推断写成决定、Resolution 和地图索引行符合 wayfinder 格式。通过后按 tracker 文档写票：在票下发 Resolution 评论、关票、把一行 gist 追加到地图 `## Decisions so far`（保留其他段落和已有顺序）。小语病我直接改；材料不足就换新运行目录重派一次。**结论里出现需要取舍的问题时不关票**，把它改写成一条决策题，并入本轮第 6 步；已有的调研事实仍留在草稿里供用户参考。
 
-   flash 模式下，本段审读和后续写票动作按「flash 模式」一节并入当轮 Opus review。
+   flash 模式下，本段审读和后续写票动作按「flash 模式」一节并入当轮审查（review）。
 
 3. **决策、迷雾、task 与 prototype 票（worker 准备，一轮问用户）**：research 票全部处置完后重新运行 `pipeline-status.sh --all`，看最新前沿、`fogMaps`、`emptyMaps`、`staleClaims`（「认领后不动（>3 天）」）和 `orphanClaims`（「认领但没有活会话」：认领不到 3 天，但 Orca 里本仓库各 worktree 没有标题或屏幕内容提到 `#N` 的活 agent 会话，多半是认领它的会话被意外关闭了）。
    - **决策票**：open、阻塞全关、无 Assignee、标签为 `wayfinder:grilling` 的票每张派一个只读 worker，子目录 `decision-<票号>/`，用 [templates/brief-decision.md](templates/brief-decision.md)。worker 读票、地图、相关 ADR、规格和代码，产出问题陈述、2–4 个选项及代价、推荐答案和理由，写在 `decision.md`；不写票、不关票、不改地图。命令同上（含 `--mcp all`）；`--worker agent` 时同样按本节开头的同构做法开子代理，prompt 指向 `<运行目录>/decision-<票号>/brief.md` 与 `result.md`。worker 判断「无需用户决策」（已有 ADR/地图决定）时，我复核依据，仍把它作为一条「建议直接关：<依据>」放进第 6 步那一轮，用户同意后再写 Resolution、关票：grilling 是 HITL，wayfinder 规定代理不能替人回答。
@@ -179,7 +181,7 @@ flash 模式下，本节所有原本由主会话审读或复核的结论都按�
    - **task 票**：前沿里 open、阻塞全关、无 Assignee、标签为 `wayfinder:task` 的票每张派一个 worker，子目录 `task-<票号>/`，用 [templates/brief-task.md](templates/brief-task.md)。这个 worker **不是只读**，但只能改 Brief 明确写出的范围。能独自完成（AFK）的做掉并写 Resolution 草稿；需要人做的写精确清单。我复核结果同 research：事实有出处、没有越界，清晰 AFK 结果直接写 Resolution、关票、更新地图；人工清单放进第 6 步那一轮。
    - **prototype 票**：前沿里 open、阻塞全关、无 Assignee、标签为 `wayfinder:prototype` 的票，单次运行最多处理 2 张；每张一个 worker，子目录 `prototype-<票号>/`，用 [templates/brief-prototype.md](templates/brief-prototype.md)。UI 原型按 mockit 技能做独立页面，由我复核后提交 mockit；非 UI 原型放在 `prototype/<票号>` 临时分支上，worker 本地提交但不得 push，我复核后 push 该分支，不开 PR、永不合并，推进模式下不单独确认。随后把可访问链接 / 分支链接和一句要反应的问题放进第 6 步那一轮，用户表态后再写 Resolution。第 3 张及以后的 prototype 票留到第 11 步收尾列出。
 
-   flash 模式下，本步骤决策选项、迷雾/task/prototype 建议和「我复核」依据都按「flash 模式」一节并入当轮 Opus review。
+   flash 模式下，本步骤决策选项、迷雾/task/prototype 建议和「我复核」依据都按「flash 模式」一节并入当轮审查（review）。
 
    writable worker 的命令去掉 `--read-only`：
 
@@ -204,7 +206,7 @@ flash 模式下，本节所有原本由主会话审读或复核的结论都按�
      `--worker agent` 时同样按本节开头的同构做法开只读 Agent 子代理，prompt 指向 `<运行目录>/loose-<票号>/brief.md` 与 `result.md`。
    - 我复核 `triage.md` 及分类附件：依据必须指向真实 issue/评论/提交/文件；地图草案符合 wayfinder 格式且不扩大原票边界；决策题仍是 HITL；「直接起草规格」的起草说明确实指向票面写清的要求和验收标准，没有把要 owner 拍板的取舍混进来（混进来的改按单个决策处理：重派或并入第 6 步）。worker 判定的「等待时机」不提问，但复核通过后由主会话直接写回票面（这是记录已得出的结论，不需要用户同意）：正文首行插入 `时机：<条件>`（保留原正文其余部分；已有时机行则替换它），去掉 `needs-triage` 标签，并评论一条「分流记录（<日期> find-next 推进器）」：分类、依据、条件、「要提前开工回『开 #N』」。这样下次扫描会识别时机行，不再重复派 worker 分流。「直接起草规格」同样不提问：复核通过即按第 5.1 步成组、进第 5 步起草，未决项随该组 `unresolved` 进第 6 步。该开地图、单个决策、重复或过时三类仍按第 6 步问用户后处理。
 
-   flash 模式下，本段复核和分类建议按「flash 模式」一节并入当轮 Opus review，「等待时机」的写回动作也照该节执行。
+   flash 模式下，本段复核和分类建议按「flash 模式」一节并入当轮审查（review），「等待时机」的写回动作也照该节执行。
 
 5. **起草规格/执行票**：沿用下面 5.1–5.4（对应原批量模式第 2–4 步）。此轮没有可起草组就跳过。
 
@@ -231,7 +233,7 @@ flash 模式下，本节所有原本由主会话审读或复核的结论都按�
       flash 模式下，起草结果出现未决地图条目时按「flash 模式」一节改推荐 `/grill-map`。
    4. **审稿（我做）**：读 `result.md`、`manifest.json`、`spec.md` 和执行票正文，检查实现决定都有出处且出处确实这么定了；`实现票：` 行正确——地图组 `实现票：`、`地图：` 两行都有，散票组只有 `实现票：#<源票>` 一行、没有 `地图：` 行（散票组的出处要指向源票正文或 owner 评论）；源票没有混进执行票；执行票是竖切、阻塞合理、碰同一计数器的票已串行并带 `shared-counter` 标签、跨组阻塞对得上；`blocked_by` 不挂还没有规格的实现票，该交接的写进 `handoffs`；`unresolved` 只留真正要用户拍板的事，每条带推荐答案；标题格式与仓库一致。用 `publish-batch.sh <全部 manifest.json>` 试运行核对计划。小问题直接改；大问题换新 Brief 重派那一组。
 
-      flash 模式下，本段审稿按「flash 模式」一节并入当轮 Opus review。
+      flash 模式下，本段审稿按「flash 模式」一节并入当轮审查（review）。
 
 6. **一轮问用户（没有问题就跳过）**：把第 3 步决策题、迷雾毕业建议、task 人工清单、prototype 反应题、`staleClaims` 与 `orphanClaims` 处理题（后者问「#N 认领了但 Orca 里没有活会话在处理，取消认领并纳入推进吗？」）、第 2 步转来的取舍题、第 4 步散票分流建议、第 5 步每组 `unresolved`、缺少的全机 worker 上限，合成一条手机友好的消息。编号全批连续（a、b、c…），每组只给一两行摘要和必要上下文，选项各占一行；最后一个问题可以是「全机 GLM worker 总数用 N 吗？」。**无人值守落地**（GLOSSARY.md）不再提问：launch-wave.sh 默认带 `--auto-land`，本批规格（含之后自动开的波次）会不停下问人；调用时带了 `--no-auto-land` 才保留 push 前确认，第 10 步原样透传。**单次运行累计最多问用户 3 轮**；第 3 轮结束后不再发起第 4 轮，剩余待拍板事项留到收尾，下次 `/find-next --batch` 接着推。结尾写：
 
@@ -283,7 +285,7 @@ flash 模式下，本节所有原本由主会话审读或复核的结论都按�
 
 8. **再扫描**：第 7 步关票可能解锁新的 research/决策/task/prototype 票，或让某张地图决策票全关；此时若 Map fog 仍非空，它会出现在 `fogMaps` 而不是 `mapSpecs`。新建的散票地图也进入同一轮扫描，按地图规则继续推进（research 自动、决策出题、迷雾毕业）。重新运行 `pipeline-status.sh --all`：有新可自动处理的对象就回到第 2 步；新 `fogMaps` 按第 3 步派迷雾 worker；新对象带来新取舍时，只把新增问题问一轮，并继续遵守单次 3 轮上限；扫描不再出现新对象就往下走。若某张票反复生成同一未决问题、或用户明确说再想想，终止这条分支并在收尾说明阻塞点，不循环追问。
 
-   flash 模式下，本步新产生的审读材料按「flash 模式」一节重新合成一轮 Opus review。
+   flash 模式下，本步新产生的审读材料按「flash 模式」一节重新合成一轮审查（review）。
 
 9. **发布**：没有 `unresolved` 的组直接发布，**不再确认**（owner 2026-11-14 定）。有问题但用户已答的组在应用答案后发布；用户说再想想的组不发布。发布用：
 
@@ -339,28 +341,32 @@ flash 模式下，本节所有原本由主会话审读或复核的结论都按�
 - worker `stalled` / `error`：把失败原因补进 Brief，换新运行目录重跑一次；再失败就停下报告。
 - worker `violation`：报告作废，把 `changed_paths` 交给用户；不发布、不关票。
 - `--worker agent` 的子代理没有 `status.json` 和上述错误码：以子代理返回与 `result.md` 为准，失败时换新运行目录重派一次；再失败就停下报告，不自动改用 codex 或 self。
+- `--worker agent` 的子代理空闲却没交最终报告（留下「测试在后台跑，跑完再报」之类的话就结束回合）：不等它，按「推进模式」开头的核实规则自己核实（`ps`、产物、`git`），按证据判定完成或失败再收尾。
 - GitHub 或发布脚本失败：停止在当前操作，不手工补已由脚本负责的创建/核对；可修复后重跑幂等脚本。
 - 一轮扫描没有任何 research、决策、迷雾毕业、task、prototype、散票分流、起草、发布或启动可做：先放 `completion-report.sh <仓库>` 的完成度结论（脚本非 0 时写「完成度结论（查询失败）」），下面再输出当前最接近的阻塞点（含空地图、已认领不动的票、等待时机的散票）并结束。
 - 已问满 3 轮或用户回「先到这」：不再发下一轮问题，按第 11 步收尾并列出剩余待拍板事项。
 - 用户要求停止：不再发任何写请求；已在后台的 worker 等它结束后只读结果，不应用自动写操作。
 - 任何原因终止推进模式（含上面各条停下、用户要求停止）：运行 `run-state.sh finish <运行目录> --aborted <一句原因>`，再 `lock.sh release find-next-advance --scope repo`。会话被意外关闭来不及做这两步时，锁自动失效，下次推进由第 1 步接续。
 
-flash 模式下，Opus review 与 Design session 的失败处理见「flash 模式」一节。
+flash 模式下，审查（review）与 Design session 的失败处理见「flash 模式」一节。
 
 ## flash 模式（`FLASH_ORCHESTRATOR=1`）
 
-本节只在 `FLASH_ORCHESTRATOR=1` 时生效；未设置或值不是 `1` 时，上文行为不变。flash 主会话只调度 worker、运行脚本、转述已备好的问题和机械执行明确指令；所有审读结论交给 Opus review，需要展开讨论的问题交给 Design session。
+本节只在 `FLASH_ORCHESTRATOR=1` 时生效；未设置或值不是 `1` 时，上文行为不变。flash 主会话只调度 worker、运行脚本、转述已备好的问题和机械执行明确指令；所有审读结论交给按「审查」路由跑的审查（review），需要展开讨论的问题交给 Design session。
 
-- **按轮合成 Opus review**：一个推进轮次里出现多类材料时，等本轮 worker 全部结束，把所有原本由主会话「我审读 / 我复核」的材料合成一个输入文件，再进入会写跟踪器或发布答案的步骤。输入文件开头写明仓库、运行目录、轮次、每份材料的票号或组号，以及它在原有流程中对应的步骤；然后按材料分节原样附上 research 的 `result.md` 与 `resolution.md`、决策选项及「无需用户决策」依据、迷雾/task/prototype/散票分流建议与 Resolution 草稿、规格草稿、执行票草稿和 `manifest.json`。本轮没有可审材料时不调用。只要调用，就只调用一次：
+- **按轮合成审查（review）**：一个推进轮次里出现多类材料时，等本轮 worker 全部结束，把所有原本由主会话「我审读 / 我复核」的材料合成一个输入文件，再进入会写跟踪器或发布答案的步骤。输入文件开头写明仓库、运行目录、轮次、每份材料的票号或组号，以及它在原有流程中对应的步骤；然后按材料分节原样附上 research 的 `result.md` 与 `resolution.md`、决策选项及「无需用户决策」依据、迷雾/task/prototype/散票分流建议与 Resolution 草稿、规格草稿、执行票草稿和 `manifest.json`。本轮没有可审材料时不调用。只要审，一轮只审一次；在哪里审由路由决定，不由 flash 决定——先问 `opus-review.sh --where --kind draft`：stdout 给 `in-session` 或 `out-of-session`，stderr 给一行 `审查中（<档案> / <模型>，会话内|出会话）` 加原因，这一行原样转述给用户——审查按路由命名，不要把它说成 Opus 审查，也不要用路由没给的名字。`out-of-session`（官方路由，或会话子代理不保证跑路由模型）照旧出会话执行：
 
   ```bash
+  ~/.claude/skills/implement-spec-split/scripts/opus-review.sh --where --kind draft
   ~/.claude/skills/implement-spec-split/scripts/opus-review.sh --kind draft \
     --input <运行目录>/flash-review-input-<轮次>.md \
     --out <运行目录>/opus-draft-review-<轮次>.md --cwd <仓库>
   ```
 
-  Flash 只照 findings 执行：通过或给出可照抄修改时，才写 Resolution、关票、更新地图、改草稿或发布；findings 要求重派时，把其指出的缺陷补进新 Brief 并重派对应 worker；findings 标为「需要人取舍」的条目原样进入第 6 步问题轮，每条的「推荐：」行照抄为该条的「建议」行（Opus 写「推荐：无」时如实写「无建议：<原因>」）。不得在 findings 之外自行判断「小问题」、补充推荐理由或放宽审读标准。向用户汇报结论时注明对应 findings 文件路径。
-- **散票分流沿用 owner 结论**：散票分流结论为「等待时机」、且票下已有 owner（`authorAssociation=OWNER`）的分流评论、结论一致时，不需要再走 Opus review：直接按第 4 步写回票面，并在汇报里注明「沿用 owner <时间> 的分流评论」。结论不一致或没有 owner 评论时，仍按当轮 Opus review 处理。
+  `in-session`（审查路由是 GLM，且本会话子代理被强制跑同一模型）时不起无头进程：`opus-review.sh --prompt --kind draft` 带同样的 `--input` / `--out` / `--cwd` 打印审读提示词，原样交给一个 `subagent_type: Explore` 的子代理（只读类型，flash 主线程只放行这类；前台等，不传 `model`），再把它的最终回复原样经 stdin 交给 `opus-review.sh --stamp --kind draft --out <同一个 findings 文件>`。`--stamp` 写出的首行是 `路由：审查（review）claude-glm / glm-5.4 / high（强度未生效）· <时间>（会话内子代理）`；退出码 7 时被拒正文留在 `<同一个 findings 文件>.rejected`（汇报时带上这个路径），补标 brief 向脚本要、不自组一个字：`opus-review.sh --repair-prompt --kind draft --out <同一个 findings 文件>` 打印的文本原样交给一个 `Explore` 子代理，再把它的回复 `--stamp` 一次——这一次 `## 需要人取舍` 被删、变成「无」或仍缺行同样 7；仍 7 按审查出错处理（见下）。之后的处理与出会话的 findings 完全一样。
+
+  Flash 只照 findings 执行：通过或给出可照抄修改时，才写 Resolution、关票、更新地图、改草稿或发布；findings 要求重派时，把其指出的缺陷补进新 Brief 并重派对应 worker；findings 标为「需要人取舍」的条目原样进入第 6 步问题轮，每条的「推荐：」行照抄为该条的「建议」行（审查写「推荐：无」时如实写「无建议：<原因>」）。不得在 findings 之外自行判断「小问题」、补充推荐理由或放宽审读标准。向用户汇报结论时注明对应 findings 文件路径。
+- **散票分流沿用 owner 结论**：散票分流结论为「等待时机」、且票下已有 owner（`authorAssociation=OWNER`）的分流评论、结论一致时，不需要再走审查：直接按第 4 步写回票面，并在汇报里注明「沿用 owner <时间> 的分流评论」。结论不一致或没有 owner 评论时，仍按当轮审查处理。
 - **地图起草门槛**：`S<k>=map:<地图号>` 组只有在地图已收口、Map fog 为空、且它依赖的每张 Decision ticket 都能在该票 Resolution 中读到完整决定时，才派 worker 起草；地图摘要不能替代票 Resolution。无法机械确认、仍有开着的 Decision ticket、或起草/审稿结果出现未决条目时，这一组不发布、不改成选择题，改推荐 `/grill-map <地图号或话题>`，等 Design session 交接后再进入后续轮次。
 - **问题轮与「展开」**：本轮全部问题都是已备好选项的选择题时，flash 直接按原有格式合并和转述，不新增判断、不改写选项和推荐。用户对某条回「展开」时，不在当前会话讨论，直接开对应的 Design session（等价于 `/grill-map` 或 `/grill-feature`）：
 
@@ -372,8 +378,8 @@ flash 模式下，Opus review 与 Design session 的失败处理见「flash 模�
 - **推荐入口替换**：flash 模式下，上文推荐 `/wayfinder` 的地方改推荐 `/grill-map`；推荐 `/grill-with-docs` 的地方，小功能或单个决策改 `/grill-feature`，画图、推进地图或大模块讨论改 `/grill-map`。`/find-next` 自身入口和 `/to-spec`、`/to-tickets`、`/implement-spec-split` 的推荐不变。
 - **worker 后端**：没给 `--worker` 时按 `--worker codex` 处理，和上文默认一致：flash 主会话开不了会写代码的子代理（`subagent-guard` 只放行 Explore、Plan、claude-code-guide，`general-purpose` 和缺省类型都拒），所以调研、决策、起草照旧派 codex worker，按路由表「调研起草」项走。`codex-worker.sh` 在 `FLASH_ORCHESTRATOR=1` 时拒跑：flash 模式下每条 wrapper 命令前都要加 `WORKER_ALLOW_FLASH=1`，不管 `--worker codex` 是显式给的还是缺省；非 flash 会话不设它，任何情况下都不许绕开本技能自己起 worker。`--worker agent` 只留给非 flash 会话：flash 会话里给了它（可带 `--agent-model`）也按 `--worker codex` 执行，不停下来问，上文各步「`--worker agent` 时…」的做法在 flash 模式下都不适用。
 - **第 1 波启动**：仍按第 10 步的原有命令试运行并 `--apply`；规格会话由 `launch-wave.sh` 按路由表「编排」项（锁定 flash）经 Orca 托管启动，用的就是 OpenClaude 槽位，技能层不重复实现该规则。
-- **Opus review 不可用**：退出码为 3（额度或 429）时按 quota 停车，其余非 0 退出码仍按原规则停车并说明（退出码含义见 scripts/opus-review.sh 头注释）；不自动重试、不降级到 GLM、不改由 flash 自己审读。Design session 脚本失败同样停下并转述错误。
-- **阶段路由**：`/grill-router`（只由用户敲，背后是 `~/.claude/skills/implement-spec-split/scripts/stage-route.sh`）是用户设置的全局路由表（GLOSSARY.md 的 Stage route）：编排、讨论、调研起草、实现、审查、诊断六个阶段各用哪个启动器档案、模型和思考强度，可带到期。`opus-review.sh` 每次被调用时自己读「审查」（`--kind code`、`draft`）或「诊断」（`--kind diagnose`）的路由，`design-session.sh` 读「讨论」，正在推进的运行不用重开，下一次审查就是新路由。findings 文件首行每次都是 `路由：审查（review）claude-glm / glm-5.4 / medium · <时间>`；档案不是 `claude` 时 `opus-review.sh` 的 stderr 会说明本次没调官方 Opus。照常按 findings 执行，汇报结论时带上这一行。不要自己改路由表，也不要把切换当成降级而拒收 findings。
+- **审查不可用**：退出码为 3（额度或 429）时按 quota 停车，其余非 0 退出码仍按原规则停车并说明（退出码含义见 scripts/opus-review.sh 头注释）；不自动重试、不降级到 GLM、不改由 flash 自己审读（`--where` 说 `in-session` 时按上面的会话内流程走，那是路由指定的模型在审，不是 flash 自己审读）。Design session 脚本失败同样停下并转述错误。
+- **阶段路由**：`/grill-router`（只由用户敲，背后是 `~/.claude/skills/implement-spec-split/scripts/stage-route.sh`）是用户设置的全局路由表（GLOSSARY.md 的 Stage route）：编排、讨论、调研起草、实现、审查、诊断六个阶段各用哪个启动器档案、模型和思考强度，可带到期。`opus-review.sh` 每次被调用时自己读「审查」（`--kind code`、`draft`）或「诊断」（`--kind diagnose`）的路由，`design-session.sh` 读「讨论」，正在推进的运行不用重开，下一次审查就是新路由。审查在哪里跑也由这张表决定：`opus-review.sh --where` 给结论（官方档案一律出会话；GLM 档案且会话子代理强制跑同一模型才在会话内；其余照旧出会话，路由不被悄悄换掉），不要自己判断。findings 文件首行每次都是 `路由：审查（review）claude-glm / glm-5.4 / medium · <时间>`，会话内审查的首行在强度后多「（强度未生效）」、行尾多「（会话内子代理）」；档案不是 `claude` 时出会话的 `opus-review.sh` 的 stderr 会说明本次没调官方 Opus。照常按 findings 执行，汇报结论时带上这一行。不要自己改路由表，也不要把切换当成降级而拒收 findings。
 - **worker 派发路由**：同一张路由表（见「建议模式流程」第 3 步的「阶段路由」）在本技能里只管 `codex-worker.sh` 的派发；flash 模式下的派发全是 `codex-worker.sh`，全部按路由表走（ADR 0004）。不要自己改路由表。
 
 ## 建议模式输出（适合手机阅读）

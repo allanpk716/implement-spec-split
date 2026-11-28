@@ -5,11 +5,11 @@ A skill that implements a spec's tickets with a cheap model doing the coding and
 ## Roles and where they run
 
 **Orchestrator**:
-The main agent running in the user's Claude Code session; it owns the task graph and verification. On a cheap model it executes and relays only, and hands every judgment call to a stronger model (Opus review, a Design session, or the user).
+The main agent running in the user's Claude Code session; it owns the task graph and verification. On a cheap model it executes and relays only, and hands every judgment call to a stronger model (a 审查（review）, a Design session, or the user).
 _Avoid_: coordinator, lead
 
 **In-session subagent**:
-A subagent spawned by the Orchestrator inside the Claude Code session, with its model chosen by name (sonnet, opus, haiku, fable). Since 规格 #26 only the code-review subagents of a non-flash session are In-session subagents: the implementing roles are always Orca workers dispatched by `scripts/stage-dispatch.sh`.
+A subagent spawned by the Orchestrator inside the Claude Code session, with its model chosen by name (sonnet, opus, haiku, fable) or pinned by the session's settings. Since 规格 #26 the implementing roles are never In-session subagents: they are always Orca workers dispatched by `scripts/stage-dispatch.sh`. The review subagents are: the code-review subagents of a non-flash session, and since 票 #84 the read-only (`Explore`) review subagents of a flash session whose review Stage route is GLM and whose subagents are pinned to the route's model — the only case `scripts/opus-review.sh --where` says in-session.
 _Avoid_: native subagent, Claude subagent
 
 **External worker**:
@@ -44,18 +44,22 @@ The fix role in the form the Spec session dispatches after `scripts/merge-ticket
 _Avoid_: re-bump worker, counter role (it is the fix role; a re-bump is its work)
 
 **Review roles**:
-The Standards and Spec reviewers of `mattpocock-skills:code-review`; always In-session subagents on a strong model (non-flash sessions only; in Flash mode every review runs out-of-session via `opus-review.sh`).
+The Standards and Spec reviewers of `mattpocock-skills:code-review`; In-session subagents on a strong model in a non-flash session, and in a flash session wherever the review Stage route puts them (票 #84): out of session, as the two subagents of the headless process `opus-review.sh` starts (an official route, or a session whose subagents are not pinned to the route's model), or read-only In-session subagents (`Explore`) of the flash session itself, on a GLM route with `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. On either side of a flash session the subagent model is the review route's model, never one the session picks.
 
 **Design session**:
 A separate Claude Code session that the Orchestrator opens through Orca for a design discussion (grill-with-docs, a wayfinder grilling ticket); the user talks to it directly, and it carries the discussion through to-spec before handing control back. It runs the design Stage route: an Orca terminal started on the routed Launcher profile with its model and effort (the official subscription's Opus by default), with the same handoff whatever the route.
 _Avoid_: Opus session, grill session, hop
 
+**审查（review）**:
+A judgment pass that reads a diff or draft and returns findings for the Orchestrator to act on; in English prose, a review. Named Opus review until 票 #84 (2026-11-28), from the time it was always Opus. It runs on the review or diagnosis Stage route (the official subscription's Opus by default, otherwise the routed Launcher profile, model and effort), and the findings file's first line names the route. Where it runs is the route's decision too (票 #84): out of session, non-interactive, through `scripts/opus-review.sh`, unless `opus-review.sh --where` says in-session for this session (a GLM route and subagents pinned to its model), in which case it runs as read-only In-session subagents of the flash session and `opus-review.sh --stamp` writes the findings under the same first line, marked `（会话内子代理）` and `（强度未生效）`.
+_Avoid_: Opus review (retired 票 #84; the review runs on whatever the route names, Opus only by default), strong-model review (ambiguous in a GLM session, where "opus" maps to GLM); calling it "Opus 审核中" when the route is not Opus
+
 **Opus review**:
-A non-interactive judgment pass run outside the Orchestrator's session that reads a diff or draft and returns findings for the Orchestrator to act on. It runs on the review or diagnosis Stage route (the official subscription's Opus by default, otherwise the routed Launcher profile, model and effort), and the findings file's first line names the route.
-_Avoid_: strong-model review (ambiguous in a GLM session, where "opus" maps to GLM)
+Retired (票 #84, 2026-11-28): the judgment pass now called 审查（review）, which runs on the review or diagnosis Stage route whatever the model; the name stayed from when the review was always Opus.
+_Avoid_: using it for a review on a route that is not Opus; say 审查（review）
 
 **Judgment model**:
-The model that stands in for Opus wherever a judgment is made: every Opus review, and each Design session. It is Opus, or the substitute the user routes the review, diagnosis and design Stages to with `/grill-router` (today glm-5.4). The Stage routes replaced the two-role switch that used to set it: each dispatch reads its Stage's route, so a session that is already executing changes model at its next review or new Design session.
+The model that stands in for Opus wherever a judgment is made: every 审查（review）, and each Design session. It is Opus, or the substitute the user routes the review, diagnosis and design Stages to with `/grill-router` (today glm-5.4). The Stage routes replaced the two-role switch that used to set it: each dispatch reads its Stage's route, so a session that is already executing changes model at its next review or new Design session.
 _Avoid_: strong model, fallback model (the route is the user's decision, never an automatic downgrade)
 
 **Stage**:
@@ -63,7 +67,7 @@ One of the six kinds of work the pipeline routes to an executor: orchestration, 
 _Avoid_: phase, step (Steps are the numbered instructions inside a skill)
 
 **Stage route**:
-The executor assigned to one Stage: a Launcher profile, a model and a reasoning effort, optionally with an expiry after which the Stage returns to its default. Only combinations that have passed a smoke test may be routed. The user sets all routes with one command (`/grill-router`); it replaces the Judgment model and Worker model switches.
+The executor assigned to one Stage: a Launcher profile, a model and a reasoning effort, optionally with an expiry after which the Stage returns to its default. Only combinations that have passed a smoke test may be routed. The user sets all routes with one command (`/grill-router`); it replaces the Judgment model and Worker model switches. Since 票 #84 a review or diagnosis route also decides where that review runs: an official `claude` route always out of session; a GLM route in session when the session pins its subagents to the route's model (`CLAUDE_CODE_SUBAGENT_MODEL` with its `[1m]` suffix aside equal to the route's model, and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` — the flash session's settings), otherwise out of session. `scripts/opus-review.sh --where` decides from the table and the session's environment and prints the verdict with one line of reason; a session never decides it itself.
 _Avoid_: model switch, model mapping
 
 **Launcher profile**:
@@ -213,8 +217,12 @@ The longest an External worker may run in one go, set per role; reaching it stop
 _Avoid_: timeout (ambiguous with Idle timeout and with a worker's own command timeouts)
 
 **Idle timeout**:
-How long an External worker may go without any visible activity before it is judged stuck and killed; a stuck worker is not Resumed.
-_Avoid_: hang timeout
+How long an External worker may go without any visible activity before it is judged stuck and killed; a stuck worker is not Resumed. It is a clock, and only an External worker has one: an Orca worker has none, and its being idle means something else — its turn ended (Idle without a report), which is read from Orca's evidence, never from the time passed.
+_Avoid_: hang timeout, reading "idle" as time passing for an Orca worker (a live Orca worker is judged by Orca's evidence, never by the clock)
+
+**Idle without a report (空闲未报)**:
+An Orca worker that ended its turn without sending its `worker_done` — it left its tests running in the background, wrote that it would report when they finished, and sat idle (票 #79). Its idle is Orca's `tui-idle`, a turn that is over, not the Idle timeout, which is a clock on an External worker. It is known from Orca's evidence, never from the clock: a mail of the Run's that is no `worker_done` (one `wait` hands such mail over with exit 8) whose body says the worker stopped without reporting, or the last thing the worker wrote (`orca orchestration worker-read --dispatch <id>`) being that message, with nothing after it. A worker still in its turn is not this case, however long its test runs: that one is the Watchdog's. Nothing wakes such a worker, so its report never comes and it is never waited for again: the Orchestrator verifies what it left itself, in the foreground, judges it by the verification gate's three script checks as if it had reported, and puts the evidence in the Sidecar's dispatch directory (`session-verify.md`); the Run's final report says 主会话核实 in place of the outcome. The rule is written once, in SKILL.md's "Dispatching a role" item 6; Recovery, the Watchdog's `3` report and a `wait` that timed out (exit `5`) or took such a mail (exit `8`) point to it. find-next's `--worker agent` subagent gets the same rule in `find-next/SKILL.md`.
+_Avoid_: stalled (a live worker that is still in its turn and has stopped touching files: the Watchdog's case, which stops it and dispatches the role again), ended without reporting (that is a dispatch Orca calls `exited`: Recovery's case), Idle timeout (a clock's verdict on an External worker)
 
 **Resume**:
 Continuing a stopped External worker's own conversation, in the same worktree, instead of starting a new worker with a new Brief; decided by the Orchestrator.
@@ -224,10 +232,14 @@ _Avoid_: retry (that is the wrapper re-sending after an API error), re-brief
 The self-contained task description handed to a worker (an Orca worker the dispatch module started, or the headless executor), made of products rather than of process: a Ticket's Brief carries the Spec issue's content, the exploration notes that concern it and the Ticket issue's content, never the Spec session's reasoning; for a fix role, the review report; for a conflict role, the conflicted paths; for a Re-bump role, the merger's collision list (its stderr lines, verbatim), behind the first sentence that overrides the dispatch module's Task by naming the worktree and branch the role works in. A Ticket's Brief is drafted from `find-next/templates/brief-implement.md`.
 _Avoid_: prompt
 
+**foreground-test rule (前台测试规则)**:
+The rule every Brief of an implementing role carries since 票 #79: the role's tests and verification finish in the foreground before its final report — it never puts a test in the background and then ends its turn, and a command that does end up in the background is waited for in the foreground until it ends. The reason is that nothing wakes a worker whose turn has ended, so a report promised for when a background test finishes never comes (Idle without a report). SKILL.md writes the rule once, in step 5's `3` line; the dispatch texts of the merge, re-bump and fix roles — steps 5, 8 and 9.1, and the PR path of an Unattended landing — point back to it, and a dispatched role's Brief has it from its template: the Ticket Brief template in item 3 of its 要求, the section every find-next Brief template shares in its general form, for a test or a long command.
+_Avoid_: background tests, finishing the turn to wait for a notification (that is what the rule forbids: the worker that did it is Idle without a report)
+
 **Lean start (精简启动)**:
 Starting an implementation worker (a Ticket's implementation or fix role, dispatched by `scripts/stage-dispatch.sh` on the implementation Stage route; the merge role starts normally, since it resolves conflicts on the Integration branch and needs the CLAUDE.md and hooks `--bare` drops) with the Launcher profile's `--bare`: no CLAUDE.md, skills, plugins or hooks are loaded; the rules it must follow come from a rules file injected as a system prompt (`--append-system-prompt-file`, the file named by `ISS_DISPATCH_LEAN_RULES`, default `templates/lean-rules.md`) and the MCP servers it needs from `--mcp-config`, which takes a trivial task from 18.6K to 1.2K input tokens (ADR 0004). It is the default; without the rules file the start is a normal one, `ISS_DISPATCH_BARE` (0, off, no or false) turns it off, and the dispatch's Sidecar records which it was (`bare`, `bare_note`).
 _Avoid_: 精简开关 as the name of the start (the switch is only the opt-out), bare mode
 
 **Sidecar**:
-The JSON file `<run dir>/dispatch-<name>.json` (`<run dir>` is the Spec Run root) that `scripts/stage-dispatch.sh` writes for one dispatch and keeps current as the dispatch lives: the Stage route it took, the worktree, terminal and Orca dispatch id it got, whether the start was a Lean start and why not when it was not, the worker_done once `wait` recorded it (with the report path), the model read off the worker's terminal while it still existed (`actual_model`, taken by `release` or `verify`: Orca records none for an adopted terminal), and the release time. It lives in the Spec's run directory, outside every worktree, so that `release` removing the child worktree loses none of it; a report the worker wrote inside that worktree is copied out next to the sidecar first (`report-from-worktree.md`).
+The JSON file `<run dir>/dispatch-<name>.json` (`<run dir>` is the Spec Run root) that `scripts/stage-dispatch.sh` writes for one dispatch and keeps current as the dispatch lives: the Stage route it took, the worktree, terminal and Orca dispatch id it got, whether the start was a Lean start and why not when it was not, the worker_done once `wait` recorded it (with the report path), the model read off the worker's terminal while it still existed (`actual_model`, taken by `release` or `verify`: Orca records none for an adopted terminal), and the release time. It lives in the Spec's run directory, outside every worktree, so that `release` removing the child worktree loses none of it; a report the worker wrote inside that worktree is copied out next to the sidecar first (`report-from-worktree.md`). The files of one dispatch are in its dispatch directory, `<Spec Run root>/<name>/` — among them the report the worker was told to write, that copy `report-from-worktree.md`, and, for a worker gone Idle without a report (which leaves the sidecar no `worker_done` to record), `session-verify.md`, where the Orchestrator puts the evidence of the verification it did itself; the Run's final report names that file as the dispatch's report path and says 主会话核实 where another dispatch's line says `worker_done.outcome`.
 _Avoid_: dispatch record, dispatch state (that is Orca's), status.json (a headless executor's own file, which the sidecar's report_path may name)

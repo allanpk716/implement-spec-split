@@ -488,7 +488,7 @@ $S migrate                                                              # 迁移
 
 - 白名单内：跑脚本并按退出码分支、读短的结构化输出、照现成文本写票、转述已备好选项的问题、经派发模块（`stage-dispatch.sh dispatch` / `wait` / `release`）启动与收尾 worker、启动会话、跑 Opus review、无冲突合并与 commit、逐条执行 findings。
 - 一行源码都不写：阶段 3 的 delegate-guard 在 flash 会话里对源码写入硬拦（阈值 0，`~/.claude/state/allow-direct-edit` 不生效）。
-- 每个结论注明出处（派发角色的报告路径——sidecar 里的 `worker_done.report_path`——或 Opus findings 路径）；拿不准交给谁时默认上交 Opus；push、打 tag、发版先问用户（Design session 推送文档除外）。
+- 每个结论注明出处（派发角色的报告路径——sidecar 里的 `worker_done.report_path`，worker 空闲未报时是主会话核实后写的 `<dispatch dir>/session-verify.md`——或 Opus findings 路径）；拿不准交给谁时默认上交 Opus；push、打 tag、发版先问用户（Design session 推送文档除外）。
 
 **回退**
 
