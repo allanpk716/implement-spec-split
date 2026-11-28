@@ -105,6 +105,22 @@ has 'orca orchestration run-create' 'SKILL.md creates the Orca Run for Ticket wo
 has 'WORKER_ALLOW_FLASH=1' 'SKILL.md lets the flash session run the headless exploration' "$SKILL"
 has '--mcp-config' 'SKILL.md adds MCP through --mcp-config for ops tickets' "$SKILL"
 has '## 护栏' 'SKILL.md copies the guardrails into the Brief' "$SKILL"
+# Local ops tickets, agent-driven smoke tickets and the loosening rule of 规格 #58
+# (MAINTAINING 第 56 条), next to the two ssh ops ticket sentences of 第 36 条
+# above: the Ops tickets section names the local kind by its trigger, says that
+# a smoke ticket's terminal is part of the sequence rather than a dispatch, and
+# states the loosening rule for every ticket, with the order to write it into
+# every Brief.
+has 'says 「在本机执行」 and has a `## 护栏` section' 'SKILL.md names the local ops ticket by its trigger' "$SKILL"
+has '- **Local ops tickets**: the implementer carries the ticket out on this machine itself' \
+  'SKILL.md says a local ops ticket is carried out on this machine' "$SKILL"
+has '- **Agent-driven smoke tickets**' 'SKILL.md has the agent-driven smoke ticket paragraph' "$SKILL"
+has 'opening an Orca terminal or a session is part of the operation sequence, not the dispatching of an implementing worker' \
+  'SKILL.md: a smoke ticket opening a terminal is not a re-delegation' "$SKILL"
+has '- **Loosenings, on every ticket**' 'SKILL.md states the loosening rule for every ticket' "$SKILL"
+has 'the implementer does not take it. It records the item under 「未执行的放宽项」 of its result report' \
+  'SKILL.md: a loosening is recorded, never taken' "$SKILL"
+has 'Write the rule into every Brief' 'SKILL.md: the loosening rule goes into every Brief' "$SKILL"
 has 'read_only_violation' 'SKILL.md gates the exploration on the read-only check' "$SKILL"
 has 'never optional' 'the exploration is no longer optional' "$SKILL"
 has 'close-self.sh' 'SKILL.md still closes the session with close-self' "$SKILL"
