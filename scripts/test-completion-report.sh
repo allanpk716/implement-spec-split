@@ -488,7 +488,7 @@ mkdir -p "$REPO_A/.git/implement-spec-split/claims"
 printf '{}' > "$REPO_A/.git/implement-spec-split/claims/spec-203.json"
 run_report "$WORK/s3.out" "$WORK/s3.err" "$REPO" --spec 101
 expect_exit 0 'claimed case exits zero'
-sed 's/推荐：A（没人在做，不该被它挡住）/推荐：B（它正在实现，等它）/' \
+sed 's/推荐：A（没人在做，不该被它挡住）/推荐：B（#203 正在实现，做完再发）/' \
   "$WORK/s2.expected" > "$WORK/s3.expected"
 expect_same_file "$WORK/s3.expected" 'claimed other work recommends B' "$WORK/s3.out"
 rm -f "$REPO_A/.git/implement-spec-split/claims/spec-203.json"
@@ -818,7 +818,7 @@ cat > "$WORK/s12.expected" <<'EOF'
 👉 要你做：二选一（main 比 v1.2.0 多 2 个提交未发布）
    A. 现在发版 v1.2.1（只带已完成的）
    B. 等所有在做的工作完成一起发
-   推荐：B（它正在实现，等它）
+   推荐：B（#19 正在实现，做完再发）
    回复「发版」我来打 tag 并推送（打之前会先跟你确认版本号）。
 EOF
 expect_same_file "$WORK/s12.expected" 'no-topic report lists specs, dependencies and the one loose ticket' "$WORK/s12.out"
@@ -924,6 +924,133 @@ cat > "$WORK/s15.expected" <<'EOF'
    回复「发版」我来打 tag 并推送（打之前会先跟你确认版本号）。
 EOF
 expect_same_file "$WORK/s15.expected" 'graph failure reports （查询失败） and continues' "$WORK/s15.out"
+
+# ------------------------------------------------------------------ fixture J
+# GitHub #81: a Spec whose only open ticket is ready-for-human is human-only
+# for pipeline-status.sh --graph, which then reports status human and no claim
+# for it while claim.sh status says active. The holder below is this test
+# shell: claim.sh compares the record's pid_start with pid-start.sh, exactly
+# as for a record claim.sh take wrote.
+
+make_repo demo-j
+REPO_J=$WORK/repos/demo-j/main
+(
+  cd "$REPO_J"
+  commit_at 2026-11-20T00:00:00Z 'tagged base'
+  git tag v1.2.0
+  push_all .
+  commit_at 2026-11-24T00:00:00Z 'post one'
+  commit_at 2026-11-24T01:00:00Z 'post two'
+  push_all .
+)
+GH_J=$WORK/gh-j
+DESIGN_J=$WORK/design-j
+mkdir -p "$GH_J" "$DESIGN_J" "$REPO_J/.git/implement-spec-split/claims"
+make_issue "$GH_J" 26 STATE=open TITLE='规格：执行层换底座' BODY="$PS" SUBS=39,40 LABELS=ready-for-agent
+make_issue "$GH_J" 39 STATE=open TITLE='精简启动探针' LABELS=ready-for-human
+make_issue "$GH_J" 40 STATE=closed TITLE='launch-wave 托管'
+make_issue "$GH_J" 27 STATE=open TITLE='规格：路由表' BODY="$PS" SUBS=51 LABELS=ready-for-agent
+make_issue "$GH_J" 51 STATE=open TITLE='路由表 票1' LABELS=ready-for-agent BLOCKED_BY=39
+
+REPO=$REPO_J
+GH_DATA=$GH_J
+DESIGN_ROOT=$DESIGN_J
+CLAIMS_J=$REPO_J/.git/implement-spec-split/claims
+HOLDER_START=$("$ROOT/scripts/pid-start.sh" "$$")
+write_claim() { # spec, pid_start of the recorded holder
+  printf '{"spec":%s,"branch":"spec-%s","worktree":"","pid":%s,"pid_start":"%s","claimed_at":"2026-11-28T00:52:58+0800"}\n' \
+    "$1" "$1" "$$" "$2" > "$CLAIMS_J/spec-$1.json"
+}
+
+# Scenario 21: the human-only Spec has its integration branch and a live claim
+# record: it reads as 实现中, and the release advice names it instead of A.
+# (Numbered from 21: 16–18 are --run-dir's, 票 #47, ahead in this file.)
+git -C "$REPO" branch spec-26
+write_claim 26 "$HOLDER_START"
+run_report "$WORK/s21.out" "$WORK/s21.err" "$REPO"
+expect_exit 0 'active claim on a human-only spec exits zero'
+cat > "$WORK/s21.expected" <<'EOF'
+（本仓库没有 grill 题目记录）
+   仓库里还在进行的规格（2 个）：
+      ⏳ #26 规格：执行层换底座（实现中，票 1/2）
+      ⏳ #27 规格：路由表（等 #26）
+👉 要你做：二选一（main 比 v1.2.0 多 2 个提交未发布）
+   A. 现在发版 v1.2.1（只带已完成的）
+   B. 等所有在做的工作完成一起发
+   推荐：B（#26 正在实现，做完再发）
+   回复「发版」我来打 tag 并推送（打之前会先跟你确认版本号）。
+EOF
+expect_same_file "$WORK/s21.expected" 'active claim on a human-only spec reads as 实现中 and is named in the advice' "$WORK/s21.out"
+expect_not_has '推荐：A' 'active claim on a human-only spec does not recommend A' "$WORK/s21.out"
+
+# Scenario 22: the recorded holder is gone (its pid no longer has the recorded
+# start time): 中断待恢复, and since nobody is working the advice is A again.
+write_claim 26 dead-for-test
+run_report "$WORK/s22.out" "$WORK/s22.err" "$REPO"
+expect_exit 0 'stale claim on a human-only spec exits zero'
+cat > "$WORK/s22.expected" <<'EOF'
+（本仓库没有 grill 题目记录）
+   仓库里还在进行的规格（2 个）：
+      ⏳ #26 规格：执行层换底座（中断待恢复，票 1/2）
+      ⏳ #27 规格：路由表（等 #26）
+👉 要你做：二选一（main 比 v1.2.0 多 2 个提交未发布）
+   A. 现在发版 v1.2.1（只带已完成的）
+   B. 等所有在做的工作完成一起发
+   推荐：A（没人在做，不该被它挡住）
+   回复「发版」我来打 tag 并推送（打之前会先跟你确认版本号）。
+EOF
+expect_same_file "$WORK/s22.expected" 'stale claim on a human-only spec reads as 中断待恢复' "$WORK/s22.out"
+expect_not_has '实现中' 'stale claim on a human-only spec is not 实现中' "$WORK/s22.out"
+
+# Scenario 23: no integration branch and no claim record: the graph's word,
+# byte for byte as before claims were read.
+rm -f "$CLAIMS_J/spec-26.json"
+git -C "$REPO" branch -D spec-26 >/dev/null 2>&1
+run_report "$WORK/s23.out" "$WORK/s23.err" "$REPO"
+expect_exit 0 'unclaimed human-only spec exits zero'
+cat > "$WORK/s23.expected" <<'EOF'
+（本仓库没有 grill 题目记录）
+   仓库里还在进行的规格（2 个）：
+      ⏳ #26 规格：执行层换底座（待开始，票 1/2）
+      ⏳ #27 规格：路由表（等 #26）
+👉 要你做：二选一（main 比 v1.2.0 多 2 个提交未发布）
+   A. 现在发版 v1.2.1（只带已完成的）
+   B. 等所有在做的工作完成一起发
+   推荐：A（没人在做，不该被它挡住）
+   回复「发版」我来打 tag 并推送（打之前会先跟你确认版本号）。
+EOF
+expect_same_file "$WORK/s23.expected" 'unclaimed human-only spec reads as it did before claims were read' "$WORK/s23.out"
+
+# Scenario 24: the integration branch without any claim record is what
+# claim.sh calls interrupted, so the Spec reads as 中断待恢复, not 待开始.
+git -C "$REPO" branch spec-26
+run_report "$WORK/s24.out" "$WORK/s24.err" "$REPO"
+expect_exit 0 'integration branch without a claim record exits zero'
+expect_same_file "$WORK/s22.expected" 'integration branch without a claim record reads as 中断待恢复' "$WORK/s24.out"
+
+# Scenario 25: the graph says running (the recorded holder is alive) while
+# claim.sh says free (the integration branch is gone): the graph's word stands.
+git -C "$REPO" branch -D spec-26 >/dev/null 2>&1
+GH_J2=$WORK/gh-j2
+mkdir -p "$GH_J2"
+cp "$GH_J"/issue-*.env "$GH_J2/"
+make_issue "$GH_J2" 51 STATE=open TITLE='路由表 票1' LABELS=ready-for-agent
+write_claim 27 "$HOLDER_START"
+GH_DATA=$GH_J2
+run_report "$WORK/s25.out" "$WORK/s25.err" "$REPO"
+expect_exit 0 'graph running with a free claim exits zero'
+cat > "$WORK/s25.expected" <<'EOF'
+（本仓库没有 grill 题目记录）
+   仓库里还在进行的规格（2 个）：
+      ⏳ #26 规格：执行层换底座（待开始，票 1/2）
+      ⏳ #27 规格：路由表（实现中，票 0/1）
+👉 要你做：二选一（main 比 v1.2.0 多 2 个提交未发布）
+   A. 现在发版 v1.2.1（只带已完成的）
+   B. 等所有在做的工作完成一起发
+   推荐：B（#27 正在实现，做完再发）
+   回复「发版」我来打 tag 并推送（打之前会先跟你确认版本号）。
+EOF
+expect_same_file "$WORK/s25.expected" 'graph running with a free claim still reads as 实现中 and recommends B' "$WORK/s25.out"
 
 # ---------------------------------------------------------------- usage errors
 
