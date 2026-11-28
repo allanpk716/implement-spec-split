@@ -33,7 +33,10 @@
 # describe find-next's combined round as a decision round, never as a question
 # round (Standards 1); and doctor's two hints are told apart in the hooks README
 # and the two setup guides (Standards 3 — stage 3's FAIL gives the manual fix,
-# the install-state row is the one that says to run install.sh).
+# the install-state row is the one that says to run install.sh); and the smoke
+# ticket paragraph says that a smoke test of the skill's own text loads the
+# branch through CLAUDE_CONFIG_DIR, since the installed skills point at main
+# until the landing (the review's 未核实与提醒).
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -123,6 +126,14 @@ has '- **Loosenings, on every ticket**' 'SKILL.md states the loosening rule for 
 has 'the implementer does not take it. It records the item under 「未执行的放宽项」 of its result report' \
   'SKILL.md: a loosening is recorded, never taken' "$SKILL"
 has 'Write the rule into every Brief' 'SKILL.md: the loosening rule goes into every Brief' "$SKILL"
+# A smoke ticket that tests the skill's own text must load the branch: installed
+# skills point at the main checkout's main until the landing, so the session
+# under test gets a CLAUDE_CONFIG_DIR of its own (the review of 规格 #58, and
+# ticket #71's second and third rounds).
+has "A smoke ticket that tests the skill's own text loads the branch's version, not the installed one" \
+  "SKILL.md: a smoke ticket testing the skill's text loads the branch, not the installed main" "$SKILL"
+has 'so the session under test is started with `CLAUDE_CONFIG_DIR` pointing at a temporary config directory whose `skills/` links to a clone of the branch' \
+  'SKILL.md: the session under test gets a CLAUDE_CONFIG_DIR linked to a clone of the branch' "$SKILL"
 has 'read_only_violation' 'SKILL.md gates the exploration on the read-only check' "$SKILL"
 has 'never optional' 'the exploration is no longer optional' "$SKILL"
 has 'close-self.sh' 'SKILL.md still closes the session with close-self' "$SKILL"
