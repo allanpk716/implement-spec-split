@@ -2,7 +2,9 @@
 # Tests for scripts/merge-ticket.sh (temporary git repositories; no Orca).
 # The test command is passed as an argument the way a Spec session passes it;
 # the fake it names records its working directory and arguments, and fails
-# while the file TEST_FAIL names exists.
+# while the file TEST_FAIL names exists. The last section runs step 9.1's shape
+# (main into the Integration branch through a remote-tracking ref) on a branch
+# group of its own.
 
 set -u
 
@@ -428,6 +430,142 @@ expect_has 'has no commits' "a fresh branch off an older Integration commit says
 expect_without 'already part of' "a fresh branch off an older Integration commit is not read as landed" "$WORK/fresh-old.out.err"
 expect_test_not_run "a fresh branch off an older Integration commit runs no tests"
 expect_head "$HEAD_AFTER_T13" "a fresh branch off an older Integration commit changes nothing"
+
+# --- a second branch group --------------------------------------------------------
+# A new branch group off main (spec-102) so the assertions above keep their
+# Integration branch: a numbered directory docs/adr with two entries already, a
+# VERSION file, a CHANGELOG and a pyproject.toml. From here on the expect_*
+# helpers read INTEGRATION, so it points at the new group.
+
+expect_quiet() { # stderr file name — the run printed nothing on stderr
+  if [ -s "$1" ]; then
+    bad "$2" "$(cat "$1")"
+  else
+    ok "$2"
+  fi
+}
+
+expect_untouched() { # worktree sha name — the worktree's HEAD is <sha> and it is clean
+  head=$(git -C "$1" rev-parse HEAD 2>/dev/null)
+  out=$(git -C "$1" status --porcelain 2>/dev/null)
+  if [ "$head" != "$2" ]; then
+    bad "$3" "HEAD is ${head:-unknown}, expected $2"
+  elif [ -n "$out" ]; then
+    bad "$3" "status: $out"
+  else
+    ok "$3"
+  fi
+}
+
+expect_content() { # worktree path content name — HEAD:<path> in the worktree holds exactly <content>
+  got=$(git -C "$1" show "HEAD:$2" 2>/dev/null)
+  if [ "$got" = "$3" ]; then
+    ok "$4"
+  else
+    bad "$4" "content is [${got}], expected [$3]"
+  fi
+}
+
+expect_absent() { # worktree path name — HEAD:<path> does not exist in the worktree
+  if git -C "$1" cat-file -e "HEAD:$2" 2>/dev/null; then
+    bad "$3" "$2 exists at HEAD"
+  else
+    ok "$3"
+  fi
+}
+
+commit_in() { # worktree message — stage everything and commit
+  git -C "$1" add -A
+  git -C "$1" commit --quiet -m "$2"
+}
+
+new_ticket() { # m base — a Ticket worktree spec-102-t<m> off <base>, its physical path in T
+  T=$WORK/spec-102-t$1
+  git -C "$MAIN" worktree add --quiet -b "spec-102-t$1" "$T" "$2"
+  T=$(cd "$T" && pwd -P)
+}
+
+SPEC102=$WORK/spec-102
+git -C "$MAIN" worktree add --quiet -b spec-102 "$SPEC102" main
+INTEGRATION=$(cd "$SPEC102" && pwd -P)
+mkdir -p "$INTEGRATION/docs/adr"
+printf '%s\n' 'adr one' > "$INTEGRATION/docs/adr/0001-one.md"
+printf '%s\n' 'adr two' > "$INTEGRATION/docs/adr/0002-two.md"
+printf '%s\n' '1.0.0' > "$INTEGRATION/VERSION"
+printf '%s\n' '# changelog' '' '- base' > "$INTEGRATION/CHANGELOG.md"
+printf '%s\n' '[project]' 'version = "1.0.0"' '' '[tool.x]' 'key = 1' > "$INTEGRATION/pyproject.toml"
+commit_in "$INTEGRATION" 'spec 102 base: two ADRs, VERSION 1.0.0'
+BASE102=$(git -C "$INTEGRATION" rev-parse HEAD)
+
+# --- step 9.1 shape: main into the Integration branch, checked out nowhere ------
+# --ticket names a remote-tracking ref with --no-ticket-worktree. origin/main is
+# still the commit spec-102 branched from: nothing to merge is exit 5, not the
+# gate failure a fresh Ticket branch would be.
+git -C "$INTEGRATION" fetch --quiet origin
+HEAD_BEFORE_91=$(git -C "$INTEGRATION" rev-parse HEAD)
+: > "$TEST_LOG"
+run_merge "$WORK/step91-uptodate.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket origin/main --no-ticket-worktree --test 'fake-test'
+expect_exit 5 "an origin/main already in the Integration branch exits 5"
+expect_has 'ticket ref origin/main is already part of spec-102: nothing to merge' "an origin/main with nothing to merge says so" "$WORK/step91-uptodate.out.err"
+expect_without 'gate not met' "an origin/main with nothing to merge is not a gate failure" "$WORK/step91-uptodate.out.err"
+expect_test_not_run "an origin/main with nothing to merge runs no tests"
+expect_head "$HEAD_BEFORE_91" "an origin/main with nothing to merge changes nothing"
+
+# spec-102 adds ADR 0005-d and main adds 0020-c (another Spec landed there): no
+# number in common, so the merge happens as a merge commit of the previous tip
+# and origin/main.
+mkdir -p "$MAIN/docs/adr"
+printf '%s\n' 'adr twenty c' > "$MAIN/docs/adr/0020-c.md"
+commit_in "$MAIN" 'main adds ADR 0020-c'
+git -C "$MAIN" push --quiet origin main
+printf '%s\n' 'adr five d' > "$INTEGRATION/docs/adr/0005-d.md"
+commit_in "$INTEGRATION" 'spec 102 adds ADR 0005-d'
+git -C "$INTEGRATION" fetch --quiet origin
+ORIGIN_MAIN=$(git -C "$INTEGRATION" rev-parse origin/main)
+HEAD_91=$(git -C "$INTEGRATION" rev-parse HEAD)
+: > "$TEST_LOG"
+run_merge "$WORK/step91-clean.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket origin/main --no-ticket-worktree --test 'fake-test unit'
+expect_exit 0 "step 9.1 with a different ADR number merges"
+expect_quiet "$WORK/step91-clean.out.err" "a clean step 9.1 prints nothing"
+expect_has 'merge-ticket: merged origin/main into spec-102' "a clean step 9.1 reports the merge" "$WORK/step91-clean.out"
+parents=$(git -C "$INTEGRATION" log -1 --format='%P' HEAD)
+if [ "$parents" = "$HEAD_91 $ORIGIN_MAIN" ]; then
+  ok "a clean step 9.1 is a merge commit of the previous tip and origin/main"
+else
+  bad "a clean step 9.1 is a merge commit of the previous tip and origin/main" "parents=[$parents]"
+fi
+expect_content "$INTEGRATION" docs/adr/0020-c.md 'adr twenty c' "a clean step 9.1 brings main's entry"
+expect_test_ran "a clean step 9.1 runs the tests"
+expect_clean "a clean step 9.1 leaves a clean worktree"
+HEAD_AFTER_91=$(git -C "$INTEGRATION" rev-parse HEAD)
+
+# origin/main now sits behind that merge: still exit 5, still no tests.
+: > "$TEST_LOG"
+run_merge "$WORK/step91-landed.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket origin/main --no-ticket-worktree --test 'fake-test unit'
+expect_exit 5 "an origin/main behind a merge commit exits 5"
+expect_has 'nothing to merge' "an origin/main behind a merge commit says so" "$WORK/step91-landed.out.err"
+expect_without 'gate not met' "an origin/main behind a merge commit is not a gate failure" "$WORK/step91-landed.out.err"
+expect_test_not_run "an origin/main behind a merge commit runs no tests"
+expect_head "$HEAD_AFTER_91" "an origin/main behind a merge commit changes nothing"
+
+# Without the switch the default gate is unchanged: origin/main is not a local
+# branch, so it does not exist as far as --ticket is concerned.
+run_merge "$WORK/step91-default.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket origin/main --test 'fake-test unit'
+expect_exit 2 "origin/main without --no-ticket-worktree exits 2"
+expect_has 'ticket branch origin/main does not exist' "origin/main without the switch is not a ticket branch" "$WORK/step91-default.out.err"
+
+# The switch is about the check, not the kind of ref: a local Ticket branch
+# with no worktree (spec-101-t9 above) passes with it and merges.
+: > "$TEST_LOG"
+run_merge "$WORK/no-worktree-switch.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-101-t9 --no-ticket-worktree --test 'fake-test'
+expect_exit 0 "a ticket branch without a worktree merges with --no-ticket-worktree"
+expect_merged "$(git -C "$MAIN" rev-parse spec-101-t9)" "the ticket branch without a worktree lands"
+expect_test_ran "the ticket branch without a worktree runs the tests"
 
 printf '\n%d passed, %d failed\n' "$PASSED" "$FAILED"
 [ "$FAILED" -eq 0 ]
