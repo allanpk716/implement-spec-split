@@ -1047,11 +1047,14 @@ expect_test_not_run "a timestamp collision runs no tests"
 expect_untouched "$T18" "$TIP18" "a timestamp collision leaves the ticket branch and worktree alone"
 
 # --- VERSION alone -------------------------------------------------------------
-# t19 bumps VERSION to 1.6.0 and lands. t20 from the tip before that sets it to
-# 1.6.0 too, adding no numbered entry, and merges the Integration branch back
-# (as t2 does, so that its later re-bump merges without a textual conflict):
-# only the version file collides, and moving that one file on lets the rerun
-# merge.
+# t19 bumps VERSION to 1.6.0 and lands. t25 from the tip before that sets it to
+# 1.6.0 too and merges nothing back, the Brief's form (SKILL.md step 5): the
+# gate lists VERSION, and after the re-bump the gate clears but the rerun is
+# the textual conflict of that line, exit 3 -- the usual outcome without a
+# merge-back. t20 from the same tip sets it to 1.6.0 too and merges the
+# Integration branch back (as t2 does, so that its later re-bump merges
+# without a textual conflict): only the version file collides, and moving that
+# one file on lets the rerun merge.
 HEAD_BEFORE_T19=$(git -C "$INTEGRATION" rev-parse HEAD)
 new_ticket 19 "$HEAD_BEFORE_T19"
 T19=$T
@@ -1063,6 +1066,35 @@ run_merge "$WORK/counter-t19.out" --worktree "$INTEGRATION" --integration spec-1
   --ticket spec-102-t19 --test 'fake-test'
 expect_exit 0 "the nineteenth ticket lands"
 HEAD_AFTER_T19=$(git -C "$INTEGRATION" rev-parse HEAD)
+
+new_ticket 25 "$HEAD_BEFORE_T19"
+T25=$T
+printf '%s\n' '1.6.0' > "$T25/VERSION"
+commit_in "$T25" 'ticket twenty-five sets VERSION to 1.6.0 as well'
+TIP25=$(git -C "$T25" rev-parse HEAD)
+SHORT25=$(git -C "$T25" rev-parse --short HEAD)
+: > "$TEST_LOG"
+run_merge "$WORK/counter-version-nomergeback.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t25 --test 'fake-test'
+expect_exit 6 "VERSION set to the same value without a merge-back exits 6"
+expect_has 'version VERSION' "a VERSION-only collision without a merge-back names the version file" "$WORK/counter-version-nomergeback.out.err"
+expect_has $'ticket\t'"$SHORT25" "a VERSION-only collision without a merge-back cites the ticket side's commit" "$WORK/counter-version-nomergeback.out.err"
+expect_head "$HEAD_AFTER_T19" "a VERSION-only collision without a merge-back leaves the Integration branch where it was"
+expect_test_not_run "a VERSION-only collision without a merge-back runs no tests"
+printf '%s\n' '1.7.0' > "$T25/VERSION"
+commit_in "$T25" 'ticket twenty-five re-bumps VERSION to 1.7.0 without merging back'
+TIP25=$(git -C "$T25" rev-parse HEAD)
+: > "$TEST_LOG"
+run_merge "$WORK/counter-version-nomergeback-rebump.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t25 --test 'fake-test'
+expect_exit 3 "after a re-bump of VERSION alone without a merge-back the rerun is a conflict"
+expect_has 'conflict merging spec-102-t25 into spec-102' "the rerun after the re-bump goes to the conflict path" "$WORK/counter-version-nomergeback-rebump.out.err"
+expect_has 'VERSION' "the rerun after the re-bump names VERSION as the conflicted file" "$WORK/counter-version-nomergeback-rebump.out.err"
+expect_without 'version VERSION' "the rerun after the re-bump no longer lists VERSION as a collision" "$WORK/counter-version-nomergeback-rebump.out.err"
+expect_head "$HEAD_AFTER_T19" "the rerun after the re-bump leaves the Integration branch where it was"
+expect_clean "the rerun after the re-bump leaves no half-merged state"
+expect_test_not_run "the rerun after the re-bump runs no tests"
+expect_untouched "$T25" "$TIP25" "the rerun after the re-bump leaves the ticket branch and worktree alone"
 
 new_ticket 20 "$HEAD_BEFORE_T19"
 T20=$T
