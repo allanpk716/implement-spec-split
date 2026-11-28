@@ -46,7 +46,10 @@
 # entry of GLOSSARY limits the install to this skill's own repository and no
 # longer the loose tickets (Standards 5); the loosening bullet of step 8 is
 # pinned as its whole sentence, since the bare heading appears on five lines of
-# SKILL.md and a pin on it alone caught nothing (Standards 8).
+# SKILL.md and a pin on it alone caught nothing (Standards 8); the three drafting
+# templates justify ready-for-human by identity, credentials or physical action
+# and carry a guardrail sample for a local or smoke ops ticket next to the ssh
+# one, each "样例见下" naming its sample (Spec 3).
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -489,6 +492,21 @@ for template in brief-spec-batch brief-map-spec-batch brief-tickets-batch; do
   has '由调用方合成一轮按推荐自动拍板（可推翻）' "$template: the open items are decided in one round" "$file"
   without '给用户确认用' "$template: seams are no longer for the user to confirm" "$file"
   has '给调用方审稿用' "$template: seams are review material" "$file"
+  # 规格 #58 复审 Spec 3: ready-for-human is for identity, credentials or a
+  # physical action only — not for "what an external worker cannot do", the
+  # criterion 规格 #58 retires; each guardrail sample pointer names its sample,
+  # and the templates carry the local (and smoke) sample next to the ssh one.
+  without '不能交给外部实现 worker（codex 等）的票' \
+    "$template: ready-for-human is not justified by what an external worker cannot do" "$file"
+  has '需要本人身份 / 凭据 / 物理动作的票（正文写了「本票由 Opus 执行」的）在该票写 `"labels": ["ready-for-human"]`' \
+    "$template: ready-for-human is for identity, credentials or a physical action" "$file"
+  without '带一节 `## 护栏`（样例见下）' \
+    "$template: a guardrail sample pointer no longer points at the ssh sample alone" "$file"
+  has '带一节 `## 护栏`（本机版样例见下）' "$template: the local ops ticket points at the local guardrail sample" "$file"
+  has '预期证据、护栏（本机版样例见下）' "$template: the smoke ticket points at the local guardrail sample" "$file"
+  has '带一节 `## 护栏`（ssh 版样例见下）' "$template: the ssh ops ticket points at the ssh guardrail sample" "$file"
+  has '- 只操作本机的 `<目录或文件>`（测试工作区 `~/orca/<测试仓库>`、`<临时状态文件>`），不碰其他仓库和本机配置' \
+    "$template: carries the local guardrail sample" "$file"
 done
 
 # --- what doctor's hints say (规格 #58 审查 Standards 硬违规 3) ---
