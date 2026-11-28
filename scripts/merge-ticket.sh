@@ -93,13 +93,13 @@
 #   6  shared counters collide: nothing merged, tests not run, worktree
 #      untouched; stderr lists each colliding counter with both sides' commits
 #      (`<counter>\t<side>\t<commit> <subject>\t<paths>`, one line per side; a
-#      tab in a subject comes out as a space)
-#      for the Brief of the worker that re-bumps the Ticket side. Under
-#      --no-ticket-worktree (step 9.1) the ref is read only and the first line
-#      names the integration branch as the side to re-bump instead; the lines
-#      keep their `integration` / `ticket` labels either way. Rerun after the
-#      re-bump; a rerun that still exits 6 means the re-bump did not clear it;
-#      the round cap is the caller's (SKILL.md steps 5 / 9.1)
+#      tab in a subject comes out as a space) for the Brief of the worker that
+#      re-bumps the Ticket side. Under --no-ticket-worktree (step 9.1) the ref
+#      is read only and the first line names the integration branch as the
+#      side to re-bump instead; the lines keep their `integration` / `ticket`
+#      labels either way. Rerun after the re-bump; a rerun that still exits 6
+#      means the re-bump did not clear it; the round cap is the caller's
+#      (SKILL.md steps 5 / 9.1)
 #  64  bad usage
 
 set -u
