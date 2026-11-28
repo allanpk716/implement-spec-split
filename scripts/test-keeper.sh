@@ -454,9 +454,50 @@ expect_has "--repo test/repo --only 19 --apply" "quota due: launch-wave resumes 
 expect_count "" 0 "quota due: no notification for a quota resume" "$NOTIFY_LOG"
 expect_file "$STATE" "quota due: records the resume"
 
-# --- decision parking notifies once ------------------------------------------
+# --- auth parking notifies once, never resumes (票 #70, 规格 #58) ------------
+# The category table is down to quota / transient / auth / error. auth means a
+# human must act first (log in, pay, enter a code), so keeper only notifies, once
+# per report, and never resumes — not even when the report names a recoverable
+# time that has passed: the resumed Run would stop on the same missing identity.
+# The second round's SKIP line names the category it read, which is what tells
+# the machine-readable auth from the legacy fallback below.
 
-new_fixture decision
+new_fixture auth
+write_parking '## 停车报告
+
+停车类别：auth
+可恢复时间：无
+
+### 需要你决定
+1. 需要你本人登录授权后才能继续。'
+run_keeper "$WORK/auth-1.out"
+expect_exit 0 "auth: exits 0"
+expect_has "停车待你决定" "auth: notifies with the report url" "$NOTIFY_LOG"
+expect_has "https://example.test/issues/19#comment-9001" "auth: notification carries the url" "$NOTIFY_LOG"
+expect_without "launched" "auth: never resumes" "$WORK/launch.log"
+run_keeper "$WORK/auth-2.out"
+expect_exit 0 "auth second round: exits 0"
+expect_count "" 1 "auth: notifies only once" "$NOTIFY_LOG"
+expect_has "已通知过（auth）" "auth: is read as the machine-readable category auth" "$WORK/auth-2.out"
+
+new_fixture auth-time
+write_parking '## 停车报告
+
+停车类别：auth
+可恢复时间：'"$(epoch_iso -60)"
+run_keeper "$WORK/auth-time.out"
+expect_exit 0 "auth with a passed time: exits 0"
+expect_without "launched" "auth with a passed time: a recoverable time never resumes an auth park" "$WORK/launch.log"
+expect_count "" 1 "auth with a passed time: notifies" "$NOTIFY_LOG"
+
+# --- a retired category name is a legacy report: notified once, never resumed --
+
+# decision and other left the category table (票 #70). A report written with
+# either before that no longer carries a machine-readable category, so it takes
+# the keyword fallback, whose non-quota result is now error: notified once,
+# never resumed, exactly as it was under its old name.
+
+new_fixture retired-decision
 write_parking '## 停车报告
 
 停车类别：decision
@@ -464,14 +505,29 @@ write_parking '## 停车报告
 
 ### 需要你决定
 1. 保留还是撤回？'
-run_keeper "$WORK/decision-1.out"
-expect_exit 0 "decision: exits 0"
-expect_has "停车待你决定" "decision: notifies with the report url" "$NOTIFY_LOG"
-expect_has "https://example.test/issues/19#comment-9001" "decision: notification carries the url" "$NOTIFY_LOG"
-expect_without "launched" "decision: never resumes" "$WORK/launch.log"
-run_keeper "$WORK/decision-2.out"
-expect_exit 0 "decision second round: exits 0"
-expect_count "" 1 "decision: notifies only once" "$NOTIFY_LOG"
+run_keeper "$WORK/retired-decision-1.out"
+expect_exit 0 "retired decision: exits 0"
+expect_has "停车待你决定" "retired decision: notifies with the report url" "$NOTIFY_LOG"
+expect_has "https://example.test/issues/19#comment-9001" "retired decision: notification carries the url" "$NOTIFY_LOG"
+expect_without "launched" "retired decision: never resumes" "$WORK/launch.log"
+run_keeper "$WORK/retired-decision-2.out"
+expect_exit 0 "retired decision second round: exits 0"
+expect_count "" 1 "retired decision: notifies only once" "$NOTIFY_LOG"
+expect_has "已通知过（error）" "retired decision: falls back to error" "$WORK/retired-decision-2.out"
+
+new_fixture retired-other
+write_parking '## 停车报告
+
+停车类别：other
+可恢复时间：无
+
+### 需要你决定
+1. 其他情况。'
+run_keeper "$WORK/retired-other-1.out"
+run_keeper "$WORK/retired-other-2.out"
+expect_exit 0 "retired other second round: exits 0"
+expect_count "" 1 "retired other: notifies only once" "$NOTIFY_LOG"
+expect_has "已通知过（error）" "retired other: falls back to error" "$WORK/retired-other-2.out"
 
 # --- fourth resume in 24h turns into a notification --------------------------
 
@@ -1103,7 +1159,7 @@ expect_has $'\tRESUME\t' "legacy quota: classifies as quota and resumes" "$WORK/
 expect_count "" 0 "legacy quota: no decision notification" "$NOTIFY_LOG"
 expect_has "--only 19 --apply" "legacy quota: launch-wave resumes" "$WORK/launch.log"
 
-new_fixture legacy-decision
+new_fixture legacy-error
 write_parking '## 停车报告
 
 ### 需要你决定
@@ -1111,10 +1167,16 @@ write_parking '## 停车报告
 
 ### 现状
 分支 spec-19 已合并三张票。'
-run_keeper "$WORK/legacy-decision.out"
-expect_exit 0 "legacy decision: exits 0"
-expect_has "停车待你决定" "legacy decision: notifies once" "$NOTIFY_LOG"
-expect_without "launched" "legacy decision: never resumes" "$WORK/launch.log"
+run_keeper "$WORK/legacy-error-1.out"
+expect_exit 0 "legacy error: exits 0"
+expect_has "停车待你决定" "legacy error: notifies once" "$NOTIFY_LOG"
+expect_without "launched" "legacy error: never resumes" "$WORK/launch.log"
+run_keeper "$WORK/legacy-error-2.out"
+expect_exit 0 "legacy error second round: exits 0"
+expect_count "" 1 "legacy error: notifies only once" "$NOTIFY_LOG"
+# Without a quota keyword the fallback is error, the category keeper only
+# notifies (票 #70: it was decision before the table narrowed).
+expect_has "已通知过（error）" "legacy error: the non-quota fallback is error" "$WORK/legacy-error-2.out"
 
 # --- dry-run writes nothing --------------------------------------------------
 

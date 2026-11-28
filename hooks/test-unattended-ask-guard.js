@@ -142,6 +142,17 @@ testCase('--auto-land in string content denies', dir => {
   assert.match(reason, /### 自动拍板（可推翻）/);
   assert.match(reason, /## 停车报告 \/ ### 需要你决定/);
   assert.match(reason, /不要再调用 AskUserQuestion/);
+  // 票 #70 (规格 #58): a trade-off is never a reason to ask. The reason names
+  // the three outcomes of an item under 需要人取舍 — apply a recommendation,
+  // pick a reversible option by the reversibility rule when the review says
+  // 可自动采纳：否 or 推荐：无 — and the only two that still park, by category.
+  assert.match(reason, /可自动采纳：是/);
+  assert.match(reason, /可自动采纳：否/);
+  assert.match(reason, /推荐：无/);
+  assert.match(reason, /可逆/);
+  assert.match(reason, /停车类别 auth/);
+  assert.match(reason, /停车类别 error/);
+  assert.doesNotMatch(reason, /其余真要人决定的事/);
 });
 
 testCase('--auto-land in array content denies', dir => {
