@@ -21,12 +21,14 @@
 #            such a Ticket waits too (SKILL.md "Tickets blocked by another
 #            Spec": a partial landing);
 #   human    carrying `ready-for-human`: never dispatched;
-#   decision carrying no `ready-for-agent` label (票 #86): `needs-info`,
-#            `needs-triage`, `wontfix` or no triage label at all. It waits for a
-#            person's triage — the label back, or its closure — so nothing is
-#            dispatched for it, and it is no debt of the Spec's while it waits.
-#            A Ticket that carries `ready-for-agent` is an execution Ticket
-#            whatever else it carries;
+#   decision a Pending ticket (GLOSSARY.md 待定票; 票 #86 — the section's name,
+#            not a map's Decision ticket): carrying no `ready-for-agent` label,
+#            or one of `needs-info`, `needs-triage`, `wontfix` beside it. Those
+#            three win over `ready-for-agent`: a Ticket that is both is
+#            mislabelled, and is listed here for a person to put right. It
+#            waits for a person's triage — a label that makes it an execution
+#            Ticket again, or its closure — so nothing is dispatched for it,
+#            and it is no debt of the Spec's while it waits;
 #   shelved  titled 【搁置】, or marked so in its body;
 #   source   the loose source ticket of a Spec without sub-issues (the graph's
 #            `source` flag: the mapless ticket its 实现票 line names, 票 #83).
@@ -197,14 +199,14 @@ function reportLine(number) {
 const blocking = [];
 const waitingLines = [];
 const human = [];
-const decision = [];
+const pendingLines = [];
 const shelved = [];
 const source = [];
 for (const ticket of open) {
   const number = Number(ticket.number);
   const title = titled(ticket);
   if (ticket.human === true) human.push(`${title}（人工）`);
-  if (pendingNumbers.has(number)) decision.push(`${title}（待定）`);
+  if (pendingNumbers.has(number)) pendingLines.push(`${title}（待定）`);
   if (ticket.shelved === true) shelved.push(`${title}（搁置）`);
   if (ticket.source === true) source.push(`${title}（源票）`);
   if (deferred.has(number)) continue;
@@ -217,7 +219,7 @@ for (const [title, lines] of [
   ['# open', blocking],
   ['# waiting', waitingLines],
   ['# human', human],
-  ['# decision', decision],
+  ['# decision', pendingLines],
   ['# shelved', shelved],
   ['# source', source],
   // Every open Ticket that is neither human, decision, shelved nor the source

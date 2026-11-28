@@ -2,11 +2,11 @@
 # Deterministic tests for scripts/landing-check.sh. They run the real
 # pipeline-status.sh against a fake gh, so the Spec-to-Ticket resolution, the
 # blocked_by queries, the five kinds of open Ticket that do not block a landing
-# (waiting, human, the Ticket without `ready-for-agent` of 票 #86, shelved, and
-# the loose source ticket of 票 #83), the report lines for the waiting ones and
-# the two ways the check fails closed (票 #86: exit 1 for a query that failed,
-# exit 3 for a Spec the graph does not hold) are covered end to end without
-# network access.
+# (waiting, human, the Pending ticket of 票 #86 — without `ready-for-agent`, or
+# held by a triage label beside it —, shelved, and the loose source ticket of
+# 票 #83), the report lines for the waiting ones and the two ways the check
+# fails closed (票 #86: exit 1 for a query that failed, exit 3 for a Spec the
+# graph does not hold) are covered end to end without network access.
 
 set -u
 
@@ -127,8 +127,9 @@ function issue(number, title, state, labels = [], body = '', children = sub(0)) 
 }
 
 // The Tickets of Spec #10, and the issues outside it. An execution Ticket
-// carries `ready-for-agent` (票 #86): an open Ticket without that label waits
-// for a person's triage and holds no landing back.
+// carries `ready-for-agent` and none of `needs-info` / `needs-triage` /
+// `wontfix` (票 #86): an open Ticket without the label, or with one of those
+// three beside it, waits for a person's triage and holds no landing back.
 const ready = ['ready-for-agent'];
 const t11 = (state = 'closed', labels = ready) => issue(11, 'Ticket eleven', state, labels);
 const t12 = (state = 'closed', labels = ready, title = 'Ticket twelve') => issue(12, title, state, labels);
@@ -195,9 +196,23 @@ spec10('decision-kinds', [t11('open', ['needs-info']), t12('open', ['wontfix']),
 // A chain behind such a Ticket waits for that person, as one behind a human
 // Ticket does.
 spec10('decision-chain', [t11('open', ['needs-info']), t12('open'), t13()], {12: [t11('open', ['needs-info'])]});
-// The label decides: with it a Ticket is an execution Ticket whatever else it
-// carries.
-spec10('labelled-needs-info', [t11(), t12('open', ['ready-for-agent', 'needs-info']), t13()]);
+// The triage labels win over `ready-for-agent` (票 #86, review r2): a Ticket
+// that carries one of them beside the label is under # decision all the same —
+// its labels contradict each other, which is a person's to put right. Each of
+// the three, with an open issue blocking it: not asked for, so not listed. A
+// chain behind such a Ticket waits for that person. A human Ticket stays under
+// # human whatever it carries beside, and a closed Ticket is listed nowhere.
+for (const label of ['needs-info', 'needs-triage', 'wontfix']) {
+  spec10(`decision-labelled-${label}`, [t11(), t12('open', ['ready-for-agent', label]), t13()], {12: [outside[0]]});
+}
+spec10('decision-labelled-chain',
+  [t11('open', ['ready-for-agent', 'wontfix']), t12('open'), t13()], {12: [t11('open', ['ready-for-agent', 'wontfix'])]});
+spec10('human-needs-info', [t11(), t12(), t13('open', ['ready-for-human', 'needs-info'])]);
+spec10('decision-labelled-closed', [t11(), t12('closed', ['ready-for-agent', 'needs-info']), t13()]);
+// A labelled and an unlabelled one together, ascending, beside an execution
+// Ticket the Spec owes.
+spec10('decision-labelled-kinds',
+  [t11('open', ['ready-for-agent', 'needs-info']), t12('open', ['needs-triage']), t13('open')]);
 
 // A Spec whose Tickets come from its `实现票：` line. Two kinds of ticket go
 // on that line, and only the first is an execution Ticket (SKILL.md step 0,
@@ -688,13 +703,111 @@ else
     "blocked_by calls: $(tr '\n' ' ' < "$WORK/decision-chain/blocker-calls")"
 fi
 
-# The label decides: a Ticket that carries `ready-for-agent` is an execution
-# Ticket whatever else it carries.
-run_check "$WORK/labelled-needs-info.out" FIXTURE_DIR="$WORK/labelled-needs-info"
-expect_exit 2 'a Ticket with ready-for-agent beside needs-info is still an execution Ticket'
-expect_has '#12 Ticket twelve' 'a Ticket with ready-for-agent is listed under # open' "$WORK/labelled-needs-info.out"
-expect_has '剩余：#12' 'a Ticket with ready-for-agent is on the report line' "$WORK/labelled-needs-info.out"
-expect_section_empty "$WORK/labelled-needs-info.out" decision 'a Ticket with ready-for-agent is not under # decision'
+# The triage labels win over `ready-for-agent` (票 #86, review r2: the ticket
+# says so without condition). A Ticket that carries one of them beside the
+# label is under # decision all the same — its labels contradict each other,
+# which is a person's to put right, not a debt of the Spec's — for each of the
+# three: listed with （待定）, in no other section, with no report line, and
+# asked for no blockers of its own although an open issue blocks it.
+for pending_label in needs-info needs-triage wontfix; do
+  run_check "$WORK/decision-labelled-$pending_label.out" FIXTURE_DIR="$WORK/decision-labelled-$pending_label"
+  expect_exit 0 "a Ticket with ready-for-agent beside $pending_label does not hold the landing back"
+  expect_has '#12 Ticket twelve（待定）' \
+    "a Ticket with ready-for-agent beside $pending_label is listed under # decision" "$WORK/decision-labelled-$pending_label.out"
+  if [ "$(sed -n '2p' "$WORK/decision-labelled-$pending_label.out")" = '（无）' ]; then
+    record PASS "a Ticket with ready-for-agent beside $pending_label is not under # open"
+  else
+    record FAIL "a Ticket with ready-for-agent beside $pending_label is not under # open" \
+      "$(sed -n 2p "$WORK/decision-labelled-$pending_label.out")"
+  fi
+  expect_section_empty "$WORK/decision-labelled-$pending_label.out" report \
+    "a Ticket with ready-for-agent beside $pending_label gets no # report line"
+  expect_without '阻塞' "an issue blocking a Ticket held by $pending_label beside ready-for-agent is not asked for, so not listed" \
+    "$WORK/decision-labelled-$pending_label.out"
+  if [ "$(sort "$WORK/decision-labelled-$pending_label/blocker-calls" | uniq -c | tr -s ' ' | tr '\n' ';')" = ' 1 12;' ]; then
+    record PASS "a Ticket with ready-for-agent beside $pending_label is asked for its blockers once: by the graph, not by the check"
+  else
+    record FAIL "a Ticket with ready-for-agent beside $pending_label is asked for its blockers once: by the graph, not by the check" \
+      "blocked_by calls: $(tr '\n' ' ' < "$WORK/decision-labelled-$pending_label/blocker-calls")"
+  fi
+done
+
+# Both kinds together, ascending, beside an execution Ticket the Spec owes: a
+# labelled and an unlabelled Ticket are told apart by nothing in the output,
+# and the report still names only the execution Ticket.
+run_check "$WORK/decision-labelled-kinds.out" FIXTURE_DIR="$WORK/decision-labelled-kinds"
+expect_exit 2 'labelled and unlabelled Tickets under # decision beside an execution Ticket: only the execution Ticket fails the check'
+cat > "$WORK/decision-labelled-kinds.expected" <<'EOF'
+# open
+#13 Ticket thirteen
+# waiting
+（无）
+# human
+（无）
+# decision
+#11 Ticket eleven（待定）
+#12 Ticket twelve（待定）
+# shelved
+（无）
+# source
+（无）
+# report
+剩余：#13
+EOF
+expect_output "$WORK/decision-labelled-kinds.expected" "$WORK/decision-labelled-kinds.out" \
+  'a Ticket held by a triage label beside ready-for-agent and an unlabelled one are listed together under # decision, ascending'
+
+# The frontier agrees on the labelled ones too, and releases nothing held by a
+# triage label beside ready-for-agent.
+rm -f "$WORK"/*/blocker-calls
+env FIXTURE_DIR="$WORK/decision-labelled-kinds" PATH="$BIN:$PATH" \
+  bash "$FRONTIER" --repo test/repo --spec 10 > "$WORK/decision-labelled-frontier.out" 2> "$WORK/decision-labelled-frontier.out.err"
+sed -n '/^# decision$/,/^# shelved$/p' "$WORK/decision-labelled-frontier.out" | sed '$d' > "$WORK/decision-labelled-frontier.section"
+sed -n '/^# decision$/,/^# shelved$/p' "$WORK/decision-labelled-kinds.out" | sed '$d' > "$WORK/decision-labelled-check.section"
+expect_output "$WORK/decision-labelled-check.section" "$WORK/decision-labelled-frontier.section" \
+  'the frontier lists under # decision the same labelled Tickets the landing check does'
+if [ "$(awk '/^# /{exit} {print}' "$WORK/decision-labelled-frontier.out" | tr '\n' ' ')" = '#13 ' ]; then
+  record PASS 'the frontier releases the execution Ticket and no Ticket held by a triage label beside ready-for-agent'
+else
+  record FAIL 'the frontier releases the execution Ticket and no Ticket held by a triage label beside ready-for-agent' \
+    "frontier [$(awk '/^# /{exit} {print}' "$WORK/decision-labelled-frontier.out" | tr '\n' ' ')]"
+fi
+
+# A chain behind such a labelled Ticket waits for that person, as one behind an
+# unlabelled Ticket or a human Ticket does.
+run_check "$WORK/decision-labelled-chain.out" FIXTURE_DIR="$WORK/decision-labelled-chain"
+expect_exit 0 'the chain behind a Ticket held by a triage label beside ready-for-agent does not hold the landing back'
+cat > "$WORK/decision-labelled-chain.expected" <<'EOF'
+# open
+（无）
+# waiting
+#12 Ticket twelve（阻塞：#11）
+# human
+（无）
+# decision
+#11 Ticket eleven（待定）
+# shelved
+（无）
+# source
+（无）
+# report
+剩余：#12 等人工 #11
+EOF
+expect_output "$WORK/decision-labelled-chain.expected" "$WORK/decision-labelled-chain.out" \
+  'the chain behind a labelled Ticket is under # waiting and reports 等人工, the Ticket itself under # decision'
+
+# `ready-for-human` is accounted for under # human whatever the Ticket carries
+# beside: the hold label does not move it to # decision.
+run_check "$WORK/human-needs-info.out" FIXTURE_DIR="$WORK/human-needs-info"
+expect_exit 0 'a ready-for-human Ticket that needs info does not hold the landing back'
+expect_has '#13 Ticket thirteen（人工）' 'a ready-for-human Ticket that needs info is listed under # human' "$WORK/human-needs-info.out"
+expect_section_empty "$WORK/human-needs-info.out" decision 'a ready-for-human Ticket that needs info is not under # decision'
+
+# A closed Ticket with contradictory labels is nobody's debt: only open Tickets
+# are sorted into sections.
+run_check "$WORK/decision-labelled-closed.out" FIXTURE_DIR="$WORK/decision-labelled-closed"
+expect_exit 0 'a closed Ticket with contradictory labels passes'
+expect_output "$WORK/all-closed.expected" "$WORK/decision-labelled-closed.out" 'a closed Ticket with contradictory labels is listed nowhere'
 
 # --- a Spec without Tickets passes ----------------------------------------------
 SPEC_ARG=30

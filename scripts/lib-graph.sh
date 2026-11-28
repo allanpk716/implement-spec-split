@@ -211,18 +211,23 @@ function section(title, lines) {
   return [title, ...(lines.length > 0 ? lines : ['（无）'])];
 }
 
-// An open Ticket that waits for a person before any agent may take it (票 #86):
-// it carries no `ready-for-agent` label (the graph's `ready_for_agent` flag), and
-// is none of the other kinds that are accounted for elsewhere — a human Ticket
+// An open Ticket that waits for a person before any agent may take it (票 #86;
+// GLOSSARY.md "Pending ticket"). It carries no `ready-for-agent` label (the
+// graph's `ready_for_agent` flag), or it carries one of the labels that hold it
+// for a person beside it: `needs-info`, `needs-triage`, `wontfix` (the graph's
+// `on_hold` flag). Those three win over `ready-for-agent`, as the ticket says
+// without condition: a Ticket that is both ready for an AFK agent and waiting
+// on a person is mislabelled, and it is listed for a person to put right
+// rather than dispatched, or held against the landing as debt. And it is none
+// of the other kinds that are accounted for elsewhere — a human Ticket
 // (`ready-for-human`), a shelved one, the loose source ticket. Both scripts
-// list it under `# decision`, dispatch nothing for it and ask for no blockers of
-// its own, and landing-check.sh lets no landing wait for it. What it waits for
-// is a person's triage: the label back (then it is an execution Ticket again),
-// or its closure. A Ticket that carries `ready-for-agent` is an execution
-// Ticket whatever else it carries.
+// list it under `# decision`, dispatch nothing for it and ask for no blockers
+// of its own, and landing-check.sh lets no landing wait for it. What it waits
+// for is a person's triage: a label that makes it an execution Ticket again,
+// or its closure.
 function isPending(ticket) {
-  return ticket.ready_for_agent !== true && ticket.human !== true &&
-    ticket.shelved !== true && ticket.source !== true;
+  return (ticket.ready_for_agent !== true || ticket.on_hold === true) &&
+    ticket.human !== true && ticket.shelved !== true && ticket.source !== true;
 }
 NODE
     cat

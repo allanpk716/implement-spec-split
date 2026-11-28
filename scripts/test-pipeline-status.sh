@@ -1663,7 +1663,7 @@ RUN_EXIT=$?
 expect_exit 0 "graph carries shared-counter as a ticket-level flag on every path"
 [ "$RUN_EXIT" -eq 0 ] || cat "$WORK/counter-graph-check.txt"
 expect_has 'shared_counter' 'help documents the shared_counter graph flag' "$WORK/help.out"
-expect_has 'shelved, human, ready_for_agent, shared_counter, source}' 'help lists the source graph flag among the ticket fields' "$WORK/help.out"
+expect_has 'shelved, human, ready_for_agent, on_hold, shared_counter, source}' 'help lists the source graph flag among the ticket fields' "$WORK/help.out"
 expect_has 'not an execution Ticket.' 'help says a source flag marks a ticket that is not an execution Ticket' "$WORK/help.out"
 
 # An open Ticket without `ready-for-agent` waits for a person's triage (票 #86).
@@ -1673,6 +1673,13 @@ expect_has 'not an execution Ticket.' 'help says a source flag marks a ticket th
 # landing-check.sh read one judgement. The flag is the label and nothing else:
 # it does not follow the state, `ready-for-human`, or another triage label
 # beside it. The board renders neither it nor `shared_counter`.
+# So does a Ticket that carries one of `needs-info`, `needs-triage` or `wontfix`
+# beside `ready-for-agent` (票 #86, review r2): the graph reports those three
+# labels as one flag, `on_hold`, on the same five paths. It is the labels and
+# nothing else either — it does not follow `ready-for-human`, which a human
+# Ticket keeps to itself, or the state — and which of the two flags wins is not
+# the graph's to decide: scripts/lib-graph.sh reads a Ticket with either reason
+# as one that waits for triage.
 LABEL_FIXTURE=$WORK/label-fixture
 mkdir -p "$LABEL_FIXTURE" || exit 1
 
@@ -1703,22 +1710,29 @@ const openTickets = [
   issue(953, 'Needs info ticket', 'open', ['needs-info']),
   issue(954, 'Human ticket', 'open', ['ready-for-human']),
   issue(955, 'Ready ticket that needs info', 'open', ['ready-for-agent', 'needs-info']),
+  issue(956, 'Ready ticket that needs triage', 'open', ['ready-for-agent', 'needs-triage']),
+  issue(957, 'Ready ticket marked wontfix', 'open', ['ready-for-agent', 'wontfix']),
+  issue(958, 'Human ticket that needs info', 'open', ['ready-for-human', 'needs-info']),
 ];
 const doneTickets = [
   issue(961, 'Done ready ticket', 'closed', ['ready-for-agent']),
   issue(962, 'Done unlabelled ticket', 'closed', []),
+  issue(963, 'Done needs info ticket', 'closed', ['needs-info']),
 ];
 const shelvedTickets = [
   issue(971, '【搁置】Shelved ready ticket', 'open', ['ready-for-agent']),
   issue(972, '【搁置】Shelved unlabelled ticket', 'open', []),
+  issue(973, '【搁置】Shelved needs info ticket', 'open', ['needs-info']),
 ];
 const legacyTickets = [
   issue(981, 'Legacy ready ticket', 'open', ['ready-for-agent']),
   issue(982, 'Legacy unlabelled ticket', 'open', []),
+  issue(983, 'Legacy ticket that needs info', 'open', ['ready-for-agent', 'needs-info']),
 ];
 const mapTickets = [
   issue(991, 'Map ready ticket', 'open', ['ready-for-agent']),
   issue(992, 'Map unlabelled ticket', 'open', []),
+  issue(993, 'Map ticket that needs triage', 'open', ['ready-for-agent', 'needs-triage']),
 ];
 
 const issues = [
@@ -1745,8 +1759,12 @@ const responses = {
   'blocker-953': [],
   'blocker-954': [],
   'blocker-955': [],
+  'blocker-956': [],
+  'blocker-957': [],
+  'blocker-958': [],
   'blocker-981': [],
   'blocker-982': [],
+  'blocker-983': [],
 };
 
 fs.writeFileSync(`${directory}/issues.json`, JSON.stringify(issues, null, 2));
@@ -1775,16 +1793,18 @@ const graph = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const spec = (n) => graph.specs.find((item) => item.number === n);
 const flags = (tickets) => tickets.map((t) => [t.number, t.ready_for_agent]);
 // Every ticket record carries the flag; it is the `ready-for-agent` label.
-assert.deepStrictEqual(flags(spec(950).tickets), [[951, true], [952, false], [953, false], [954, false], [955, true]]);
+assert.deepStrictEqual(flags(spec(950).tickets), [
+  [951, true], [952, false], [953, false], [954, false], [955, true], [956, true], [957, true], [958, false]]);
 assert.strictEqual(spec(960).status, 'landed');
-assert.deepStrictEqual(flags(spec(960).tickets), [[961, true], [962, false]]);
+assert.deepStrictEqual(flags(spec(960).tickets), [[961, true], [962, false], [963, false]]);
 assert.strictEqual(spec(970).status, 'shelved');
-assert.deepStrictEqual(flags(spec(970).tickets), [[971, true], [972, false]]);
+assert.deepStrictEqual(flags(spec(970).tickets), [[971, true], [972, false], [973, false]]);
 assert.strictEqual(spec(980).kind, 'legacy');
-assert.deepStrictEqual(flags(spec(980).tickets), [[981, true], [982, false]]);
-assert.deepStrictEqual(flags(graph.maps.find((map) => map.number === 990).tickets), [[991, true], [992, false]]);
+assert.deepStrictEqual(flags(spec(980).tickets), [[981, true], [982, false], [983, true]]);
+assert.deepStrictEqual(flags(graph.maps.find((map) => map.number === 990).tickets), [[991, true], [992, false], [993, true]]);
 // The flag is the label alone. It does not follow `ready-for-human`, which is
-// read apart, or another triage label beside `ready-for-agent`.
+// read apart, or a triage label held beside `ready-for-agent`: #955, #956 and
+// #957 carry one and keep the flag; #954 and #958 are human Tickets.
 assert.strictEqual(spec(950).tickets.find((t) => t.number === 954).human, true);
 assert.strictEqual(spec(950).tickets.find((t) => t.number === 955).human, false);
 // Reading the label changes no classification of this script: the Spec with
@@ -1795,7 +1815,40 @@ NODE
 RUN_EXIT=$?
 expect_exit 0 "graph carries ready-for-agent as a ticket-level flag on every path"
 [ "$RUN_EXIT" -eq 0 ] || cat "$WORK/label-graph-check.txt"
-expect_has '`ready-for-agent` label (an open Ticket with neither label that' 'help documents the ready_for_agent graph flag' "$WORK/help.out"
+node - "$WORK/label-graph.json" > "$WORK/hold-graph-check.txt" 2>&1 <<'NODE'
+const fs = require('fs');
+const assert = require('assert');
+const graph = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const spec = (n) => graph.specs.find((item) => item.number === n);
+const mapTickets = (n) => graph.maps.find((map) => map.number === n).tickets;
+const holds = (tickets) => tickets.map((t) => [t.number, t.on_hold]);
+// Every ticket record carries the flag on the same five paths; it is one of
+// the three labels that hold a Ticket for a person, whichever of them it is.
+assert.deepStrictEqual(holds(spec(950).tickets), [
+  [951, false], [952, false], [953, true], [954, false], [955, true], [956, true], [957, true], [958, true]]);
+assert.deepStrictEqual(holds(spec(960).tickets), [[961, false], [962, false], [963, true]]);
+assert.deepStrictEqual(holds(spec(970).tickets), [[971, false], [972, false], [973, true]]);
+assert.deepStrictEqual(holds(spec(980).tickets), [[981, false], [982, false], [983, true]]);
+assert.deepStrictEqual(holds(mapTickets(990)), [[991, false], [992, false], [993, true]]);
+// The flag is the labels alone: it stays on a Ticket that is `ready-for-human`
+// or shelved as well, and on a closed one; which of `ready_for_agent` and
+// `on_hold` a reader lets win is left to scripts/lib-graph.sh, not the graph.
+assert.strictEqual(spec(950).tickets.find((t) => t.number === 958).human, true);
+assert.strictEqual(spec(970).tickets.find((t) => t.number === 973).shelved, true);
+assert.strictEqual(spec(960).tickets.find((t) => t.number === 963).state, 'closed');
+assert.strictEqual(spec(960).status, 'landed');
+// Reading the labels changes no classification of this script: the open Spec
+// is listed as before, whatever its Tickets carry beside `ready-for-agent`.
+assert.strictEqual(spec(950).status, 'ready');
+assert.strictEqual(spec(950).human_only, false);
+NODE
+RUN_EXIT=$?
+expect_exit 0 "graph carries on_hold as a ticket-level flag on every path"
+[ "$RUN_EXIT" -eq 0 ] || cat "$WORK/hold-graph-check.txt"
+expect_has '`ready-for-agent` label, `on_hold` one of the labels that hold a' \
+  'help documents the ready_for_agent and on_hold graph flags' "$WORK/help.out"
+expect_has 'or when `on_hold` is set whatever else it' \
+  'help says a Ticket held by a triage label beside ready-for-agent waits for triage too' "$WORK/help.out"
 expect_has '`# decision`' 'help says a Ticket without ready-for-agent is listed under # decision' "$WORK/help.out"
 
 # A 实现票 line may name a loose ticket (#83): the source ticket a Spec was

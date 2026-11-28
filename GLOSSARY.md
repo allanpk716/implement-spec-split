@@ -98,7 +98,11 @@ _Avoid_: execution ticket, map ticket
 
 **Decision ticket**:
 A child issue of a wayfinder map whose resolution is a decision, typed research, prototype, grilling or task (a `wayfinder:<type>` label on GitHub, a `Type:` header line on a local tracker).
-_Avoid_: map ticket (that is an implementation child)
+_Avoid_: map ticket (that is an implementation child), Pending ticket (that is a Ticket of a Spec waiting for a person's triage; the two share only the word `decision`)
+
+**Pending ticket (待定票)**:
+An open Ticket of a Spec that waits for a person's triage before any agent may take it (票 #86): it carries no `ready-for-agent` label, or one of `needs-info`, `needs-triage` or `wontfix` beside it — those three win, since a Ticket that is at once ready for an AFK agent and held for a person is mislabelled, and it is listed for a person to put right rather than dispatched — and it is none of the kinds accounted for elsewhere: a `ready-for-human` ticket, a shelved Ticket, a loose source ticket. `scripts/frontier.sh` and `scripts/landing-check.sh` read it through `scripts/lib-graph.sh` off the graph (`pipeline-status.sh --graph`: the `ready_for_agent` and `on_hold` flags), list it under `# decision` with `（待定）`, dispatch nothing for it and let no landing wait for it: a Ticket behind it waits for that person (`剩余：#<t> 等人工 #<t>`). It stays with its Spec — a Partial landing while it does — gets no `# report` line of its own, and its line goes under 要你做的 of the report. What ends it is a person's triage: a label that makes it an execution Ticket again (the next Run's Frontier names it), or its closure.
+_Avoid_: Decision ticket (a map's child issue whose resolution is a decision; `# decision` is only the section's name, the one 票 #86 gave it), 决策票, parking category `decision` (retired: a trade-off is decided in step 8, never parked on), triage ticket
 
 **Closing ticket**:
 On a local-markdown tracker, the map's last task ticket, which writes the map's decisions into a chapter of `SPEC.md`; once closed it serves as the map's Spec.
@@ -171,7 +175,7 @@ The comment an unattended Run leaves on its Spec issue when the Run cannot go on
 _Avoid_: failure report, blocking question, 停车 for "waiting on another Spec", a trade-off without a recommendation as a reason to park (that takes the reversibility rule)
 
 **Partial landing**:
-A Run landing every ticket it can while the rest wait for another Spec or are `ready-for-human` tickets (never dispatched): the landed tickets close, the Spec stays open, the integration branch is deleted, and the Spec becomes free again, so `--next-wave` starts it afresh once its blockers land. Its landing report lists what is left with the landing check's `# report` lines: `剩余：#<t> 等 #<spec>` for another Spec, `剩余：#<t> 等 #<issue>` for a standalone issue, `剩余：#<t> 等人工 #<t>` behind a human ticket, `剩余：#<t> 等搁置 #<t>` behind a shelved one.
+A Run landing every ticket it can while the rest wait for another Spec or are `ready-for-human` tickets (never dispatched), or are Pending tickets, which wait for a person's triage (票 #86): the landed tickets close, the Spec stays open, the integration branch is deleted, and the Spec becomes free again, so `--next-wave` starts it afresh once its blockers land. Its landing report lists what is left with the landing check's `# report` lines: `剩余：#<t> 等 #<spec>` for another Spec, `剩余：#<t> 等 #<issue>` for a standalone issue, `剩余：#<t> 等人工 #<t>` behind a human ticket, `剩余：#<t> 等搁置 #<t>` behind a shelved one. A Pending ticket is not in those lines: it stays with the Spec, the landing check lists it under `# decision`, and the report carries its line under 要你做的, as for a human ticket.
 _Avoid_: parked, interrupted
 
 **Supervisor**:
@@ -209,7 +213,7 @@ A file or sequence that exists in one place and is incremented by every change t
 _Avoid_: version conflict, counter conflict (git's textual conflict is exactly what this is not)
 
 **Frontier**:
-The Tickets whose blockers are all merged, so they can be started now; of the Tickets labelled `shared-counter` (see Shared counter) only one is released at a time, the lowest-numbered, and the rest wait for it.
+The Tickets whose blockers are all merged, so they can be started now; of the Tickets labelled `shared-counter` (see Shared counter) only one is released at a time, the lowest-numbered, and the rest wait for it. A Ticket is in it only as an execution Ticket released to agents — it carries `ready-for-agent` and none of `needs-info`, `needs-triage`, `wontfix` (票 #86) — so a human ticket, a shelved Ticket, a loose source ticket and a Pending ticket stay out: a Pending ticket stays with its Spec, `scripts/frontier.sh` lists it under `# decision`, and it is in no `# report` line. `scripts/frontier.sh` computes the Frontier; a session never draws it up from its own reading.
 _Avoid_: using it for a map's open decisions (that is the Map frontier)
 
 **Time limit**:

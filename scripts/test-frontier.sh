@@ -2,10 +2,11 @@
 # Deterministic tests for scripts/frontier.sh. They run the real
 # pipeline-status.sh against a fake gh, so the Spec-to-Ticket resolution, the
 # blocked_by queries, the tickets that are never in the frontier (blocked,
-# `ready-for-human`, shelved, the loose source ticket of 票 #83, and the Ticket
-# without `ready-for-agent` of 票 #86) and the two ways the script fails closed
-# (票 #86: exit 1 for a query that failed, exit 3 for a Spec the graph does not
-# hold) are covered end to end without network access.
+# `ready-for-human`, shelved, the loose source ticket of 票 #83, and the Pending
+# ticket of 票 #86 — without `ready-for-agent`, or held by a triage label beside
+# it) and the two ways the script fails closed (票 #86: exit 1 for a query that
+# failed, exit 3 for a Spec the graph does not hold) are covered end to end
+# without network access.
 
 set -u
 
@@ -105,8 +106,10 @@ function issue(number, title, state, labels, body = '', children = sub(0)) {
   };
 }
 
-// An execution Ticket carries `ready-for-agent` (票 #86): an open Ticket
-// without that label waits for a person's triage and is never in the frontier.
+// An execution Ticket carries `ready-for-agent` and none of `needs-info` /
+// `needs-triage` / `wontfix` (票 #86): an open Ticket without the label, or
+// with one of those three beside it, waits for a person's triage and is never
+// in the frontier.
 const ready = ['ready-for-agent'];
 const counter = ['ready-for-agent', 'shared-counter'];
 
@@ -187,24 +190,34 @@ const scenarios = {
   // are listed under `# decision`, each by what it carries instead of the
   // label; an unlabelled shelved Ticket is shelved, not one of them. They are
   // not asked for their blockers by the frontier (the graph asks once), so an
-  // open blocker of theirs is not listed either.
+  // open blocker of theirs is not listed either. The triage labels win over
+  // `ready-for-agent` (review r2): #22 and #23 carry the label beside one of
+  // them and are under `# decision` the same, #22 taking its open blocker with
+  // it; a human Ticket stays under `# human` whatever it carries beside.
   'decision-kinds': {
     tickets: [
       issue(16, 'Needs info ticket', 'open', ['needs-info']),
       issue(17, 'Unlabelled ticket', 'open', []),
       issue(18, 'Wontfix ticket', 'open', ['wontfix']),
       issue(19, '【搁置】Unlabelled shelved ticket', 'open', []),
+      issue(22, 'Ready ticket that needs info', 'open', ['ready-for-agent', 'needs-info']),
+      issue(23, 'Ready ticket marked wontfix', 'open', ['ready-for-agent', 'wontfix']),
+      issue(24, 'Human ticket that needs triage', 'open', ['ready-for-human', 'needs-triage']),
     ],
-    blockers: {16: [20], 17: [], 18: [], 19: []},
+    blockers: {16: [20], 17: [], 18: [], 19: [], 22: [20], 23: [], 24: []},
   },
   // Such a Ticket takes no `shared-counter` slot, like a human or shelved one.
+  // #15 is the lowest-numbered `shared-counter` ticket and carries
+  // `ready-for-agent`: held by `needs-info` beside it, it takes no slot either,
+  // so #17 is the one released.
   'decision-counter-takes-no-slot': {
     tickets: [
+      issue(15, 'Ready counter ticket that needs info', 'open', ['ready-for-agent', 'needs-info', 'shared-counter']),
       issue(16, 'Untriaged counter ticket', 'open', ['shared-counter']),
       issue(17, 'Counter ticket two', 'open', counter),
       issue(18, 'Needs triage counter ticket', 'open', ['needs-triage', 'shared-counter']),
     ],
-    blockers: {16: [], 17: [], 18: []},
+    blockers: {15: [], 16: [], 17: [], 18: []},
   },
 };
 
@@ -227,11 +240,17 @@ for (const [name, scenario] of Object.entries(scenarios)) {
 
 // A Spec whose open Tickets all wait for triage (票 #86): its frontier is empty
 // and `# decision` names every one of them. SKILL.md step 0 rule 3 releases
-// such a Spec instead of landing it with nothing done.
+// such a Spec instead of landing it with nothing done. That holds for a Ticket
+// that carries `ready-for-agent` beside a triage label too (review r2): the
+// issue's case — a needs-info Ticket with the label stopped the Run as debt.
 {
   const directory = `${work}/decision-only`;
   fs.mkdirSync(directory, {recursive: true});
-  const tickets = [issue(36, 'Needs info ticket', 'open', ['needs-info']), issue(37, 'Unlabelled ticket', 'open', [])];
+  const tickets = [
+    issue(36, 'Needs info ticket', 'open', ['needs-info']),
+    issue(37, 'Unlabelled ticket', 'open', []),
+    issue(38, 'Ready ticket marked wontfix', 'open', ['ready-for-agent', 'wontfix']),
+  ];
   const spec = issue(35, 'Untriaged spec', 'open', [], '## Problem Statement\nNothing is triaged yet.', sub(2, 0));
   fs.writeFileSync(`${directory}/issues.json`, JSON.stringify([spec, ...tickets], null, 2));
   fs.writeFileSync(`${directory}/sub-35.json`, JSON.stringify(tickets, null, 2));
@@ -443,9 +462,12 @@ expect_has '#17 【搁置】Shelved counter ticket（搁置）' 'shelved shared-
 expect_has '#18' 'human and shelved shared-counter tickets take no slot: the free one is released' "$WORK/human-shelved-slot-frontier.out"
 expect_without '等共享计数器' 'human and shelved shared-counter tickets are not waited for' "$WORK/human-shelved-slot.out"
 
-# --- 票 #86: an open Ticket without `ready-for-agent` waits for a person ----------
-# Nothing is dispatched for it until a person triages it, so it is never in the
-# frontier. It is listed under `# decision`, is in no other section unless it is
+# --- 票 #86: an open Ticket that waits for triage is never in the frontier -----------
+# Nothing is dispatched for a Ticket waiting for a person's triage until a
+# person triages it: one without `ready-for-agent`, and (review r2) one held by
+# `needs-info`, `needs-triage` or `wontfix` beside the label — the three win,
+# since labels that contradict each other are a person's to put right. Such a
+# Ticket is listed under `# decision`, is in no other section unless it is
 # shelved (which is what it then is), takes no `shared-counter` slot, and is
 # asked for no blockers by the frontier: the graph asks once, as for every open
 # Ticket, and an open blocker of its own is not listed.
@@ -457,11 +479,13 @@ cat > "$WORK/decision-kinds.expected" <<'EOF'
 # blocked
 （无）
 # human
-（无）
+#24 Human ticket that needs triage（人工）
 # decision
 #16 Needs info ticket（待定）
 #17 Unlabelled ticket（待定）
 #18 Wontfix ticket（待定）
+#22 Ready ticket that needs info（待定）
+#23 Ready ticket marked wontfix（待定）
 # shelved
 #19 【搁置】Unlabelled shelved ticket（搁置）
 # source
@@ -469,11 +493,29 @@ cat > "$WORK/decision-kinds.expected" <<'EOF'
 EOF
 expect_output "$WORK/decision-kinds.expected" "$WORK/decision-kinds.out" \
   'Tickets without ready-for-agent are listed under # decision by what they carry instead, and an unlabelled shelved Ticket under # shelved'
+# #12 and #13 are asked twice, by the graph and by the frontier; every Ticket
+# under # decision once, by the graph alone; the human Ticket twice, as every
+# human Ticket is.
 decision_calls=$(sort "$WORK/decision-kinds/blocker-calls" | uniq -c | tr -s ' ' | tr '\n' ';')
-if [ "$decision_calls" = ' 2 12; 2 13; 1 16; 1 17; 1 18; 1 19;' ]; then
+if [ "$decision_calls" = ' 2 12; 2 13; 1 16; 1 17; 1 18; 1 19; 1 22; 1 23; 2 24;' ]; then
   record PASS 'Tickets without ready-for-agent are asked for their blockers once: by the graph, not by the frontier'
 else
   record FAIL 'Tickets without ready-for-agent are asked for their blockers once: by the graph, not by the frontier' "blocked_by calls: $decision_calls"
+fi
+# The triage labels win over `ready-for-agent`: neither labelled Ticket is in
+# the frontier, the blocked one carries its blocker into no line, and the human
+# Ticket keeps to # human.
+frontier_of_decision_kinds=$(awk '/^# /{exit} {print}' "$WORK/decision-kinds.out" | tr '\n' ' ')
+if [ "$frontier_of_decision_kinds" = '#12 #13 ' ]; then
+  record PASS 'a Ticket with ready-for-agent beside a triage label is not in the frontier'
+else
+  record FAIL 'a Ticket with ready-for-agent beside a triage label is not in the frontier' "frontier [$frontier_of_decision_kinds]"
+fi
+expect_without '阻塞：#20）' 'an open blocker of a Ticket held by a triage label beside ready-for-agent is not listed' "$WORK/decision-kinds.out"
+if sed -n '/^# human$/,/^# decision$/p' "$WORK/decision-kinds.out" | grep -Fxq '#24 Human ticket that needs triage（人工）'; then
+  record PASS 'a human Ticket held by a triage label is listed under # human'
+else
+  record FAIL 'a human Ticket held by a triage label is listed under # human' "$(sed -n '/^# human$/,/^# decision$/p' "$WORK/decision-kinds.out" | tr '\n' ' ')"
 fi
 
 run_scenario decision-counter-takes-no-slot "$WORK/decision-slot.out"
@@ -482,9 +524,22 @@ expect_has '#17' 'a shared-counter Ticket without ready-for-agent takes no slot:
 expect_has '#16 Untriaged counter ticket（待定）' 'an untriaged shared-counter Ticket is under # decision' "$WORK/decision-slot.out"
 expect_has '#18 Needs triage counter ticket（待定）' 'a needs-triage shared-counter Ticket is under # decision' "$WORK/decision-slot.out"
 expect_without '等共享计数器' 'Tickets under # decision are not waited for as shared-counter tickets' "$WORK/decision-slot.out"
+# The lowest-numbered `shared-counter` ticket carries `ready-for-agent` beside
+# `needs-info`: it takes no slot, so it is neither released nor waited for and
+# #17 is the one released.
+expect_has '#15 Ready counter ticket that needs info（待定）' \
+  'a shared-counter Ticket held by a triage label beside ready-for-agent is under # decision, not released' "$WORK/decision-slot.out"
+if [ "$(awk '/^# /{exit} {print}' "$WORK/decision-slot.out" | tr '\n' ' ')" = '#12 #13 #17 ' ]; then
+  record PASS 'the lowest-numbered shared-counter Ticket held by a triage label yields the slot to the triaged one'
+else
+  record FAIL 'the lowest-numbered shared-counter Ticket held by a triage label yields the slot to the triaged one' \
+    "frontier [$(awk '/^# /{exit} {print}' "$WORK/decision-slot.out" | tr '\n' ' ')]"
+fi
 
 # A Spec whose open Tickets all wait for triage has an empty frontier: every
-# line of its output belongs to a section, and `# decision` names them all.
+# line of its output belongs to a section, and `# decision` names them all —
+# the one that carries `ready-for-agent` beside `wontfix` included: before the
+# review it was the one Ticket this Spec would have dispatched.
 SPEC_ARG=35
 run_frontier "$WORK/decision-only.out" FIXTURE_DIR="$WORK/decision-only"
 expect_exit 0 'a Spec whose Tickets all wait for triage: scan succeeds'
@@ -496,6 +551,7 @@ cat > "$WORK/decision-only.expected" <<'EOF'
 # decision
 #36 Needs info ticket（待定）
 #37 Unlabelled ticket（待定）
+#38 Ready ticket marked wontfix（待定）
 # shelved
 （无）
 # source
@@ -503,6 +559,12 @@ cat > "$WORK/decision-only.expected" <<'EOF'
 EOF
 expect_output "$WORK/decision-only.expected" "$WORK/decision-only.out" \
   'a Spec whose Tickets all wait for triage has an empty frontier and names them under # decision'
+if [ -z "$(awk '/^# /{exit} {print}' "$WORK/decision-only.out")" ]; then
+  record PASS 'the Ticket with ready-for-agent beside wontfix is not dispatched for a Spec whose Tickets all wait for triage'
+else
+  record FAIL 'the Ticket with ready-for-agent beside wontfix is not dispatched for a Spec whose Tickets all wait for triage' \
+    "frontier [$(awk '/^# /{exit} {print}' "$WORK/decision-only.out" | tr '\n' ' ')]"
+fi
 
 # A Spec without sub-issues whose `实现票：` line names a loose source ticket
 # (#83): the graph flags that ticket `source`. It is not an execution ticket,

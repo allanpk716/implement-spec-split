@@ -39,17 +39,21 @@ tracker documentation instead.
                          spec_numbers, tickets[]}; specs[] {number, title, kind, state,
                          status landed|needs_tickets|ready|running|interrupted|shelved|human, map
                          (number or null), has_tickets, tickets[] {number, title, state,
-                         shelved, human, ready_for_agent, shared_counter, source},
+                         shelved, human, ready_for_agent, on_hold, shared_counter, source},
                          tickets_total, tickets_closed, claim {state active|reserved|
                          interrupted|idle, branch, worktree, claimed_at} or null,
                          depends_on, extra_blockers}; loose_specs[] (Specs without a map);
                          next_wave (same object as --order --json).
                          Ticket flags come from GitHub labels, the title or the body:
                          `human` is the `ready-for-human` label, `ready_for_agent` the
-                         `ready-for-agent` label (an open Ticket with neither label that
-                         is neither shelved nor the source waits for a person's triage:
-                         frontier.sh lists it under `# decision` and dispatches nothing for
-                         it, landing-check.sh holds no landing back for it), `shared_counter`
+                         `ready-for-agent` label, `on_hold` one of the labels that hold a
+                         Ticket for a person (`needs-info`, `needs-triage`, `wontfix`). An
+                         open Ticket that is neither `ready-for-human`, shelved nor the
+                         source waits for a person's triage when it carries no
+                         `ready-for-agent`, or when `on_hold` is set whatever else it
+                         carries (either way frontier.sh lists it under `# decision` and
+                         dispatches nothing for it, landing-check.sh holds no landing back
+                         for it), `shared_counter`
                          the `shared-counter` label (a Ticket that bumps a shared counter;
                          frontier.sh releases one such Ticket at a time), `source` the loose
                          source ticket of a Spec without sub-issues (the mapless ticket its
@@ -209,6 +213,16 @@ function issueLabels(issue) {
 
 function hasLabel(issue, label) {
   return issueLabels(issue).includes(label);
+}
+
+// The triage labels that hold a Ticket for a person — a reporter's information,
+// a maintainer's triage, or the decision not to fix it — before any agent may
+// take it, whatever else the Ticket carries (票 #86; GLOSSARY.md "Pending
+// ticket"). The graph reports them as one flag, `on_hold`.
+const HOLD_LABELS = ['needs-info', 'needs-triage', 'wontfix'];
+
+function hasHoldLabel(issue) {
+  return HOLD_LABELS.some((label) => hasLabel(issue, label));
 }
 
 function hasWayfinderLabel(issue) {
@@ -590,11 +604,13 @@ if (mode === 'collect') {
       title: issue ? issue.title : '',
       shelved: issue ? isShelved(issue) : false,
       human: issue ? hasLabel(issue, 'ready-for-human') : false,
-      // Read for the graph alone (ticketOf below reports it as `ready_for_agent`):
-      // an open Ticket without the label waits for a person's triage, and
-      // frontier.sh and landing-check.sh keep it apart from the execution
-      // Tickets (票 #86). Nothing in this script's own sections reads it yet.
+      // Read for the graph alone (ticketOf below reports them as `ready_for_agent`
+      // and `on_hold`): an open Ticket without the first label, or with one of
+      // the hold labels beside it, waits for a person's triage, and frontier.sh
+      // and landing-check.sh keep it apart from the execution Tickets (票 #86).
+      // Nothing in this script's own sections reads them yet.
       readyForAgent: issue ? hasLabel(issue, 'ready-for-agent') : false,
+      onHold: issue ? hasHoldLabel(issue) : false,
       sharedCounter: issue ? hasLabel(issue, 'shared-counter') : false,
       source,
     };
@@ -1771,6 +1787,7 @@ if (mode === 'order') {
       shelved: isShelved(child),
       human: child.human === true || hasLabel(child, 'ready-for-human'),
       ready_for_agent: child.readyForAgent === true || hasLabel(child, 'ready-for-agent'),
+      on_hold: child.onHold === true || hasHoldLabel(child),
       shared_counter: child.sharedCounter === true || hasLabel(child, 'shared-counter'),
       source: child.source === true,
     });

@@ -137,7 +137,16 @@
 # Spec open for a human; step 0 rule 3 releases a Spec whose Tickets all wait
 # for triage; and a Spec missing from the graph is exit 3, parked on at once
 # where exit 1 (a failed query) is retried once — in step 9's lines and in
-# step 1's failure rule.
+# step 1's failure rule. The review fix of 票 #86 (r2) pins the same for a
+# Ticket that carries one of `needs-info`, `needs-triage`, `wontfix` beside
+# `ready-for-agent` — those three win, as the ticket says without condition;
+# the rule that keeps the Spec open, now in step 9's lead paragraph and said in
+# each step that decides on it (step 0's "Tickets blocked by another Spec"
+# included, and step 9 where it closes the Spec no longer left out);
+# GLOSSARY's Pending ticket, which
+# tells `# decision` apart from a map's Decision ticket and from the retired
+# parking category; and the label criterion in GLOSSARY's Frontier and Partial
+# landing.
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -451,7 +460,7 @@ has 'a Run that went on would land it with nothing done and close the source tic
 has '`# source` lists the loose source ticket (step 0, rule 2b), which is never dispatched either' \
   'SKILL.md step 1 names the source section of the frontier' "$SKILL"
 
-# --- 票 #86: a Ticket without `ready-for-agent` waits for triage; a Spec missing from the graph parks at once ---
+# --- 票 #86: a Ticket that waits for triage; a Spec missing from the graph parks at once ---
 
 # The graph reads the `ready-for-agent` label and both scripts act on it alike
 # (scripts/lib-graph.sh): an open Ticket without the label is listed under
@@ -463,8 +472,32 @@ has '`# source` lists the loose source ticket (step 0, rule 2b), which is never 
 # Step 9, the landing check: its decision section is among those that block
 # nothing, its Tickets go under 要你做的 and count like a `ready-for-human`
 # Ticket wherever a step keeps the Spec open for a human.
-has 'a Ticket under `# decision` is no execution Ticket while it is there: it carries no `ready-for-agent` label, so nothing is dispatched for it and it is in no `# report` line' \
+#
+# The review of 票 #86 (r2) pins three more things. The criterion is the
+# ticket's own, without condition: a Ticket that carries one of `needs-info`,
+# `needs-triage`, `wontfix` beside `ready-for-agent` waits for triage too — the
+# three win — and the sentence that made the missing label the only reason is
+# gone from step 9, from step 1 and from the `2` line's account of the triage.
+# The word is told apart where the reader meets it: `# decision` is only the
+# section's name, neither a map's Decision ticket nor the retired parking
+# category; GLOSSARY defines Pending ticket and points the two colliding words
+# away from it. And the rule "each is said again where it is pinned" holds for
+# this Ticket as for a human one: the sentence that keeps the Spec open hung
+# under the `2` line alone and named three steps; it now stands in the step's
+# lead paragraph, where `0` and `2` both read it, names step 0's section and
+# the paragraph of step 9 that closes the Spec as well (the review called it
+# 9.4; in SKILL.md's own numbering 9.4 is the lock's release and the closing
+# is the paragraph after it), and each step says it in its own words.
+has 'a Ticket under `# decision` is no execution Ticket while it is there' \
   'SKILL.md step 9 passes the check without counting a Ticket under # decision' "$SKILL"
+has "a **Pending ticket** (GLOSSARY.md; \`# decision\` is only the section's name, as 票 #86 gave it: neither a map's Decision ticket nor the retired parking category)" \
+  'SKILL.md step 9 says # decision is neither a Decision ticket nor the parking category' "$SKILL"
+has 'it carries no `ready-for-agent` label, or one of `needs-info`, `needs-triage` and `wontfix` beside it — those three win' \
+  'SKILL.md step 9 states the criterion of a Pending ticket, the three triage labels winning over ready-for-agent' "$SKILL"
+has 'so nothing is dispatched for it and it is in no `# report` line' \
+  'SKILL.md step 9 dispatches nothing for a Ticket under # decision and prints no report line for it' "$SKILL"
+without 'it carries no `ready-for-agent` label, so nothing is dispatched for it and it is in no `# report` line' \
+  'SKILL.md step 9 no longer makes the missing label the only reason a Ticket is under # decision' "$SKILL"
 has 'The other five sections block nothing: a Ticket under `# waiting` waits for another Spec, a standalone issue, or a human' \
   'SKILL.md step 9 counts the decision section among those that block nothing' "$SKILL"
 without 'The other four sections block nothing' 'SKILL.md step 9 no longer names four sections that block nothing' "$SKILL"
@@ -472,8 +505,22 @@ has "A Ticket blocked by one under \`# decision\` reports \`等人工\` as well 
   'SKILL.md step 9 reports a Ticket behind one under # decision as waiting for a human' "$SKILL"
 has 'the lines of `# decision` go in the report the same way, each under 要你做的' \
   'SKILL.md step 9 sends a Ticket under # decision to 要你做的' "$SKILL"
-has 'it waits for a human the way a `ready-for-human` Ticket does, so every step that keeps the Spec open for a human Ticket (step 7, step 9.5, step 10) keeps it open for this one too' \
-  'SKILL.md step 9 keeps the Spec open for a Ticket under # decision as for a human Ticket' "$SKILL"
+has 'the Ticket needs a person'"'"'s triage: one that carries `needs-info`, `needs-triage` or `wontfix` beside `ready-for-agent` needs that label taken off, one that carries no `ready-for-agent` needs the label back' \
+  'SKILL.md step 9 says what triage a Ticket under # decision needs, for a labelled and an unlabelled one' "$SKILL"
+# The sentence that keeps the Spec open stands in the lead paragraph of step 9,
+# so both `0` and `2` read it; the `2` line points back to it. It names every
+# step that keeps the Spec open for a human Ticket, the closing of the Spec in
+# step 9 and step 0's section included.
+has 'It waits for a human the way a `ready-for-human` Ticket does, whatever the exit code: every step that keeps the Spec open for a human Ticket (step 0'"'"'s "Tickets blocked by another Spec", step 7, step 9 where it closes the Spec, step 9.5, step 10) keeps it open for this one too' \
+  'SKILL.md step 9 keeps the Spec open for a Ticket under # decision as for a human Ticket, on every exit' "$SKILL"
+has 'keeps it open for this one too, and it is never a reason to park. Read it, never your own reading of the issues, and go by its exit code:' \
+  'SKILL.md step 9 states that rule in its lead paragraph, above the exit lines' "$SKILL"
+without 'step 7, step 9.5, step 10) keeps it open for this one too' \
+  'SKILL.md step 9 no longer lists the steps that keep the Spec open without the one that closes the Spec' "$SKILL"
+has '- `0`: go on below — with a Ticket under `# decision` as with a `ready-for-human` Ticket: the Spec stays open, as step 9 says where it closes the Spec and step 10 says, which is no reason to park.' \
+  'SKILL.md step 9 says on its 0 line that a Ticket under # decision keeps the Spec open' "$SKILL"
+has 'and it keeps the Spec open as the paragraph above says, on this exit as on `0`' \
+  'SKILL.md step 9 says on its 2 line that a Ticket under # decision keeps the Spec open as on 0' "$SKILL"
 # Exit 1 is retried, exit 3 is not: a Spec missing from the graph does not come
 # back by waiting, and a keeper that resumed the Run would only find it missing.
 has '- `1` (a query failed): step 1'"'"'s failure rule — wait 30 seconds and run it once more; if it fails again, park with category `transient`.' \
@@ -490,8 +537,10 @@ has 'Park with category `error` at once, the parking report' \
 # releases a Spec whose Tickets all wait for triage instead of landing it with
 # nothing done; and the failure rule of step 1, where frontier.sh is run, keeps
 # the two exits apart the same way.
-has '`# decision` lists the tickets that carry no `ready-for-agent` label (never dispatch those either' \
-  'SKILL.md step 1 names the decision section of the frontier' "$SKILL"
+has '`# decision` lists the Pending tickets (GLOSSARY.md: not a map'"'"'s Decision tickets) — those that carry no `ready-for-agent` label, or one of `needs-info`, `needs-triage`, `wontfix` beside it (never dispatch those either' \
+  'SKILL.md step 1 names the decision section of the frontier and the criterion of a Pending ticket' "$SKILL"
+without '`# decision` lists the tickets that carry no `ready-for-agent` label' \
+  'SKILL.md step 1 no longer makes the missing label the only reason a ticket is under # decision' "$SKILL"
 has 'a frontier that is empty while `# source` or `# decision` names a ticket is step 0'"'"'s rule 3' \
   'SKILL.md step 1 sends an empty frontier with a Ticket under # decision to rule 3' "$SKILL"
 has 'The same for a Spec whose frontier is empty while `# decision` names a Ticket' \
@@ -570,25 +619,71 @@ has 'never held back' 'SKILL.md says a model mismatch never holds back the landi
 # open, nothing parks, and the report names them. The exception is stated once
 # and echoed at each step that decides on it; each site is pinned so none can
 # fall back to the Spec-only wording on its own.
+# A Ticket under `# decision` is one of those tickets (票 #86 and its review
+# r2): since r2 every pin below names the two together, so that no site can
+# keep the human Ticket and drop the Pending one — step 7's gate, read to the
+# letter, would otherwise hold a Run on a Ticket that waits for triage. The
+# first site is step 0's "Tickets blocked by another Spec", which lists the
+# kinds of Ticket left open and says how the report names them.
 has 'or may be `ready-for-human` tickets, which are never dispatched' \
   'SKILL.md: a partial landing also covers ready-for-human tickets' "$SKILL"
 has 'which wait for a human (`等人工票 #<t>`)' 'SKILL.md: the final report names the tickets left to a human' "$SKILL"
-has '(except those waiting for another Spec or a `ready-for-human` ticket, see "Tickets blocked by another Spec")' \
-  'SKILL.md step 7 excepts the tickets left to a human' "$SKILL"
-has 'When tickets still wait for another Spec or for a human, land what is done but keep the Spec' \
-  'SKILL.md step 9 keeps the Spec open for the tickets left to a human' "$SKILL"
-has 'unless tickets still wait for another Spec or for a human (a partial landing also runs this substep)' \
-  'SKILL.md step 9.5 excepts the tickets left to a human' "$SKILL"
-has '`waiting` when the Spec stays open with tickets waiting for another Spec or for a human' \
-  'SKILL.md step 10 marks waiting for the tickets left to a human' "$SKILL"
-has '**Partial landing** (the Spec stays open only because tickets wait for another Spec or for a human)' \
-  'SKILL.md step 10 defines a partial landing for the tickets left to a human' "$SKILL"
+has 'or may be Pending tickets (待定票, GLOSSARY.md): open Tickets that wait for a person'"'"'s triage, which `frontier.sh` and `landing-check.sh` list under `# decision` and which are never dispatched either' \
+  'SKILL.md step 0: a partial landing also covers Pending tickets, listed under # decision' "$SKILL"
+has 'A Ticket under `# decision` waits for a human the same way: its line goes under 要你做的 as the landing check prints it, and a Ticket behind one reports `等人工 #<t>`' \
+  'SKILL.md step 0: the final report names a Ticket under # decision and the chain behind it' "$SKILL"
+has '(except those waiting for another Spec, a `ready-for-human` ticket or a Pending ticket under `# decision`, see "Tickets blocked by another Spec")' \
+  'SKILL.md step 7 excepts the tickets left to a human and the Pending tickets' "$SKILL"
+without '(except those waiting for another Spec or a `ready-for-human` ticket, see "Tickets blocked by another Spec")' \
+  'SKILL.md step 7 no longer keeps its gate to a human Ticket alone' "$SKILL"
+# The closing of the Spec in step 9 (the review's "9.4"): the sentence is
+# pinned with the end of the closing paragraph before it, so it is read where
+# it stands and not elsewhere in the step.
+has 'may list it as needing a spec again. When tickets still wait for another Spec or for a human, or a Ticket is under `# decision` (a Pending ticket, waiting for a person'"'"'s triage), land what is done but keep the Spec' \
+  'SKILL.md step 9 keeps the Spec open, where it closes it, for the tickets left to a human and for a Pending ticket' "$SKILL"
+without 'may list it as needing a spec again. When tickets still wait for another Spec or for a human, land what is done' \
+  'SKILL.md step 9 no longer closes the Spec over a Ticket under # decision' "$SKILL"
+has 'unless tickets still wait for another Spec or for a human, or a Ticket is under `# decision` (a partial landing also runs this substep)' \
+  'SKILL.md step 9.5 excepts the tickets left to a human and the Pending tickets' "$SKILL"
+has '`waiting` when the Spec stays open with tickets waiting for another Spec or for a human, or with a Ticket under `# decision`' \
+  'SKILL.md step 10 marks waiting for the tickets left to a human and for a Pending ticket' "$SKILL"
+has '**Partial landing** (the Spec stays open only because tickets wait for another Spec or for a human, or a Ticket is under `# decision`' \
+  'SKILL.md step 10 defines a partial landing for the tickets left to a human and for a Pending ticket' "$SKILL"
 has 'while the rest wait for another Spec or are `ready-for-human` tickets' \
   'GLOSSARY: partial landing covers ready-for-human tickets' "$GLOSSARY"
 # The form of that line is the landing check's (票 #78, which landed on main
 # first): its `# report` lines say 等人工 #<t> behind a human ticket, and the
 # entry lists all four forms, so the pin names the form the script prints.
 has '`剩余：#<t> 等人工 #<t>` behind a human ticket' 'GLOSSARY: the landing report names the tickets left to a human' "$GLOSSARY"
+
+# --- the vocabulary of 票 #86 (review r2): Pending ticket, and the two entries that lacked the labels ---
+
+# `# decision` is the name 票 #86 gave a section; the word already named a map's
+# Decision ticket and, retired, a parking category. GLOSSARY defines the Ticket
+# by a name of its own and points both colliding words away from it, and the
+# Frontier and Partial landing entries, which said nothing of labels, now say
+# which Tickets stay out of the Frontier and what a partial landing does with a
+# Pending ticket: it stays with its Spec, is listed under `# decision`, and is
+# in no `# report` line of its own.
+has '**Pending ticket (待定票)**:' 'GLOSSARY defines Pending ticket' "$GLOSSARY"
+has 'it carries no `ready-for-agent` label, or one of `needs-info`, `needs-triage` or `wontfix` beside it — those three win' \
+  'GLOSSARY: a Pending ticket is read off its labels, the three triage labels winning' "$GLOSSARY"
+has 'list it under `# decision` with `（待定）`, dispatch nothing for it and let no landing wait for it' \
+  'GLOSSARY: a Pending ticket is listed under # decision, never dispatched, holding no landing back' "$GLOSSARY"
+has 'It stays with its Spec — a Partial landing while it does — gets no `# report` line of its own, and its line goes under 要你做的 of the report' \
+  'GLOSSARY: a Pending ticket stays with its Spec and is in no # report line' "$GLOSSARY"
+has '_Avoid_: Decision ticket (a map'"'"'s child issue whose resolution is a decision; `# decision` is only the section'"'"'s name, the one 票 #86 gave it), 决策票, parking category `decision` (retired: a trade-off is decided in step 8, never parked on)' \
+  'GLOSSARY: the Pending ticket entry tells off the Decision ticket and the retired parking category' "$GLOSSARY"
+has '_Avoid_: map ticket (that is an implementation child), Pending ticket (that is a Ticket of a Spec waiting for a person'"'"'s triage; the two share only the word `decision`)' \
+  'GLOSSARY: the Decision ticket entry tells off the Pending ticket' "$GLOSSARY"
+has 'A Ticket is in it only as an execution Ticket released to agents — it carries `ready-for-agent` and none of `needs-info`, `needs-triage`, `wontfix` (票 #86)' \
+  'GLOSSARY: the Frontier states the label criterion' "$GLOSSARY"
+has 'a Pending ticket stays with its Spec, `scripts/frontier.sh` lists it under `# decision`, and it is in no `# report` line' \
+  'GLOSSARY: the Frontier keeps a Pending ticket out and says where it is listed' "$GLOSSARY"
+has 'or are Pending tickets, which wait for a person'"'"'s triage (票 #86)' \
+  'GLOSSARY: a partial landing also covers Pending tickets' "$GLOSSARY"
+has 'A Pending ticket is not in those lines: it stays with the Spec, the landing check lists it under `# decision`, and the report carries its line under 要你做的, as for a human ticket' \
+  'GLOSSARY: a Partial landing keeps a Pending ticket with the Spec and out of the # report lines' "$GLOSSARY"
 
 # --- Brief hygiene (票 #60, 规格 #58; MAINTAINING 第 22 条) -----------------------
 
