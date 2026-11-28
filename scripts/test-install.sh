@@ -604,20 +604,24 @@ expect_link "$CASE_SKILLS/find-next" "$REPO/find-next" "links carry the physical
 expect_link "$CASE_SKILLS/implement-spec-split" "$REPO" "the root link carries the physical path"
 
 # 17. A skill added later is linked without touching install.sh, a nested
-# directory is found, and the link is named after the frontmatter name rather
-# than the directory; a file that is merely named like a skill file is not one.
+# directory is found, the link is named after the frontmatter name rather than
+# the directory, and a directory with a non-ASCII name is found too (git
+# quotes such paths unless asked not to); a file that is merely named like a
+# skill file is not one.
 new_case
 make_repo "$CASE_DIR/repo" find-next
 write_skill "$REPO/wrappers/feature" grill-feature
 write_skill "$REPO/brand-new" brand-new
+write_skill "$REPO/子技能" sub-skill
 mkdir -p "$REPO/upstream"
 printf -- '---\nname: not-a-skill\n---\n' > "$REPO/upstream/implement-spec.SKILL.md"
 git -C "$REPO" add -A
 run_install "$REPO" --json
 expect_exit 0 "a checkout with a nested and a new skill exits 0"
-expect_json "a nested skill and a new one are linked by their frontmatter names" 'JSON.stringify(out.checks.map(c => c.name + "=" + c.dir)) === JSON.stringify(["implement-spec-split=.","brand-new=brand-new","find-next=find-next","grill-feature=wrappers/feature"])'
+expect_json "a nested, a new and a non-ASCII skill are linked by their frontmatter names" 'JSON.stringify(out.checks.map(c => c.name + "=" + c.dir)) === JSON.stringify(["implement-spec-split=.","brand-new=brand-new","find-next=find-next","grill-feature=wrappers/feature","sub-skill=子技能"])'
 expect_link "$CASE_SKILLS/grill-feature" "$REPO/wrappers/feature" "nested skill links to its directory"
 expect_link "$CASE_SKILLS/brand-new" "$REPO/brand-new" "new skill is linked without a script change"
+expect_link "$CASE_SKILLS/sub-skill" "$REPO/子技能" "a non-ASCII directory is found and linked"
 expect_missing "$CASE_SKILLS/not-a-skill" "a file not named SKILL.md is not a skill"
 
 # 18. Usage: unknown argument 64; -h and --help print the usage and exit 0;

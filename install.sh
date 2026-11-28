@@ -230,6 +230,7 @@ skill() {
       return
     fi
     actual=$(phys "$link")
+    [ -n "$actual" ] || actual=$old   # a link to a file, which cd cannot enter
     if [ "$actual" = "$target" ]; then
       add PASS ok 0 "$name" "$dir" "$link" "$target" "${name} 软链已指向主 checkout" "$target"
     elif [ "$CHECK_MODE" -eq 1 ]; then
@@ -299,8 +300,10 @@ fi
 
 # The skills: every git-tracked SKILL.md, root first, in git's order. A file
 # merely named like one (upstream/implement-spec.SKILL.md) is not a skill.
+# core.quotePath=false: git would otherwise print a non-ASCII path escaped and
+# quoted, which the pattern below could not match.
 KNOWN=
-SKILL_FILES=$(git -C "$REPO_ROOT" ls-files 2>/dev/null | grep -E '(^|/)SKILL\.md$') || true
+SKILL_FILES=$(git -c core.quotePath=false -C "$REPO_ROOT" ls-files 2>/dev/null | grep -E '(^|/)SKILL\.md$') || true
 [ -n "$SKILL_FILES" ] || { echo "no SKILL.md is tracked in ${REPO_ROOT}" >&2; exit 2; }
 while IFS= read -r file; do
   [ -n "$file" ] || continue
