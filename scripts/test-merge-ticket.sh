@@ -554,6 +554,8 @@ expect_has 'docs/adr/0005-b.md' "the collision names the ticket side's entry" "$
 expect_has $'integration\t'"$SHORT1" "the collision cites the Integration side's commit" "$WORK/counter-both.out.err"
 expect_has $'ticket\t'"$SHORT2" "the collision cites the ticket side's commit" "$WORK/counter-both.out.err"
 expect_has 'nothing merged' "the collision says nothing was merged" "$WORK/counter-both.out.err"
+expect_has 're-bump them on the ticket side (spec-102-t2), then run again' \
+  "the collision names the ticket side as the side to re-bump" "$WORK/counter-both.out.err"
 expect_head "$HEAD_AFTER_T1" "a counter collision leaves the Integration branch where it was"
 expect_clean "a counter collision leaves no half-merged state"
 expect_test_not_run "a counter collision runs no tests"
@@ -875,6 +877,12 @@ expect_has 'numbered-dir docs/adr 0005' "the step 9.1 collision names ADR 0005" 
 expect_has 'docs/adr/0005-c.md' "the step 9.1 collision names main's entry" "$WORK/step91-collide.out.err"
 expect_has 'docs/adr/0005-d.md' "the step 9.1 collision names the Integration side's entry" "$WORK/step91-collide.out.err"
 expect_has $'ticket\t'"$SHORT_MAIN_91" "the step 9.1 collision cites main's commit" "$WORK/step91-collide.out.err"
+# The ref is read only in this shape, so the first line sends the re-bump to
+# the integration branch, not to main; the detail lines keep their labels.
+expect_has 're-bump them on the integration branch (spec-102; the ref origin/main is read only), then run again' \
+  "the step 9.1 collision names the integration branch as the side to re-bump" "$WORK/step91-collide.out.err"
+expect_without 're-bump them on the ticket side' \
+  "the step 9.1 collision does not send the re-bump to main" "$WORK/step91-collide.out.err"
 expect_head "$HEAD_91" "the step 9.1 collision leaves the Integration branch where it was"
 expect_clean "the step 9.1 collision leaves no half-merged state"
 expect_test_not_run "the step 9.1 collision runs no tests"

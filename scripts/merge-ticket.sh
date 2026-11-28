@@ -93,9 +93,12 @@
 #   6  shared counters collide: nothing merged, tests not run, worktree
 #      untouched; stderr lists each colliding counter with both sides' commits
 #      (`<counter>\t<side>\t<commit> <subject>\t<paths>`, one line per side)
-#      for the Brief of the worker that re-bumps the Ticket side. Rerun after
-#      the re-bump; a rerun that still exits 6 means the re-bump did not clear
-#      it; the round cap is the caller's (SKILL.md steps 5 / 9.1)
+#      for the Brief of the worker that re-bumps the Ticket side. Under
+#      --no-ticket-worktree (step 9.1) the ref is read only and the first line
+#      names the integration branch as the side to re-bump instead; the lines
+#      keep their `integration` / `ticket` labels either way. Rerun after the
+#      re-bump; a rerun that still exits 6 means the re-bump did not clear it;
+#      the round cap is the caller's (SKILL.md steps 5 / 9.1)
 #  64  bad usage
 
 set -u
@@ -410,7 +413,14 @@ if [ -n "$counter_base" ]; then
     counter_hits=$(numbered_hits "$counter_base" "$INTEGRATION_TIP" "$counter_merge_base" "$TICKET_TIP"
       version_hits "$counter_base" "$INTEGRATION_TIP" "$TICKET_TIP" "$version_files")
     if [ -n "$counter_hits" ]; then
-      warn "shared counters collide: re-bump them on the ticket side ($TICKET), then run again; nothing merged, tests not run"
+      if [ -n "$NO_TICKET_WORKTREE" ]; then
+        # Step 9.1: --ticket names main, which is read only, so the re-bump
+        # goes on the integration branch. The lines below keep their side
+        # labels: they are the machine format the header gives.
+        warn "shared counters collide: re-bump them on the integration branch ($INTEGRATION; the ref $TICKET is read only), then run again; nothing merged, tests not run"
+      else
+        warn "shared counters collide: re-bump them on the ticket side ($TICKET), then run again; nothing merged, tests not run"
+      fi
       printf '%s\n' "$counter_hits" >&2
       exit 6
     fi
