@@ -117,6 +117,11 @@ has 'it works in the ticket worktree `<ticket worktree>` on branch `spec-<n>-t<m
 has 'the other side is read only (`git ls-tree spec-<n>:docs/adr/`, `git show spec-<n>:VERSION`)' \
   'SKILL.md step 5 re-bump role reads the other side and merges nothing back' "$SKILL"
 has 'At most 2 re-bump rounds per ticket' 'SKILL.md step 5 caps the re-bump at 2 rounds' "$SKILL"
+# On a rerun, exits 4 and 1 are read as their own lines say: those lines sit
+# below the `6` line, so "as above" pointed at nothing (规格 #61 review r2,
+# Standards 4).
+has '`4` and `1` read as in their own lines below' 'SKILL.md step 5 rerun reads exits 4 and 1 from their own lines' "$SKILL"
+without '`4` and `1` read as above' 'SKILL.md step 5 rerun no longer points 4 and 1 upward' "$SKILL"
 has 'a third `6` parks with category `error`' 'SKILL.md step 5 parks on a third re-bump miss' "$SKILL"
 has 'release in this order: the implementer first' \
   'SKILL.md step 5 releases the implementer before the re-bump role' "$SKILL"
