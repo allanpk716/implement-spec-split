@@ -1133,5 +1133,28 @@ fi
 expect_head "$HEAD_AFTER_T22" "a collision cited from a subject with a tab merges nothing"
 expect_test_not_run "a collision cited from a subject with a tab runs no tests"
 
+# --- an entry both sides modified is a conflict, not a collision ----------------
+# The gate judges additions only (--diff-filter=A): t24 from the tip before an
+# edit of the existing docs/adr/0001-one.md makes a different edit to the same
+# file. Nothing was added on either side, so the gate lists nothing and the
+# merge is git's own textual conflict, exit 3.
+new_ticket 24 "$HEAD_AFTER_T22"
+T24=$T
+printf '%s\n' 'adr one, ticket edit' > "$T24/docs/adr/0001-one.md"
+commit_in "$T24" 'ticket twenty-four edits ADR 0001'
+printf '%s\n' 'adr one, integration edit' > "$INTEGRATION/docs/adr/0001-one.md"
+commit_in "$INTEGRATION" 'spec 102 edits ADR 0001'
+HEAD_AFTER_EDIT=$(git -C "$INTEGRATION" rev-parse HEAD)
+: > "$TEST_LOG"
+run_merge "$WORK/counter-modified.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t24 --test 'fake-test'
+expect_exit 3 "an entry both sides modified is a conflict, not a collision"
+expect_has 'conflict merging spec-102-t24 into spec-102' "a modified entry goes to git's conflict path" "$WORK/counter-modified.out.err"
+expect_has 'docs/adr/0001-one.md' "a modified entry names the conflicted file" "$WORK/counter-modified.out.err"
+expect_without 'numbered-dir' "a modified entry is not listed as a numbered-dir collision" "$WORK/counter-modified.out.err"
+expect_head "$HEAD_AFTER_EDIT" "a modified entry leaves the Integration branch where it was"
+expect_clean "a modified entry leaves no half-merged state"
+expect_test_not_run "a modified entry runs no tests"
+
 printf '\n%d passed, %d failed\n' "$PASSED" "$FAILED"
 [ "$FAILED" -eq 0 ]
