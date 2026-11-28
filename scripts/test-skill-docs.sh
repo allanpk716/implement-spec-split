@@ -42,7 +42,9 @@
 # grill-map's hand-over and find-next's usage bullet); find-next step 3's ops
 # dispatch names codex-worker.sh instead of a retired "Ops tickets codex
 # backend" and calls the worker it starts a worker, not an implementer
-# (Standards 4 — the same wording in brief-task.md).
+# (Standards 4 — the same wording in brief-task.md); the Unattended landing
+# entry of GLOSSARY limits the install to this skill's own repository and no
+# longer the loose tickets (Standards 5).
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -648,6 +650,19 @@ without '各派一个实现者 worker 执行它的整节步骤' 'find-next step 
 has '每张 task 票各派一个 worker 执行它的整节步骤' 'find-next step 3 dispatches one worker per task ticket' "$FIND_NEXT"
 without '运维步骤由主会话派实现者执行' 'brief-task does not call the codex-worker.sh worker an implementer' "$TASK_TEMPLATE"
 has '运维步骤由主会话派 worker 执行：`codex-worker.sh` 不带 `--read-only`' 'brief-task names codex-worker.sh as the worker of the ops steps' "$TASK_TEMPLATE"
+
+# --- the Unattended landing entry limits the install only, not the loose tickets (规格 #58 复审 Standards 判断项 5) ---
+
+# The entry read "runs install.sh and turns each unexecuted loosening into a
+# loose ticket — for a Spec on this skill's own repository only", so the dash
+# clause seemed to limit the loose tickets too; step 9 opens one of those for a
+# Spec on any repository, and only the install is this skill's own repository's.
+# The limitation now sits on install.sh alone (the pin under "what doctor's hints
+# say" above still holds the tail of the sentence).
+without "turns each unexecuted loosening into a loose ticket — for a Spec on this skill's own repository only" \
+  "GLOSSARY: the loose tickets are no longer read as limited to this skill's own repository" "$GLOSSARY"
+has 'turns each unexecuted loosening into a loose ticket, whatever repository the Spec is on' \
+  'GLOSSARY: the Unattended landing entry opens a loose ticket for a Spec on any repository' "$GLOSSARY"
 
 printf '\n%d passed, %d failed\n' "$PASSED" "$FAILED"
 exit "$FAILED"
