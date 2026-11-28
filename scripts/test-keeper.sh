@@ -490,12 +490,13 @@ expect_exit 0 "auth with a passed time: exits 0"
 expect_without "launched" "auth with a passed time: a recoverable time never resumes an auth park" "$WORK/launch.log"
 expect_count "" 1 "auth with a passed time: notifies" "$NOTIFY_LOG"
 
-# --- a retired category name is a legacy report: notified once, never resumed --
+# --- a retired category name: notified once, never resumed --------------------
 
-# decision and other left the category table (票 #70). A report written with
-# either before that no longer carries a machine-readable category, so it takes
-# the keyword fallback, whose non-quota result is now error: notified once,
-# never resumed, exactly as it was under its old name.
+# decision and other left the category table (票 #70). A report whose category
+# line still names either is read as error — notified once, never resumed,
+# exactly as it was under its old name — and never takes the keyword fallback:
+# a decision someone has to make must not resume by itself because the body
+# happens to mention 额度 or a reset time.
 
 new_fixture retired-decision
 write_parking '## 停车报告
@@ -528,6 +529,33 @@ run_keeper "$WORK/retired-other-2.out"
 expect_exit 0 "retired other second round: exits 0"
 expect_count "" 1 "retired other: notifies only once" "$NOTIFY_LOG"
 expect_has "已通知过（error）" "retired other: falls back to error" "$WORK/retired-other-2.out"
+
+# The same with a body that reads like a quota park. Until the third review fix
+# of 规格 #58 a retired category line counted as no category, so this report
+# took the keyword fallback — 额度 and a reset time that has passed — and was
+# resumed as quota by the first round, against the behaviour registered for it.
+
+new_fixture retired-decision-quota-word
+write_parking '## 停车报告
+
+停车类别：decision
+可恢复时间：无
+
+### 需要你决定
+1. GLM 额度用尽，等重置还是换方案由你定。
+
+### 现状
+重置时间 2026-11-25T00:00:00+0800'
+run_keeper "$WORK/retired-decision-quota-word-1.out"
+expect_exit 0 "retired decision with a quota word: exits 0"
+expect_has "停车待你决定" "retired decision with a quota word: notifies with the report url" "$NOTIFY_LOG"
+expect_has "https://example.test/issues/19#comment-9001" "retired decision with a quota word: notification carries the url" "$NOTIFY_LOG"
+expect_count "" 0 "retired decision with a quota word: never resumes, whatever the body says" "$WORK/launch.log"
+expect_without $'\tRESUME\t' "retired decision with a quota word: logs no resume" "$WORK/retired-decision-quota-word-1.out"
+run_keeper "$WORK/retired-decision-quota-word-2.out"
+expect_exit 0 "retired decision with a quota word second round: exits 0"
+expect_count "" 1 "retired decision with a quota word: notifies only once" "$NOTIFY_LOG"
+expect_has "已通知过（error）" "retired decision with a quota word: is error, not quota" "$WORK/retired-decision-quota-word-2.out"
 
 # --- fourth resume in 24h turns into a notification --------------------------
 
@@ -1135,6 +1163,9 @@ expect_count "" 0 "fresh: Orca is not asked about any worker (the file times alr
 expect_without "launched" "fresh: launch-wave not called" "$WORK/launch.log"
 
 # --- legacy reports: keyword fallback ----------------------------------------
+# These were written before the two lines existed and carry no category line at
+# all. A report that has a category line naming a retired word does not come
+# here: it is error without the fallback (the retired blocks above).
 
 new_fixture legacy-am
 write_parking '## 停车报告

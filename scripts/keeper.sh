@@ -447,7 +447,9 @@ newest_jsonl() { # directory -> newest *.jsonl mtime in seconds, or 0
 }
 
 # The machine-readable block of a parking report, with the keyword fallback for
-# reports written before the two lines existed.
+# reports written before the two lines existed. The fallback is for a report
+# with no category line only: one whose line names a word outside the four
+# categories is error without it.
 report_info() { # spec number -> kind<US>id<US>url<US>category<US>recover_at<US>source<US>created_at
   local comments=$WORK/comments.json
   if ! "$GH" api "repos/$REPO/issues/$1/comments" --paginate --slurp >"$comments" 2>"$WORK/gh.err" </dev/null; then
@@ -535,6 +537,9 @@ report_info() { # spec number -> kind<US>id<US>url<US>category<US>recover_at<US>
     }
     let category = "";
     let recoverRaw = "";
+    // The category line names a word outside the four (decision and other
+    // retired with 票 #70): error below, never the keyword fallback.
+    let retired = false;
     if (start >= 0) {
       for (let i = start + 1; i < Math.min(lines.length, start + 16); i++) {
         if (/^\s*#/.test(lines[i])) break;
@@ -543,10 +548,9 @@ report_info() { # spec number -> kind<US>id<US>url<US>category<US>recover_at<US>
         if (match && !category) {
           // The four categories of the SKILL.md table: quota and transient are
           // resumed once their time has passed, auth and error only notified.
-          // Any other word (decision and other retired with 票 #70) reads as no
-          // category, so the report takes the keyword fallback below.
           const word = String(match[1]).match(/quota|transient|auth|error/i);
-          category = word ? word[0].toLowerCase() : "";
+          if (word) category = word[0].toLowerCase();
+          else retired = true;
         }
         match = line.match(/^可恢复时间\s*[：:]\s*(.*)$/);
         if (match && !recoverRaw) recoverRaw = match[1].trim();
@@ -564,6 +568,13 @@ report_info() { # spec number -> kind<US>id<US>url<US>category<US>recover_at<US>
           if (piece) recover = parseClock(piece[0].replace(" ", "T"));
         }
       }
+    } else if (retired) {
+      // A category line naming a word outside the four: error, notified once
+      // and never resumed, as under its old name. The keyword fallback is not
+      // taken — the body of such a report may still mention 额度 or a reset
+      // time, and a decision someone has to make must not resume the Run.
+      category = "error";
+      recover = "";
     } else {
       source = "legacy";
       const low = last.body.toLowerCase();
