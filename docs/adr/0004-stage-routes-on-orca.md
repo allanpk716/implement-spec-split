@@ -7,7 +7,7 @@ supersedes: ADR-0002, ADR-0003
 
 用户定（2026-11-27）：主线是 flash 主会话（Orca 的 `openclaude` 槽位）敲 grill 或 find-next 命令，然后各流程用各自的会话和模型推进；目标是确定性的工作流，每个阶段能单独指定模型，并能全局热切换。ADR 0002、0003 只覆盖了审查、讨论和 codex 路径，默认路径（flash 会话 + 会话内子代理实现）上的写代码阶段两个开关都管不到；两个开关各有一个命令、一个状态文件和约 150 行近似代码。决定：
 
-- **入口只有 3+1 个**：`/grill-feature`、`/grill-map`、`/find-next` 三个工作命令，加一个设置命令 `/grill-router`。`/judgment-model`、`/worker-model` 删除，不留别名（`/grill-router` 首次运行迁移旧状态文件里没到期的设置）。`implement-spec-split` 只由 find-next 在内部拉起，不再是用户命令。`/grill-feature` 讨论完、规格发布后自动接 find-next；`/grill-map` 同样自动接，find-next 会停在合成提问那一步。
+- **入口只有 3+1 个**：`/grill-feature`、`/grill-map`、`/find-next` 三个工作命令，加一个设置命令 `/grill-router`。`/judgment-model`、`/worker-model` 删除，不留别名（`/grill-router` 首次运行迁移旧状态文件里没到期的设置）。`implement-spec-split` 只由 find-next 在内部拉起，不再是用户命令。`/grill-feature` 讨论完、规格发布后自动接 find-next；`/grill-map` 同样自动接，find-next 会停在合成提问那一步。（2026-11-28 注：find-next 不再停在合成提问那一步——拍板轮每条按 worker 的推荐自动拍板（可推翻）、没有推荐的按可逆性规则自选，拍完不等回复，留给用户的只有需要本人身份、凭据、物理动作或主观反应的条目（规格 #58 票 #69，MAINTAINING 第 54 条）；两个入口自动接过去的照旧是推进模式。）
 - **六个 Stage，一张 Stage route 表**（GLOSSARY.md）：编排、讨论、调研起草、实现、审查、诊断，每项为（Launcher profile, 模型, 思考强度, 可选到期）。下一次派发或下一次新会话生效，不中途换。编排在 v1 锁定为 flash。只接受跑过冒烟测试的组合；审查与实现同模型时当场警告一次，不拦。默认表见 Consequences。
 - **执行方式由阶段固定，用户只选档案**：编排、讨论、实现由 Orca orchestration 托管（交互式 worker，生命周期交给 Orca）；调研起草、审查、诊断是 headless（`claude -p` / `codex exec`），保留退出码和只读违规检查的契约。
 - **Launcher profile 由本项目维护，不用 Orca agent id**：Orca 不能注册自定义 agent（stablyai/orca#2284），`openclaude` 槽位不接受 `--model`。GLM 启动器走「`orca terminal create --command "<launcher> --model … --effort …"` + `worker-start --terminal`」收编（`docs/orca-smoke-2026-11-27.md` 实测通过，含嵌套 worktree）。
