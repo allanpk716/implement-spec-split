@@ -1100,5 +1100,42 @@ expect_merged "$TIP20" "the re-bumped VERSION-only ticket lands"
 expect_content "$INTEGRATION" VERSION '1.7.0' "the merge brings the re-bumped VERSION"
 expect_test_ran "the VERSION-only rerun runs the tests"
 
+# --- a tab in a cited subject keeps the line at four fields ---------------------
+# t22 adds ADR 0030-a with a tab in its subject and lands; t23 from the tip
+# before that adds ADR 0030-b. The collision cites t22's commit on the
+# integration side, and the tab in that subject must come out as a space, not
+# as a fifth field.
+HEAD_BEFORE_T22=$(git -C "$INTEGRATION" rev-parse HEAD)
+new_ticket 22 "$HEAD_BEFORE_T22"
+T22=$T
+printf '%s\n' 'adr thirty a' > "$T22/docs/adr/0030-a.md"
+git -C "$T22" add -A
+git -C "$T22" commit --quiet -m "ticket twenty-two adds ADR 0030-a"$'\t'"with a tab"
+SHORT22=$(git -C "$T22" rev-parse --short HEAD)
+run_merge "$WORK/counter-t22.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t22 --test 'fake-test'
+expect_exit 0 "a ticket whose subject holds a tab lands"
+HEAD_AFTER_T22=$(git -C "$INTEGRATION" rev-parse HEAD)
+
+new_ticket 23 "$HEAD_BEFORE_T22"
+T23=$T
+printf '%s\n' 'adr thirty b' > "$T23/docs/adr/0030-b.md"
+commit_in "$T23" 'ticket twenty-three adds ADR 0030-b'
+SHORT23=$(git -C "$T23" rev-parse --short HEAD)
+: > "$TEST_LOG"
+run_merge "$WORK/counter-tab.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t23 --test 'fake-test'
+expect_exit 6 "a collision cited from a subject with a tab exits 6"
+expect_has $'numbered-dir docs/adr 0030\tintegration\t'"$SHORT22 ticket twenty-two adds ADR 0030-a with a tab"$'\t'"docs/adr/0030-a.md" \
+  "a tab in a cited subject comes out as a space, in the same field" "$WORK/counter-tab.out.err"
+fields=$(awk -F'\t' '$1 == "numbered-dir docs/adr 0030" { print NF }' "$WORK/counter-tab.out.err" | sort -u | tr '\n' ' ')
+if [ "$fields" = "4 " ]; then
+  ok "both collision lines keep four fields with a tab in a subject"
+else
+  bad "both collision lines keep four fields with a tab in a subject" "fields per line: [$fields]"
+fi
+expect_head "$HEAD_AFTER_T22" "a collision cited from a subject with a tab merges nothing"
+expect_test_not_run "a collision cited from a subject with a tab runs no tests"
+
 printf '\n%d passed, %d failed\n' "$PASSED" "$FAILED"
 [ "$FAILED" -eq 0 ]

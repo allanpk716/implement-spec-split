@@ -92,7 +92,8 @@
 #      so (the caller goes on, no re-dispatch)
 #   6  shared counters collide: nothing merged, tests not run, worktree
 #      untouched; stderr lists each colliding counter with both sides' commits
-#      (`<counter>\t<side>\t<commit> <subject>\t<paths>`, one line per side)
+#      (`<counter>\t<side>\t<commit> <subject>\t<paths>`, one line per side; a
+#      tab in a subject comes out as a space)
 #      for the Brief of the worker that re-bumps the Ticket side. Under
 #      --no-ticket-worktree (step 9.1) the ref is read only and the first line
 #      names the integration branch as the side to re-bump instead; the lines
@@ -271,13 +272,14 @@ numbered_pairs() { # base integration_tip merge_base ticket_tip
 # no `--no-merges`: a conflict-resolving merge can be the commit that touched
 # the path; a plain landing merge is TREESAME to its Ticket parent and git
 # names the Ticket's own commit instead), the Ticket side from the Integration
-# tip to the Ticket tip (its own commits only). Prints nothing when no commit
-# of that side did.
+# tip to the Ticket tip (its own commits only). A tab in the subject becomes a
+# space, so the line keeps its four fields (git already joins a multi-line
+# subject with spaces). Prints nothing when no commit of that side did.
 side_commit() { # side from to path
   if [ "$1" = ticket ]; then
-    git -C "$WORKTREE" log --no-merges -1 --format='%h %s' "$2..$3" -- "$4" 2>/dev/null
+    git -C "$WORKTREE" log --no-merges -1 --format='%h %s' "$2..$3" -- "$4" 2>/dev/null | tr '\t' ' '
   else
-    git -C "$WORKTREE" log -1 --format='%h %s' "$2..$3" -- "$4" 2>/dev/null
+    git -C "$WORKTREE" log -1 --format='%h %s' "$2..$3" -- "$4" 2>/dev/null | tr '\t' ' '
   fi
 }
 
