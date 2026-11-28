@@ -3,9 +3,12 @@
 # The test command is passed as an argument the way a Spec session passes it;
 # the fake it names records its working directory and arguments, and fails
 # while the file TEST_FAIL names exists. Shared counters (a numbered directory,
-# a version file) have their own gate: when both sides added the same one the
+# a version file) have their own gate: when both sides added the same number
+# of a numbered directory, or left a version file with the same content, the
 # script exits 6 and merges nothing, so the second half of the file builds a
-# branch group with docs/adr, VERSION, CHANGELOG.md and pyproject.toml.
+# branch group with docs/adr, VERSION, CHANGELOG.md and pyproject.toml; its
+# last part runs the step 9.1 shape too, --ticket origin/main with
+# --no-ticket-worktree.
 
 set -u
 
@@ -73,6 +76,15 @@ expect_merged() { # sha name — the Integration branch's HEAD contains <sha>
     ok "$2"
   else
     bad "$2" "HEAD $(git -C "$INTEGRATION" rev-parse --short HEAD 2>/dev/null) does not contain $1"
+  fi
+}
+
+expect_parents() { # first second name — the Integration branch's HEAD is a merge commit of <first> and <second>
+  parents=$(git -C "$INTEGRATION" log -1 --format='%P' HEAD)
+  if [ "$parents" = "$1 $2" ]; then
+    ok "$3"
+  else
+    bad "$3" "parents=[$parents], expected $1 $2"
   fi
 }
 
@@ -161,12 +173,7 @@ run_merge "$WORK/clean.out" --worktree "$INTEGRATION" --integration spec-101 \
 expect_exit 0 "clean merge with passing tests exits 0"
 expect_has 'merge-ticket: merged spec-101-t7 into spec-101' "clean merge reports the merge" "$WORK/clean.out"
 expect_merged "$TIP7" "clean merge lands the ticket commit on the integration branch"
-parents=$(git -C "$INTEGRATION" log -1 --format='%P' HEAD)
-if [ "$parents" = "$BEFORE $TIP7" ]; then
-  ok "clean merge is a merge commit of the previous tip and the ticket"
-else
-  bad "clean merge is a merge commit of the previous tip and the ticket" "parents=[$parents]"
-fi
+expect_parents "$BEFORE" "$TIP7" "clean merge is a merge commit of the previous tip and the ticket"
 expect_has "cwd=$INTEGRATION" "tests run in the integration worktree" "$TEST_LOG"
 expect_has 'args=unit' "tests get the command as given" "$TEST_LOG"
 expect_has 'ok sample-test' "test output is passed through" "$WORK/clean.out"
@@ -379,12 +386,7 @@ TIP12=$(git -C "$TICKET12" rev-parse HEAD)
 run_merge "$WORK/moved.out" --worktree "$INTEGRATION" --integration spec-101 \
   --ticket spec-101-t12 --test 'SAMPLE=1 fake-test a && fake-test b'
 expect_exit 0 "a merge onto a moved Integration branch exits 0"
-parents=$(git -C "$INTEGRATION" log -1 --format='%P' HEAD)
-if [ "$parents" = "$HEAD_AFTER_T11 $TIP12" ]; then
-  ok "a moved Integration branch is the first parent of the merge commit"
-else
-  bad "a moved Integration branch is the first parent of the merge commit" "parents=[$parents]"
-fi
+expect_parents "$HEAD_AFTER_T11" "$TIP12" "a moved Integration branch is the first parent of the merge commit"
 expect_merged "$TIP11" "a moved Integration branch keeps the earlier ticket"
 expect_merged "$TIP12" "a moved Integration branch gets the new ticket"
 expect_has 'args=a' "a compound test command runs its first part" "$TEST_LOG"
@@ -836,12 +838,7 @@ run_merge "$WORK/step91-clean.out" --worktree "$INTEGRATION" --integration spec-
 expect_exit 0 "step 9.1 with a different ADR number merges"
 expect_quiet "$WORK/step91-clean.out.err" "a clean step 9.1 prints nothing"
 expect_has 'merge-ticket: merged origin/main into spec-102' "a clean step 9.1 reports the merge" "$WORK/step91-clean.out"
-parents=$(git -C "$INTEGRATION" log -1 --format='%P' HEAD)
-if [ "$parents" = "$HEAD_91 $ORIGIN_MAIN" ]; then
-  ok "a clean step 9.1 is a merge commit of the previous tip and origin/main"
-else
-  bad "a clean step 9.1 is a merge commit of the previous tip and origin/main" "parents=[$parents]"
-fi
+expect_parents "$HEAD_91" "$ORIGIN_MAIN" "a clean step 9.1 is a merge commit of the previous tip and origin/main"
 expect_content "$INTEGRATION" docs/adr/0020-c.md 'adr twenty c' "a clean step 9.1 brings main's entry"
 expect_test_ran "a clean step 9.1 runs the tests"
 expect_clean "a clean step 9.1 leaves a clean worktree"
@@ -897,12 +894,7 @@ run_merge "$WORK/step91-rebump.out" --worktree "$INTEGRATION" --integration spec
   --ticket origin/main --no-ticket-worktree --test 'fake-test unit'
 expect_exit 0 "step 9.1 merges after the integration side's re-bump"
 expect_quiet "$WORK/step91-rebump.out.err" "a cleared step 9.1 collision prints nothing"
-parents=$(git -C "$INTEGRATION" log -1 --format='%P' HEAD)
-if [ "$parents" = "$HEAD_91_REBUMP $ORIGIN_MAIN_91" ]; then
-  ok "the step 9.1 rerun is a merge commit of the re-bumped tip and origin/main"
-else
-  bad "the step 9.1 rerun is a merge commit of the re-bumped tip and origin/main" "parents=[$parents]"
-fi
+expect_parents "$HEAD_91_REBUMP" "$ORIGIN_MAIN_91" "the step 9.1 rerun is a merge commit of the re-bumped tip and origin/main"
 entries0005=$(git -C "$INTEGRATION" ls-tree --name-only HEAD docs/adr/ | grep -c '/0005-')
 if [ "$entries0005" = 1 ]; then
   ok "the merged result holds number 0005 once"
