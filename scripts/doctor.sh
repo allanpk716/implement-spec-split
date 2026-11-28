@@ -147,7 +147,10 @@ HOOK_REGISTERED=0
 RULE_INSTALLED=0
 
 # The PreToolUse entries of settings.json whose hook command names the script:
-# one matcher<TAB>command row each.
+# one matcher<US>command row each, joined with the unit separator. Not a tab:
+# read folds a leading one, and an entry without a matcher (Claude Code reads
+# that as every tool) starts with an empty column, which would put the command
+# in the matcher's place and read the hook as not registered (MAINTAINING 第 51 条).
 hooks_registered() { # script out-file
   SETTINGS_JSON=$SETTINGS_JSON HOOK_SCRIPT=$1 node - > "$2" <<'NODE'
 const fs = require('fs');
@@ -159,7 +162,7 @@ for (const entry of entries) {
   const hooks = Array.isArray(entry?.hooks) ? entry.hooks : [];
   for (const hook of hooks) {
     if (String(hook?.command || '').includes(process.env.HOOK_SCRIPT)) {
-      console.log([String(entry.matcher || ''), String(hook.command || '')].join('\t'));
+      console.log([String(entry.matcher || ''), String(hook.command || '')].join('\x1f'));
     }
   }
 }
@@ -293,6 +296,10 @@ if [ "$STAGE3_CONFIGURED" -eq 0 ]; then
 else
   matcher_covers() {
     local matcher=$1 tool=$2 item
+    # A blank matcher is every tool (Claude Code reads "" or a missing matcher
+    # as *), and it must return here: an empty pattern list is an empty array,
+    # which set -u in bash 3.2 refuses to expand.
+    [ -n "$matcher" ] || return 0
     IFS='|' read -ra items <<< "$matcher"
     for item in "${items[@]}"; do
       [[ $item == "$tool" ]] && return 0
@@ -300,14 +307,18 @@ else
     return 1
   }
 
-  # The path of <script> in a `node <path>` hook command, or nothing.
+  # The path of <script> in a `node <path>` hook command, or nothing. A path
+  # written `~/…` (hooks/README.md's snippets) comes back with the ~ expanded:
+  # the shell that runs the hook expands it, so doctor judges the same file.
   hook_command_path() { # command script
-    HOOK_COMMAND=$1 HOOK_SCRIPT=$2 node -e '
+    local path
+    path=$(HOOK_COMMAND=$1 HOOK_SCRIPT=$2 node -e '
       const command = process.env.HOOK_COMMAND;
       const match = command.match(/(?:^|[|;&\s\/\\"])(?:node(?:\.exe)?)"?\s+(?:"([^"]+)"|\x27([^\x27]+)\x27|(\S+))/i);
       const path = match ? (match[1] || match[2] || match[3] || "") : "";
       console.log(path.includes(process.env.HOOK_SCRIPT) ? path : "");
-    '
+    ')
+    printf '%s' "${path/#\~\//$HOME/}"
   }
 
   if [ "$HOOK_REGISTERED" -eq 0 ]; then
@@ -320,7 +331,7 @@ else
     HOOK_MATCHER=""
     HOOK_COMMAND=""
     HOOK_PATH=""
-    while IFS=$'\t' read -r matcher command; do
+    while IFS=$'\x1f' read -r matcher command; do
       HOOK_MATCHER=$matcher
       HOOK_COMMAND=$command
       HOOK_PATH=$(hook_command_path "$command" delegate-guard.js)
@@ -370,7 +381,7 @@ JSON
   # is a FAIL: then it silently does nothing.
   SUBAGENT_MATCHER=
   SUBAGENT_COMMAND=
-  [ -s "$SUBAGENT_TSV" ] && IFS=$'\t' read -r SUBAGENT_MATCHER SUBAGENT_COMMAND < "$SUBAGENT_TSV"
+  [ -s "$SUBAGENT_TSV" ] && IFS=$'\x1f' read -r SUBAGENT_MATCHER SUBAGENT_COMMAND < "$SUBAGENT_TSV"
   if [ -z "$SUBAGENT_COMMAND" ]; then
     add stage3 WARN "未注册 subagent-guard hook：flash 主线程仍能开会话内子代理" "The subagent-guard hook is not registered: the flash main thread can still open an in-session subagent" "按 docs/setup.md 阶段 3「同时注册 subagent-guard」注册" "Register it as described in docs/setup.md stage 3 (Register subagent-guard as well)"
   else

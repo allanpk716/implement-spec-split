@@ -1635,6 +1635,20 @@ expect_without '--retry-of' '判断不了 does not redispatch' "$ORCA_LOG"
 expect_without 'release' '判断不了 leaves the reservation to expire' "$CLAIM_LOG"
 expect_has 'status' 'the claim is read while waiting' "$CLAIM_LOG"
 
+# The restart line names the launcher of the 编排 route's profile, not a
+# constant: with the fake table answering claude, it is claude that is named,
+# and the dispatch went to the claude slot.
+LAUNCH_WAVE_STAGE_ROUTE_OVERRIDE=$FAKE_STAGE_ROUTE
+LAUNCH_FAKE_ROUTE_PROFILE=claude
+export LAUNCH_WAVE_STAGE_ROUTE_OVERRIDE LAUNCH_FAKE_ROUTE_PROFILE
+: > "$CLAIM_LOG"; : > "$ORCA_LOG"; : > "$SEQUENCE_LOG"
+run_launch "$WORK/unclaimed-parks-claude.out" --apply --only 237
+expect_exit 1 "an unclaimed Spec whose terminal says nothing parks on the claude profile too"
+expect_has "重新启动：确认该终端已停后 cd $CREATED_237 运行 claude '/implement-spec-split 237 --auto-land --parallel 2'，或等预留到期后运行 launch-wave.sh --repo test/repo --only 237 --apply" \
+  'the park names the route profile launcher, not a constant' "$WORK/unclaimed-parks-claude.out"
+expect_arg_after '--agent' claude 'the dispatch went to the slot the route named' "$ORCA_LOG"
+unset LAUNCH_WAVE_STAGE_ROUTE_OVERRIDE LAUNCH_FAKE_ROUTE_PROFILE
+
 # The claim appearing during the wait (pid non-empty) is what reports 已启动.
 ISS_CLAIM_WAIT_OVERRIDE=1
 export ISS_CLAIM_WAIT_OVERRIDE

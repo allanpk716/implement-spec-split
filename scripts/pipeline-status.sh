@@ -1186,7 +1186,9 @@ if (mode === 'order') {
   const pipeline = readJson(args[1]);
   const blockerDir = args[2];
   const parallel = Math.max(1, Number(args[3] || 2));
-  const commandSuffix = args[4] === undefined ? '--auto-land' : args[4];
+  // The shell always passes the command suffix (CMD_SUFFIX, --auto-land unless
+  // --cmd-suffix says otherwise): no second default here.
+  const commandSuffix = args[4];
   const suppliedClaimsDir = args[5] || '';
   const lstartCommand = args[6] || process.env.ISS_PID_START_SCRIPT;
   const workersArgument = args[7] || '';

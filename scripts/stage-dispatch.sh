@@ -123,8 +123,15 @@
 # is exit 6 and nothing is released). Then `worker-release --dispatch`, then
 # `terminal close` on the terminal this module opened (Orca retains a terminal
 # it did not open, docs/orca-smoke-2026-11-27.md D), then `worktree rm
-# --delete-branch` on the child worktree. A parked Ticket is not released: the
-# caller decides.
+# --delete-branch` on the child worktree. The terminal is closed by the handle
+# this round's worker-show receipt names (result.terminal; keeper.sh and
+# close-self.sh read the same field), never the sidecar's while the receipt has
+# one (lib-orca.sh Rule 3: a handle recorded at dispatch may have drifted to
+# another terminal by now), and by the sidecar's only when the receipt names
+# none. A receipt whose terminalState is released names a terminal Orca has
+# already closed (the auto-release that follows a settled worker,
+# docs/orca-smoke-2026-11-27.md 1), so that one is not closed. A parked Ticket
+# is not released: the caller decides.
 #
 # verify, for the reports (票 #47): Orca records no model for an adopted
 # terminal (the Dispatch's launch.effective.model is null,
@@ -148,7 +155,11 @@
 # it releases anything, and verify takes one live only for a dispatch that
 # holds its terminal still (a worker that is running, say a parked Ticket's);
 # a released dispatch is read from its record, and one without a record says
-# 无法核对. Headless dispatches are not checked here: their route is on the
+# 无法核对. The screen is read off the handle this round's worker-show receipt
+# names, as the close is (Rule 3): verify asks worker-show before terminal
+# read, release reuses the receipt of its settled check, and a terminal Orca
+# has released is not read (the handle may be another terminal's by now).
+# Headless dispatches are not checked here: their route is on the
 # first line of their own result (the executor's 路由 line). A 警告 is a
 # warning on the line and on stderr and nothing else: verify exits 0 whatever
 # the verdicts, release releases a mismatching worker all the same, and no
@@ -161,8 +172,10 @@
 # started_at; interactive: launcher, bare, bare_note (the lean start: whether
 # the start was one, and why not when it was not), brief, repo,
 # parent_worktree, base_branch, branch, worktree, worktree_created, spec_file,
-# report_path (where the worker was told to write), launch_command, terminal,
-# dispatch_id, task_id; headless: script, brief|input, kind (review, diagnosis), cwd,
+# report_path (where the worker was told to write), launch_command, terminal
+# (the handle terminal create returned at dispatch; release and verify ask Orca
+# for the current one, Rule 3), dispatch_id, task_id; headless: script,
+# brief|input, kind (review, diagnosis), cwd,
 # report_path (the executor's report once it ran), exit_code, finished_at;
 # after a wait: worker_done {outcome, report_path, message_id, received_at};
 # after a reading: actual_model (see verify); after a release: released_at
@@ -241,7 +254,8 @@ wait     blocks once for the dispatch's worker_done; prints the report path.
 release  worker-release, terminal close, worktree rm, once the worker is done.
 verify   prints the Stage route table and, per Orca worker of the Run's run
          directory, its route model against the model it actually ran on
-         (read off its terminal, recorded in the sidecar); warns, never fails.
+         (read off its terminal, recorded in the sidecar); warns, never fails
+         on a verdict (usage errors and an unwritable sidecar excepted).
 USAGE
 }
 
@@ -916,7 +930,7 @@ cmd_release() {
   done
   [ -n "$sidecar" ] || usage_error 'release needs --sidecar (the path dispatch printed)'
   [ -f "$sidecar" ] || usage_error "sidecar not found: $sidecar"
-  local form dispatch_id terminal worktree worktree_created report dispatch_dir state stage kept
+  local form dispatch_id terminal terminal_state worktree worktree_created report dispatch_dir state stage kept
   form=$(json_get "$sidecar" form) || die 64 "$sidecar is not a dispatch sidecar (no form field, or not JSON)"
   if [ "$form" = headless ]; then
     warn "nothing to release: the dispatch in $sidecar ran headless and holds no Orca resource"
@@ -924,7 +938,6 @@ cmd_release() {
   fi
   dispatch_id=$(json_get "$sidecar" dispatch_id) ||
     die 64 "sidecar $sidecar has no dispatch_id: the dispatch did not complete (see its dispatch dir)"
-  terminal=$(json_get "$sidecar" terminal) || terminal=
   worktree=$(json_get "$sidecar" worktree) || worktree=
   worktree_created=$(json_get "$sidecar" worktree_created) || worktree_created=false
   dispatch_dir=$(json_get "$sidecar" dispatch_dir) || dispatch_dir=.
@@ -946,6 +959,12 @@ cmd_release() {
       ;;
   esac
 
+  # The terminal as Orca names it now, for the reading and for the close: the
+  # handle of the receipt just taken (receipt_terminal says why it is never
+  # the sidecar's straight).
+  receipt_terminal "$dispatch_dir/worker-show.json" "$sidecar"
+  terminal=$TERMINAL terminal_state=$TERMINAL_STATE
+
   # A report the worker wrote inside the child worktree (a relative path is
   # resolved against it) would go with the worktree: copied into the dispatch
   # dir before anything is released, and the sidecar points at the copy from
@@ -962,12 +981,15 @@ cmd_release() {
   # exists: the reports take it from the sidecar (verify). A reading that
   # finds nothing is recorded as such; release goes on either way, since a
   # mismatch is a warning a report carries, never a refusal.
-  ensure_model_recorded "$sidecar" "$dispatch_dir"
+  ensure_model_recorded "$sidecar" "$dispatch_dir" "$terminal" "$terminal_state"
 
   orca_orchestration_worker_release "$dispatch_id" > "$dispatch_dir/worker-release.json" 2> "$dispatch_dir/worker-release.err" ||
     die 6 "orca orchestration worker-release failed for $dispatch_id: $(cat "$dispatch_dir/worker-release.err")"
-  # Orca retains a terminal this module opened: close it here.
-  if [ -n "$terminal" ]; then
+  # Orca retains a terminal this module opened: close it here, by the handle
+  # the receipt names. A terminal Orca has already released (terminalState
+  # released, the auto-release after a settled worker) is gone, and its handle
+  # may by now be another terminal's: not closed.
+  if [ -n "$terminal" ] && [ "$terminal_state" != released ]; then
     orca_terminal_close "$terminal" > "$dispatch_dir/terminal-close.out" 2>&1 ||
       warn "could not close terminal $terminal (close it by hand): $(cat "$dispatch_dir/terminal-close.out")"
   fi
@@ -983,6 +1005,19 @@ cmd_release() {
 }
 
 # --- verify: the model each worker actually ran on ---------------------------------
+
+# The terminal of a dispatch as Orca names it now, and that terminal's state:
+# the handle of the worker-show receipt of this round (result.terminal and
+# result.terminalState, the fields keeper.sh and close-self.sh read), and the
+# sidecar's handle only when the receipt names none. Rule 3 (lib-orca.sh): a
+# handle recorded at dispatch is never reused while Orca can name the current
+# one. Sets TERMINAL and TERMINAL_STATE; a receipt that names no state leaves
+# it empty, which is not released.
+receipt_terminal() { # worker-show receipt sidecar
+  TERMINAL=$(json_get "$1" result.terminal) || TERMINAL=
+  TERMINAL_STATE=$(json_get "$1" result.terminalState) || TERMINAL_STATE=
+  [ -n "$TERMINAL" ] || TERMINAL=$(json_get "$2" terminal) || TERMINAL=
+}
 
 # The model a worker's TUI shows in its status line: the last line of the
 # rendered screen shaped `[<model>] │ …` (Claude Code's status line, as
@@ -1020,23 +1055,28 @@ provider_model() { # worker-show --full --json on stdin
 
 # One reading of the model a dispatch's worker actually runs on: the status
 # line of its terminal first, then, when the screen has none, the provider of
-# its full worker-show record. Sets OBSERVED to "<model><TAB>status-line" or
-# "<model><TAB>provider" and returns 0, or leaves it empty, sets OBSERVE_NOTE
-# to why, and returns 1 when neither names a model. An Orca that cannot answer
-# is a note, never a failure: the reading is for a report. Must be called
-# directly, not in $(...): the note would stay in the subshell.
-observe_model() { # sidecar dispatch_dir
-  local sidecar=$1 dispatch_dir=$2 terminal dispatch_id json model=
+# its full worker-show record. The terminal is the one receipt_terminal named
+# this round, with its state: a terminal Orca has released is gone, so its
+# screen is not read — the handle may by now be another terminal's. Sets
+# OBSERVED to "<model><TAB>status-line" or "<model><TAB>provider" and returns
+# 0, or leaves it empty, sets OBSERVE_NOTE to why, and returns 1 when neither
+# names a model. An Orca that cannot answer is a note, never a failure: the
+# reading is for a report. Must be called directly, not in $(...): the note
+# would stay in the subshell.
+observe_model() { # sidecar dispatch_dir terminal terminal_state
+  local sidecar=$1 dispatch_dir=$2 terminal=$3 terminal_state=$4 dispatch_id json model= read_note
   OBSERVED= OBSERVE_NOTE=
-  terminal=$(json_get "$sidecar" terminal) || terminal=
   dispatch_id=$(json_get "$sidecar" dispatch_id) || dispatch_id=
-  if [ -n "$terminal" ]; then
+  if [ -n "$terminal" ] && [ "$terminal_state" != released ]; then
+    read_note='没读到终端状态行'
     if json=$(orca_terminal_read "$terminal" --screen 2>"$dispatch_dir/terminal-read.err"); then
       model=$(printf '%s\n' "$json" | screen_model) || model=
       [ -z "$model" ] || { OBSERVED="$model"$'\t'status-line; return 0; }
     else
       warn "could not read the screen of terminal $terminal: $(head -n 1 "$dispatch_dir/terminal-read.err")"
     fi
+  else
+    read_note='终端没有 Orca 当前给出的句柄，或已由 Orca 释放：未读屏'
   fi
   if [ -n "$dispatch_id" ]; then
     if orca_orchestration_worker_show "$dispatch_id" --full > "$dispatch_dir/worker-show-full.json" \
@@ -1047,7 +1087,7 @@ observe_model() { # sidecar dispatch_dir
       warn "orca orchestration worker-show --full failed for $dispatch_id: $(head -n 1 "$dispatch_dir/worker-show-full.err")"
     fi
   fi
-  OBSERVE_NOTE='没读到终端状态行，worker-show --full 也没有 provider'
+  OBSERVE_NOTE="${read_note}，worker-show --full 也没有 provider"
   return 1
 }
 
@@ -1056,9 +1096,9 @@ observe_model() { # sidecar dispatch_dir
 # object is emptied first (a fixed literal) and its fields set by their dotted
 # keys: the model comes off a screen, so it is stored as the string it is,
 # never spliced into @json: (a quote in it would break the sidecar).
-record_model() { # sidecar dispatch_dir
+record_model() { # sidecar dispatch_dir terminal terminal_state
   local sidecar=$1 dispatch_dir=$2
-  if observe_model "$sidecar" "$dispatch_dir"; then
+  if observe_model "$@"; then
     json_set "$sidecar" "actual_model=@json:{}" "actual_model.model=${OBSERVED%%$'\t'*}" \
       "actual_model.source=${OBSERVED#*$'\t'}" "actual_model.checked_at=$(now_iso)" ||
       die 6 "could not write the sidecar $sidecar"
@@ -1071,9 +1111,9 @@ record_model() { # sidecar dispatch_dir
 
 # Takes a reading only when the sidecar has none: a model already recorded
 # (read off a TUI that was up at the time) is the better evidence and stays.
-ensure_model_recorded() { # sidecar dispatch_dir
+ensure_model_recorded() { # sidecar dispatch_dir terminal terminal_state
   json_get "$1" actual_model.model >/dev/null 2>&1 && return 0
-  record_model "$1" "$2"
+  record_model "$@"
 }
 
 # `<role> #<ticket>（第 <n> 次）` for a check line: 实现 #41, 修复, 解冲突 #41（第 2 次）.
@@ -1091,9 +1131,10 @@ dispatch_label() { # role ticket attempt
 
 # Prints the check line of one dispatch's sidecar: its route model against the
 # model recorded as actually run, read live first when none is recorded and
-# the dispatch still holds its terminal.
+# the dispatch still holds its terminal: the terminal is the one a worker-show
+# of this round names (Rule 3), never the sidecar's handle straight.
 verify_sidecar() { # sidecar
-  local sidecar=$1 form role ticket attempt route_model actual note dispatch_dir label
+  local sidecar=$1 form role ticket attempt route_model actual note dispatch_dir label dispatch_id
   form=$(json_get "$sidecar" form) || form=
   # A headless dispatch runs no Orca worker; its route is on its own result's
   # first line.
@@ -1104,7 +1145,8 @@ verify_sidecar() { # sidecar
   route_model=$(json_get "$sidecar" route.model) || route_model='?'
   label=$(dispatch_label "$role" "$ticket" "$attempt")
   dispatch_dir=$(json_get "$sidecar" dispatch_dir) || dispatch_dir=$(dirname -- "$sidecar")
-  if ! json_get "$sidecar" dispatch_id >/dev/null 2>&1; then
+  dispatch_id=$(json_get "$sidecar" dispatch_id) || dispatch_id=
+  if [ -z "$dispatch_id" ]; then
     printf '%s → %s / ? / 无法核对：派发没完成\n' "$label" "$route_model"
     return 0
   fi
@@ -1117,7 +1159,17 @@ verify_sidecar() { # sidecar
       printf '%s → %s / ? / 无法核对：%s\n' "$label" "$route_model" "$note"
       return 0
     fi
-    ensure_model_recorded "$sidecar" "$dispatch_dir"
+    # The receipt of this round names the terminal (its own file: the one
+    # release keeps is not written over). An Orca that cannot give it names
+    # no terminal, so no handle from the sidecar is read.
+    if orca_orchestration_worker_show "$dispatch_id" > "$dispatch_dir/verify-worker-show.json" \
+      2>"$dispatch_dir/verify-worker-show.err"; then
+      receipt_terminal "$dispatch_dir/verify-worker-show.json" "$sidecar"
+    else
+      warn "orca orchestration worker-show failed for $dispatch_id: $(head -n 1 "$dispatch_dir/verify-worker-show.err")"
+      TERMINAL= TERMINAL_STATE=
+    fi
+    ensure_model_recorded "$sidecar" "$dispatch_dir" "$TERMINAL" "$TERMINAL_STATE"
     actual=$(json_get "$sidecar" actual_model.model) || actual=
   fi
   if [ -z "$actual" ]; then

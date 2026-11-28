@@ -252,7 +252,7 @@ No other wording for the next step ("回 find-next 选『先恢复』" and the l
 launchd runs `scripts/keeper.sh` every 10 minutes (service in `~/ops/services/spec-keeper/`) for repositories whose launch state does not set `auto_land` to false:
 
 - a parking report with `停车类别：quota|transient` whose `可恢复时间` has passed → `launch-wave --only <n> --apply`;
-- a claim that turned `interrupted` with no newer report → resumed the same way;
+- a claim that turned `interrupted` with no newer report → it asks Orca the same way first, since the session may still be working in the worktree (a resume would double it): `live` → left alone and notified once per Spec; `exited`, or no worker listed for the worktree at all → a confirmed death, it closes the terminal Orca has not released and resumes through the same claim; `unverifiable`, or an Orca that cannot answer → notified once per Spec and evidence, never resumed on a guess (a Spec whose worktree is gone has nothing to be live in: resumed without asking);
 - a claim still `active` with no write to the session transcript (subagents included), the Run directory or the worker run directories for 45 minutes → it asks Orca for the worker in the Spec worktree (`worker-list`, then `worker-show`): `live` → left alone, however old the files are (no 「继续」, nothing closed, nothing relaunched); `exited` → a confirmed failure, it closes the terminal Orca has not released, force-releases the claim and resumes; `unverifiable`, or no worker listed for the worktree, or an Orca that cannot answer → notified once per Spec and evidence, never resumed on a guess (Orca forbids a stop, a retry or a release on anything but an exited worker);
 - `decision` / `error` / `other` parks are only notified, once per report.
 

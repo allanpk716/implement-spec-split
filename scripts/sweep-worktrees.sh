@@ -394,7 +394,7 @@ emit() { # repo action path reason
 sweep_repo() { # repo path orca repo id
   local repo=$1 path=$2 orca_id=$3 name=${1#*/}
   local removed=0 would=0 keep=0 skip=0 failed=0 judgement=0
-  local cpath cbranch cisMain corphan cexists corca chere kind spec
+  local cpath cbranch cisMain corphan cexists corca chere spec
   local claim word verdict base reason
   "$GIT" -C "$path" worktree list --porcelain > "$WORK/worktrees.txt" 2>/dev/null || : > "$WORK/worktrees.txt"
   orca_worktree_list > "$WORK/orca-worktrees.json" 2>/dev/null || : > "$WORK/orca-worktrees.json"
@@ -418,12 +418,9 @@ sweep_repo() { # repo path orca repo id
       keep=$((keep + 1))
       continue
     fi
-    kind=
-    if [[ "$cbranch" =~ ^refs/heads/spec-([1-9][0-9]*)$ ]]; then
-      kind=spec
-      spec=${BASH_REMATCH[1]}
-    elif [[ "$cbranch" =~ ^refs/heads/spec-([1-9][0-9]*)-t[1-9][0-9]*$ ]]; then
-      kind=ticket
+    # A Spec branch spec-<n> or a Ticket branch spec-<n>-t<m>: both are the
+    # Spec <n>'s.
+    if [[ "$cbranch" =~ ^refs/heads/spec-([1-9][0-9]*)(-t[1-9][0-9]*)?$ ]]; then
       spec=${BASH_REMATCH[1]}
     else
       emit "$repo" skip "$cpath" "不是规格分支 spec-<n> 或票分支 spec-<n>-t<m>，不属于本流水线，不处理"

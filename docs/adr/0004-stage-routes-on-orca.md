@@ -11,8 +11,8 @@ supersedes: ADR-0002, ADR-0003
 - **六个 Stage，一张 Stage route 表**（GLOSSARY.md）：编排、讨论、调研起草、实现、审查、诊断，每项为（Launcher profile, 模型, 思考强度, 可选到期）。下一次派发或下一次新会话生效，不中途换。编排在 v1 锁定为 flash。只接受跑过冒烟测试的组合；审查与实现同模型时当场警告一次，不拦。默认表见 Consequences。
 - **执行方式由阶段固定，用户只选档案**：编排、讨论、实现由 Orca orchestration 托管（交互式 worker，生命周期交给 Orca）；调研起草、审查、诊断是 headless（`claude -p` / `codex exec`），保留退出码和只读违规检查的契约。
 - **Launcher profile 由本项目维护，不用 Orca agent id**：Orca 不能注册自定义 agent（stablyai/orca#2284），`openclaude` 槽位不接受 `--model`。GLM 启动器走「`orca terminal create --command "<launcher> --model … --effort …"` + `worker-start --terminal`」收编（`docs/orca-smoke-2026-11-27.md` 实测通过，含嵌套 worktree）。
-- **工作区是三层树**：主会话 → 规格（`new-child`）→ 票（`new-child`，`--base-branch spec-<n>`），侧栏可折叠；票合入后、规格落地后释放并删除工作区，停车的保留。`progress-tab.sh` 退役。merger 改为脚本，冲突才起 worker。
-- **规格会话入口靠脚本验证结果**：`worker-start` 把 Orca 的 preamble 放在 spec 前，`/implement-spec-split N` 由模型自己调用 Skill（实测 flash 会照做，但不是机制保证）。`launch-wave` 在限定时间内检查认领记录是否出现；没出现时先读终端，确认没开始（如 prompt 还没提交）才停掉、`--retry-of` 重派一次，看到在动就延长等待，判断不了就停车（社区实测「已投递」不等于已开始、启动可慢到 13 分钟，沉默时盲目重派会把副作用做两遍）。
+- **工作区是三层树**：主会话 → 规格（`new-child`）→ 票（`new-child`，`--base-branch spec-<n>`），侧栏可折叠；票合入后、规格落地后释放并删除工作区，停车的保留。`progress-tab.sh` 退役。merger 改为脚本，冲突才起 worker。（2026-11-28 注：实现是两层都走 `orca worktree create --parent-worktree path:<父工作区>` 建子工作区，不用 `new-child`——它没有 `--branch`、默认名字不满足集成分支必须是 `spec-<n>`，见 MAINTAINING 第 45 条；票那一层带 `--base-branch spec-<n>` 照旧。）
+- **规格会话入口靠脚本验证结果**：`worker-start` 把 Orca 的 preamble 放在 spec 前，`/implement-spec-split N` 由模型自己调用 Skill（实测 flash 会照做，但不是机制保证）。`launch-wave` 在限定时间内检查认领记录是否出现；没出现时先读终端，确认没开始（如 prompt 还没提交）才停掉、`--retry-of` 重派一次，看到在动就延长等待，判断不了就停车（社区实测「已投递」不等于已开始、启动可慢到 13 分钟，沉默时盲目重派会把副作用做两遍）。（2026-11-28 注：认领判据是认领记录里的 pid 非空——会话执行认领后才算已启动，只有预留记录（`pid: null`）不算，规格 #26 US19。）
 - **flash 主会话及其拉起的流程里，五个非编排阶段一律经路由表派发**，会话内用 Agent 工具做实现或审查由 hook 拦。CC 原生订阅会话保持现状（会话内子代理照用），只有经 `codex-worker.sh` 派出的 worker 受路由表影响：带 `--read-only` 读「调研起草」，否则读「实现」。（2026-11-28 注：规格 #26 票 #45 起，CC 原生订阅会话的实现阶段同样经派发模块（`stage-dispatch.sh`）走 Orca worker，不再用会话内子代理；只有第 7 步审查保留会话内子代理（`mattpocock-skills:code-review`），规格 US13 说的「会话内子代理不受影响」指的是 hook 不拦，不是实现仍可交给它。）
 
 ## Considered Options

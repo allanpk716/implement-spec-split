@@ -1105,6 +1105,14 @@ expect_has ' 1. #300 Hub root → /implement-spec-split 300 --auto-land' 'defaul
 expect_without '--impl' 'default command names no implementation backend' "$WORK/order-no-apart.out"
 expect_without ' 2. #390 ' 'tie-break spec follows equal-score lower specs' "$WORK/order-no-apart.out"
 
+# The suffix in the order comes from the shell side alone (CMD_SUFFIX), which
+# always passes it; the node side keeps no default of its own behind it.
+run_order "$WORK/order-suffix-custom.out" --parallel 5 --cmd-suffix '--no-auto-land'
+expect_exit 0 "a custom command suffix succeeds"
+expect_has ' 1. #300 Hub root → /implement-spec-split 300 --no-auto-land' 'a custom command suffix is used as the shell passed it' \
+  "$WORK/order-suffix-custom.out"
+expect_without '--auto-land' 'no default suffix is added behind the one the shell passed' "$WORK/order-suffix-custom.out"
+
 # An --apart pair whose other side is in flight (running, or interrupted and
 # resumed first) holds its idle side out of the new wave: a running or resumed
 # Spec runs beside the new wave, so "not in the same wave" alone would not keep

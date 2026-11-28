@@ -1279,9 +1279,14 @@ finished_ticket() {
   ORCA_TEST_CHECK_JSON=$WORK/check-$m.json
   run_module wait --sidecar "$RUN_DIR/dispatch-implement-$m.json" --timeout 1
 }
-# write_show <file> <state> <stage>: a worker-show receipt.
+# write_show <file> <state> <stage> [terminal] [terminalState]: a worker-show
+# receipt. With a terminal, the handle Orca names for the dispatch now and
+# that terminal's state, the two fields the real receipt carries and
+# keeper.sh reads; without one, a receipt that names no terminal.
 write_show() {
-  printf '%s\n' '{"ok":true,"result":{"dispatchId":"ctx_x","state":"'"$2"'","stage":"'"$3"'","liveness":"exited"}}' > "$1"
+  local terminal=
+  [ -z "${4:-}" ] || terminal=',"terminal":"'"$4"'","terminalState":"'"${5:-retained}"'"'
+  printf '%s\n' '{"ok":true,"result":{"dispatchId":"ctx_x","state":"'"$2"'","stage":"'"$3"'","liveness":"exited"'"$terminal"'}}' > "$1"
 }
 
 fresh_case
@@ -1322,7 +1327,7 @@ fi
 expect_file_has 'ARG --dispatch' 'worker-show and worker-release name the dispatch' "$ORCA_LOG"
 expect_count 'ARG ctx_50' 2 'both address the sidecar dispatch id' "$ORCA_LOG"
 expect_file_has 'ARG --terminal' 'the terminal this module opened is closed explicitly' "$ORCA_LOG"
-expect_file_has 'ARG term_impl' 'it is the adopted handle' "$ORCA_LOG"
+expect_file_has 'ARG term_impl' 'a receipt that names no terminal: the sidecar handle is the one closed' "$ORCA_LOG"
 expect_file_has 'ARG --tab' 'the whole tab goes' "$ORCA_LOG"
 if [ "$(value_after --worktree 1 "$ORCA_LOG")" = "path:$WORK/wt/case-$CASE_N/spec-26-t50" ]; then
   record PASS 'the child worktree is removed'
@@ -1589,13 +1594,13 @@ for text in '路由表（当前值）：' \
   expect_file_has "$text" "verify prints [$text]" "$RUN_STDOUT"
 done
 SEQUENCE=$(orca_sequence)
-if [ "$SEQUENCE" = 'read ' ]; then
-  record PASS 'a status line on the screen is enough: one Orca call, the screen read'
+if [ "$SEQUENCE" = 'worker-show read ' ]; then
+  record PASS 'a status line on the screen is enough: the worker-show of the round, then one screen read'
 else
-  record FAIL 'a status line on the screen is enough: one Orca call, the screen read' "sequence=[$SEQUENCE]"
+  record FAIL 'a status line on the screen is enough: the worker-show of the round, then one screen read' "sequence=[$SEQUENCE]"
 fi
 expect_file_has 'ARG --screen' 'the screen, not the accumulated stream, is what is read' "$ORCA_LOG"
-expect_file_has 'ARG term_impl' "the screen read is the sidecar's terminal" "$ORCA_LOG"
+expect_file_has 'ARG term_impl' 'the screen read is on a terminal Orca was asked about first' "$ORCA_LOG"
 expect_json 'glm-5.4[1m]' 'the reading is recorded in the sidecar as the model the status line showed' \
   "$RUN_DIR/dispatch-implement-41.json" actual_model.model
 expect_json status-line 'the sidecar names where the reading came from' "$RUN_DIR/dispatch-implement-41.json" actual_model.source
@@ -1641,10 +1646,10 @@ run_module verify --run-dir "$RUN_DIR"
 expect_exit 0 'verify exits 0 when the reading comes from the provider'
 expect_file_has '实现 #43 → glm-5.4 / glm-5.4 / 一致' 'a provider naming the route model reads as 一致' "$RUN_STDOUT"
 SEQUENCE=$(orca_sequence)
-if [ "$SEQUENCE" = 'read worker-show ' ]; then
-  record PASS 'the screen is read first, the full record second'
+if [ "$SEQUENCE" = 'worker-show read worker-show ' ]; then
+  record PASS 'the terminal is asked for first, the screen read second, the full record third'
 else
-  record FAIL 'the screen is read first, the full record second' "sequence=[$SEQUENCE]"
+  record FAIL 'the terminal is asked for first, the screen read second, the full record third' "sequence=[$SEQUENCE]"
 fi
 expect_file_has 'ARG --full' 'the second look is the full worker-show record' "$ORCA_LOG"
 expect_json glm-5.4 'the provider model is recorded' "$RUN_DIR/dispatch-implement-43.json" actual_model.model
@@ -1871,6 +1876,154 @@ expect_exit 0 'verify exits 0 on an empty run directory'
 expect_file_has '（本次 Run 没有派发 Orca worker）' 'an empty run directory says so under the check heading' "$RUN_STDOUT"
 expect_file_has '实现（implementation）：claude-glm / glm-5.4 / high（默认）' 'an empty run directory still prints the table' "$RUN_STDOUT"
 
+# --- the terminal handle is the receipt's, never the sidecar's straight ----------------
+# (lib-orca.sh Rule 3; spec #26 final review, hard violation 1.) The sidecar
+# keeps the handle terminal create returned; by release that handle may have
+# drifted to another terminal, so the reading and the close take the handle
+# this round's worker-show receipt names (result.terminal), the sidecar's only
+# when the receipt names none, and a terminal Orca has already released
+# (terminalState released, the auto-release after a settled worker) is neither
+# read nor closed. A run directory of its own, so that what is asked of Orca
+# is about these dispatches alone.
+RUN_DIR=$WORK/runs/handle-$CASE_N
+mkdir -p "$RUN_DIR"
+ORCA_TEST_SHOW_FULL_JSON=
+
+# verify: the receipt names another handle than the sidecar does.
+ORCA_TEST_DISPATCH_ID=ctx_60
+dispatch_ticket 60
+SIDECAR_60=$RUN_DIR/dispatch-implement-60.json
+expect_json term_impl 'the sidecar keeps the handle the dispatch opened' "$SIDECAR_60" terminal
+write_show "$WORK/show-term-now.json" succeeded settled term_now retained
+ORCA_TEST_SHOW_JSON=$WORK/show-term-now.json
+ORCA_TEST_READ_JSON=$WORK/screen-glm.json
+: > "$ORCA_LOG"
+run_module verify --run-dir "$RUN_DIR"
+expect_exit 0 'verify exits 0 when the receipt names another terminal than the sidecar does'
+SEQUENCE=$(orca_sequence)
+if [ "$SEQUENCE" = 'worker-show read ' ]; then
+  record PASS 'verify asks worker-show first, then reads the screen of the terminal the receipt names'
+else
+  record FAIL 'verify asks worker-show first, then reads the screen of the terminal the receipt names' "sequence=[$SEQUENCE]"
+fi
+if [ "$(value_after --terminal 1 "$ORCA_LOG")" = term_now ]; then
+  record PASS 'the screen read is on the handle of the receipt, not the sidecar'
+else
+  record FAIL 'the screen read is on the handle of the receipt, not the sidecar' "handle=[$(value_after --terminal 1 "$ORCA_LOG")]"
+fi
+expect_count 'ARG term_impl' 0 'the sidecar handle is not reused while the receipt names one' "$ORCA_LOG"
+expect_json 'glm-5.4[1m]' 'the reading comes off the screen of that terminal' "$SIDECAR_60" actual_model.model
+
+# verify: a terminal Orca has already released is not read; the full record's
+# provider is the reading.
+ORCA_TEST_DISPATCH_ID=ctx_61
+dispatch_ticket 61
+SIDECAR_61=$RUN_DIR/dispatch-implement-61.json
+write_show "$WORK/show-released.json" succeeded settled term_impl released
+ORCA_TEST_SHOW_JSON=$WORK/show-released.json
+write_provider "$WORK/provider-glm-61.json" 'glm-5.4'
+ORCA_TEST_SHOW_FULL_JSON=$WORK/provider-glm-61.json
+: > "$ORCA_LOG"
+run_module verify --run-dir "$RUN_DIR"
+expect_exit 0 'verify exits 0 for a worker whose terminal Orca has released'
+SEQUENCE=$(orca_sequence)
+if [ "$SEQUENCE" = 'worker-show worker-show ' ]; then
+  record PASS 'a released terminal is not read: the receipt, then the full record'
+else
+  record FAIL 'a released terminal is not read: the receipt, then the full record' "sequence=[$SEQUENCE]"
+fi
+expect_json glm-5.4 'the provider of the full record is the reading' "$SIDECAR_61" actual_model.model
+
+# verify: an Orca that cannot give the receipt names no terminal, so no handle
+# the sidecar kept alone is read; the verdict is 无法核对 and the exit 0.
+ORCA_TEST_DISPATCH_ID=ctx_62
+dispatch_ticket 62
+ORCA_TEST_SHOW_JSON=
+ORCA_TEST_SHOW_FULL_JSON=
+ORCA_TEST_FAIL='orchestration worker-show'
+: > "$ORCA_LOG"
+run_module verify --run-dir "$RUN_DIR"
+expect_exit 0 'verify exits 0 when worker-show fails'
+expect_file_has '实现 #62 → glm-5.4 / ? / 无法核对' 'a dispatch Orca cannot name a terminal for is 无法核对' "$RUN_STDOUT"
+expect_file_has 'orca orchestration worker-show failed for ctx_62' "Orca's own error is passed through on stderr" "$RUN_STDERR"
+if grep -q '^read$' "$ORCA_LOG"; then
+  record FAIL 'no screen is read on a handle only the sidecar knows'
+else
+  record PASS 'no screen is read on a handle only the sidecar knows'
+fi
+ORCA_TEST_FAIL=
+
+# release: the receipt names another handle than the sidecar does: that one
+# is read and closed, the sidecar's never, and the order is as ever.
+write_show "$WORK/show-term-63.json" succeeded settled term_now retained
+ORCA_TEST_SHOW_JSON=$WORK/show-term-63.json
+ORCA_TEST_READ_JSON=$WORK/screen-$CASE_N.json
+ORCA_TEST_SHOW_FULL_JSON=
+ORCA_TEST_DISPATCH_ID=ctx_63
+finished_ticket 63
+SIDECAR_63=$RUN_DIR/dispatch-implement-63.json
+: > "$ORCA_LOG"
+run_module release --sidecar "$SIDECAR_63"
+expect_exit 0 'release exits 0 when the receipt names another terminal than the sidecar does'
+SEQUENCE=$(orca_sequence)
+if [ "$SEQUENCE" = 'worker-show read worker-release close rm ' ]; then
+  record PASS 'the settled receipt is reused: worker-show, read, worker-release, close, rm'
+else
+  record FAIL 'the settled receipt is reused: worker-show, read, worker-release, close, rm' "sequence=[$SEQUENCE]"
+fi
+if [ "$(value_after --terminal 1 "$ORCA_LOG")" = term_now ] && [ "$(value_after --terminal 2 "$ORCA_LOG")" = term_now ]; then
+  record PASS 'both the reading and the close take the handle of the receipt'
+else
+  record FAIL 'both the reading and the close take the handle of the receipt' \
+    "handles=[$(value_after --terminal 1 "$ORCA_LOG")] [$(value_after --terminal 2 "$ORCA_LOG")]"
+fi
+expect_count 'ARG term_impl' 0 'the sidecar handle, which may have drifted to another terminal, is never addressed' "$ORCA_LOG"
+expect_json 'glm-5.4[1m]' 'the reading was taken off the receipt terminal screen' "$SIDECAR_63" actual_model.model
+expect_stdout "released ctx_63 ($WORK/wt/case-$CASE_N/spec-26-t63 removed)" 'the release itself is as ever'
+
+# release: a terminal Orca has already released is not closed (its handle may
+# be another terminal's by now), and the release goes on to the end.
+ORCA_TEST_DISPATCH_ID=ctx_64
+finished_ticket 64
+SIDECAR_64=$RUN_DIR/dispatch-implement-64.json
+write_show "$WORK/show-released-64.json" succeeded settled term_impl released
+ORCA_TEST_SHOW_JSON=$WORK/show-released-64.json
+: > "$ORCA_LOG"
+run_module release --sidecar "$SIDECAR_64"
+expect_exit 0 'release exits 0 for a worker whose terminal Orca has already released'
+SEQUENCE=$(orca_sequence)
+if [ "$SEQUENCE" = 'worker-show worker-show worker-release rm ' ]; then
+  record PASS 'a released terminal is neither read nor closed: receipt, full record, worker-release, rm'
+else
+  record FAIL 'a released terminal is neither read nor closed: receipt, full record, worker-release, rm' "sequence=[$SEQUENCE]"
+fi
+CLOSE_CALLS=$(grep -c '^close$' "$ORCA_LOG")
+READ_CALLS=$(grep -c '^read$' "$ORCA_LOG")
+if [ "$CLOSE_CALLS" -eq 0 ] && [ "$READ_CALLS" -eq 0 ]; then
+  record PASS 'zero terminal close calls, and no read, for a released terminal'
+else
+  record FAIL 'zero terminal close calls, and no read, for a released terminal' "close=$CLOSE_CALLS read=$READ_CALLS"
+fi
+expect_count 'ARG --terminal' 0 'no terminal is addressed at all' "$ORCA_LOG"
+expect_stdout "released ctx_64 ($WORK/wt/case-$CASE_N/spec-26-t64 removed)" 'the worktree is removed all the same'
+expect_file_has '已由 Orca 释放：未读屏' 'the sidecar keeps why no model was read' "$SIDECAR_64"
+if [ -n "$(json_field "$SIDECAR_64" released_at)" ]; then
+  record PASS 'the sidecar records the release'
+else
+  record FAIL 'the sidecar records the release'
+fi
+: > "$ORCA_LOG"
+run_module verify --run-dir "$RUN_DIR"
+expect_exit 0 'verify after these releases exits 0'
+expect_file_has '实现 #63 → glm-5.4 / glm-5.4[1m] / 一致' 'the receipt terminal reading reads as its record says' "$RUN_STDOUT"
+expect_file_has '实现 #64 → glm-5.4 / ? / 无法核对：终端没有 Orca 当前给出的句柄，或已由 Orca 释放：未读屏' \
+  'a released dispatch that was never read says so, from its record' "$RUN_STDOUT"
+if grep -Eq '^(read|close)$' "$ORCA_LOG"; then
+  record FAIL 'a released dispatch is neither read nor closed by a later verify' "log=$(cat "$ORCA_LOG")"
+else
+  record PASS 'a released dispatch is neither read nor closed by a later verify'
+fi
+
 # --- headless stages: handed to the executors that read the table -------------------
 
 # research: codex-worker.sh with --read-only, in the cwd given, run dir of its own.
@@ -2051,12 +2204,17 @@ for text in 'Usage:' 'stage-dispatch.sh dispatch --stage implementation' \
   'merge role never starts lean' 'exits 8 before reporting anything else' \
   'report-from-worktree.md' 'worker_done' '--delete-branch' 'Test hooks:' \
   'verify, for the reports' 'terminal read --screen' 'projection.provider' \
-  'release takes the reading before' 'verify exits 0 whatever' 'The effort is not verified'; do
+  'release takes the reading before' 'verify exits 0 whatever' 'The effort is not verified' \
+  'worker-show receipt names (result.terminal' 'lib-orca.sh' 'Rule 3' \
+  'terminalState is released' 'so that one is not closed' \
+  'verify asks worker-show before terminal' 'for the current one, Rule 3'; do
   expect_file_has "$text" "header documents [$text]" "$HEADER"
 done
 run_module --help
 expect_exit 0 '--help exits 0'
 expect_file_has 'Usage: stage-dispatch.sh' '--help prints the usage' "$RUN_STDOUT"
+expect_file_has 'warns, never fails' 'the usage says verify never fails on a verdict' "$RUN_STDOUT"
+expect_file_has 'unwritable sidecar excepted' 'the usage names the two ways verify does exit non-zero' "$RUN_STDOUT"
 
 # The module leaves the Orca executable to the library and keeps none of its own.
 if grep -Fq 'ISS_ORCA' "$SCRIPT"; then

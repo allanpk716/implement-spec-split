@@ -727,15 +727,16 @@ if ! orca_status > "$run_out" 2> "$run_err" || ! orca_worktrees; then
   exit 2
 fi
 
-# The 编排 route decides which Orca agent slot starts a Spec session. It is
-# read here, once per wave before anything is changed, so a change to the table
-# is picked up by the next dispatch; the stage is locked, so the slot is
-# openclaude unless the table cannot be read at all.
-orchestration_agent() {
-  local profile
-  profile=$("$STAGE_ROUTE" --print orchestration profile 2> "$run_err") ||
-    die "could not read the 编排 route ($STAGE_ROUTE --print orchestration profile): $(first_line "$run_err")" 64
-  case "$profile" in
+# The 编排 route decides which Orca agent slot starts a Spec session, and its
+# profile is the launcher a person restarts a session with (a profile is its
+# launcher's name: claude, claude-glm, claude-flash). Both are read here, once
+# per wave before anything is changed, so a change to the table is picked up by
+# the next dispatch; the stage is locked, so the profile is claude-flash unless
+# the table cannot be read at all.
+ORCHESTRATION_PROFILE=$("$STAGE_ROUTE" --print orchestration profile 2> "$run_err") ||
+  die "could not read the 编排 route ($STAGE_ROUTE --print orchestration profile): $(first_line "$run_err")" 64
+orchestration_agent() { # profile -> the Orca agent slot it starts a Spec session with
+  case "$1" in
     claude-flash)
       printf '%s' openclaude
       ;;
@@ -743,11 +744,11 @@ orchestration_agent() {
       printf '%s' claude
       ;;
     *)
-      die "the 编排 route names the profile $profile, which has no Orca agent slot to start a Spec session with" 64
+      die "the 编排 route names the profile $1, which has no Orca agent slot to start a Spec session with" 64
       ;;
   esac
 }
-AGENT=$(orchestration_agent) || exit $?
+AGENT=$(orchestration_agent "$ORCHESTRATION_PROFILE") || exit $?
 
 if ! "$MAX_WORKERS_CMD" "$WORKERS"; then
   die "max-workers failed"
@@ -1095,12 +1096,13 @@ NODE
 # merely slow is not started twice. Either way the lines name what was seen,
 # the Run and the dispatch, and how to restart.
 park_spec() { # spec reason dispatch path command release
-  local spec=$1 reason=$2 dispatch=$3 path=$4 command=$5 restart
+  local spec=$1 reason=$2 dispatch=$3 path=$4 command=$5 restart launcher=$ORCHESTRATION_PROFILE
   if [ "$6" = 1 ]; then
     claim_main release "$spec" --force >/dev/null 2>&1 || true
     restart="launch-wave.sh --repo $REPO --only $spec --apply"
   else
-    restart="确认该终端已停后 cd $path 运行 claude-flash '$command'，或等预留到期后运行 launch-wave.sh --repo $REPO --only $spec --apply"
+    # The 编排 route's profile is the launcher: never a constant here.
+    restart="确认该终端已停后 cd $path 运行 ${launcher} '$command'，或等预留到期后运行 launch-wave.sh --repo $REPO --only $spec --apply"
   fi
   printf '#%s 停车：%s；Run %s，dispatch %s。\n' "$spec" "$reason" "$RUN_ID" "$dispatch"
   printf '  重新启动：%s\n' "$restart"

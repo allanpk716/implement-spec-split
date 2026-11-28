@@ -80,7 +80,7 @@ flash 模式不使用这个例外开关：flash 会话一行源码都不写（�
 implement-spec-split 派发实现类 worker（票的实现、fix）时默认精简启动（GLOSSARY.md「Lean start (精简启动)」）：`scripts/stage-dispatch.sh` 用「实现」路由的启动器加 `--bare --append-system-prompt-file <精简规则文件> [--mcp-config …]` 开一个终端，再用 `worker-start --terminal` 收编。`--bare` 不加载 CLAUDE.md、技能、插件和 **hooks**——包括本目录的 delegate-guard（flash 模式的源码拦截）、subagent-guard（flash 主线程的子代理拦截）、land-push-guard、unattended-ask-guard、unattended-stop-guard。所以：
 
 - 对精简启动的 worker，这些 hook 的硬拦不存在。原来靠 hook 挡住的事（flash 会话不写源码、没持落地锁不许 push、无人值守不问人、收尾前必须 close-self）降为**提示词**：写在 Brief（`find-next/templates/brief-implement.md` 的「要求」）和精简规则文件（`templates/lean-rules.md`，人工票 #39 落地）里。
-- 兜底不在 hook，在**合入前的脚本门和审查**：`scripts/merge-ticket.sh` 合入前检查票分支有新提交、票工作区和集成工作区都干净，合入后跑测试命令，任何一项不满足就不合（退出 2 / 4）；第 7 步审查照旧。worker 也没有 push 的机会：合入、落地都由规格会话做，Brief 明确写「不合并、不 push」。
+- 兜底不在 hook，在**合入前的脚本门和审查**：`scripts/merge-ticket.sh` 合入前检查票分支有新提交、票工作区和集成工作区都干净——任何一项不满足就不合（退出 2，测试也不跑）；合入后跑测试命令，测试红时 merge commit 保留、退出 4，由 fix 角色在它上面接着修；第 7 步审查照旧。worker 也没有 push 的机会：合入、落地都由规格会话做，Brief 明确写「不合并、不 push」。
 - merge 角色（解冲突）永远不精简启动——它在集成分支上干活，需要 CLAUDE.md 和 hooks 都在——所以 land-push-guard 等对它照常生效。
 - 没有精简规则文件时派发模块退回普通启动，hooks 照常加载；`ISS_DISPATCH_BARE=0` 也可关掉精简启动。每次派发是哪种启动记在 sidecar 的 `bare` / `bare_note`。
 - 规格会话本身不是精简启动的，上面几个 hook 对它照常生效：它一行源码不写（flash 模式）、push 前必须持落地锁、无人值守时不问人。
