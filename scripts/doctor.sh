@@ -226,8 +226,8 @@ for (const row of out.checks) {
       case 'loosen':
         level = 'WARN';
         hintZh = MANUAL_ZH; hintEn = MANUAL_EN;
-        zh = `放宽项 ${name} 未执行：本机配置比仓库期望宽`;
-        en = `Loosening ${name} is not applied: the local configuration is looser than the repository expects`;
+        zh = `放宽项 ${name} 未执行：本机配置比仓库期望严`;
+        en = `Loosening ${name} is not applied: the local configuration is stricter than the repository expects`;
         break;
       default:
         level = 'FAIL';
