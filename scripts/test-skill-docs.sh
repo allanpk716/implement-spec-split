@@ -44,7 +44,9 @@
 # backend" and calls the worker it starts a worker, not an implementer
 # (Standards 4 — the same wording in brief-task.md); the Unattended landing
 # entry of GLOSSARY limits the install to this skill's own repository and no
-# longer the loose tickets (Standards 5).
+# longer the loose tickets (Standards 5); the loosening bullet of step 8 is
+# pinned as its whole sentence, since the bare heading appears on five lines of
+# SKILL.md and a pin on it alone caught nothing (Standards 8).
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -229,7 +231,12 @@ has 'pick a reversible option by 「可逆性高 > 改动面小 > 与现有 ADR 
 has 'preferring the reviewer' 'SKILL.md step 8 prefers a recommendation that is reversible and not outward-facing' "$SKILL"
 has 'parks with category `auth`' 'SKILL.md step 8 parks an item that needs the owner identity as auth' "$SKILL"
 has 'never invent an option' 'SKILL.md step 8 parks an item with no reversible option instead of inventing one' "$SKILL"
-has '「未执行的放宽项」' 'SKILL.md records a loosening option as not executed' "$SKILL"
+# The loosening bullet of step 8 is pinned as its whole sentence: the string
+# 「未执行的放宽项」 alone appears on five lines of SKILL.md (eight times), so a
+# pin on it alone stayed green with this bullet gone (规格 #58 复审 Standards
+# 判断项 8).
+has 'An option that loosens a safety boundary is never taken, whatever the rule above would pick: record it under 「未执行的放宽项」 in the landing report and decide among the remaining options as above.' \
+  'SKILL.md records a loosening option as not executed' "$SKILL"
 without 'Park only for an item that is marked `可自动采纳：否`' 'SKILL.md step 8 no longer parks on 可自动采纳：否' "$SKILL"
 # The category table is down to quota / transient / auth / error, the same four
 # in the machine-readable line, the table and the keeper bullet; auth covers an
