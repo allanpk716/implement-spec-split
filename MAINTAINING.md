@@ -514,8 +514,7 @@
 - 验收检查能不能拦住不合格的 worker。L3 里所有 worker 一次就通过了，没有触发过拦截。
 - GLM 出错的处理：碰到 auth、quota 或 transient 错误时，主代理会不会停下来问用户。`selftest-codex.sh` V1 只测了 wrapper 会不会给出正确的退出码。
 - 有 PR 流程的仓库里，draft PR 能不能开出来、最后能不能标成可以 review。
-- 「讨论」路由切到 glm-5.4 后的真实 Design session（Orca 终端里起 `claude-glm`、靠 `exit-code` 判定结束、收编后经 Skill 工具加载上游技能、mockit 提交）没有实机跑过，归规格 #25 的人工冒烟；`claude-glm --resume` 续接官方 Opus 开的 Design session 只验证了同一端点下的续接。`opus-review.sh` 经 `claude-glm` 的无头调用已冒烟（落到 `glm-5.4[1m]`）。
-- 路由表的真实冒烟（在 Orca 里各切换一次讨论、审查、实现、调研起草的路由，确认下一次派发生效、模型与思考强度生效、报告首部写对）没有跑过，不进自动测试；已验证目录里各项的证据见 `scripts/stage-route.sh` 头注释。
+- 「讨论」路由的真实 Design session（2026-11-28 在真机走过一遍，`docs/orca-smoke-2026-11-27.md` 第三轮 2）：Orca 终端里起 `claude-glm`、收编、handoff 上报、切回主会话都成立，**上游技能经 Skill 工具加载不成立**——`grill-with-docs`、`wayfinder`、`to-spec`、`to-tickets` 都设了 `disable-model-invocation: true`，`design-session.sh` 写进 prompt 的首句做不到，那次是用户在 Design session 标签里手敲 `/mattpocock-skills:grill-with-docs` 才走完；Design session 停下等人时，它的 escalation 和 question 被 `design-session.sh` 的等待循环取走后不转述，主会话没有提示。还没有实机跑过的：mockit 提交、`claude-glm --resume` 续接官方 Opus 开的 Design session（只验证过同一端点下的续接）、map（wayfinder）、「没交接就退出」时靠 `exit-code` 判定结束的那条分支。路由表的真实冒烟（审查、诊断、实现、调研起草各切换一次，下一次派发生效、模型与思考强度生效、报告首部写对）同一天做完，不进自动测试，记录在同一节；已验证目录里各项的证据见 `scripts/stage-route.sh` 头注释。
 - `codex-glm / glm-5.3-flash` 不在已验证目录里（`docs/codex-backend.md` E17）：flash 不在 `~/.codex-worker/models.json` 目录里，L1 没有实证；L1 通过也只证明端点接受该型号，不证明 `model_reasoning_effort = "high"` 被接受或有效，也不证明 1M 上下文可用。
 
 验证过的项目从这里删掉，发现的新问题补到"设计要点"里。
