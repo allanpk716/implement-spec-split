@@ -17,7 +17,8 @@
 # 不看链接文字：README 里经 ~/.claude/skills/implement-spec-split/<name> 写的链
 # 解析到同一目录，同样算就位。
 #
-# 用法：./install.sh [--check] [--json] [-h|--help]
+# 用法：./install.sh [--check] [--json] [--help]（-h 等同 --help；与未知参数时
+#   打印的 usage 行同一个写法）
 #   默认    安装：建缺的链、改指错的链、删悬空链、补不满足的 tighten 项，每处修改
 #           打印一行；重复运行零修改
 #   --check 只报告不改（两段都是：不写文件、不建备份）；退出码 0 = 全部就位，1 = 还有
@@ -26,8 +27,11 @@
 #
 # 退出码：0 全部就位；1 仍有未就位的（另一份 clone 的真实目录、建链失败、Windows 的
 #   手工步骤、--check 下不满足的 tighten 项、未执行的放宽项、settings.json 解析不了、
-#   改后校验不过）；2 跑不起来（缺命令、不在 git checkout 里、建不出技能目录、期望项
-#   清单读不了或不是 JSON 数组）；64 用法错误。
+#   改后校验不过）；2 跑不起来，按脚本里的先后顺序：缺命令（node、git）、定位不到
+#   脚本所在目录、不在 git checkout 里、HOME 未设（也没设 ISS_SKILLS_DIR /
+#   ISS_CLAUDE_SETTINGS / CLAUDE_CONFIG_DIR）、期望项清单读不了或不是 JSON 数组、
+#   建不出临时目录（mktemp -d）、建不出技能目录、仓库里没有跟踪的 SKILL.md；
+#   64 用法错误。
 #
 # 环境变量：ISS_SKILLS_DIR  软链落点，默认 ~/.claude/skills；测试与冒烟指向临时目录，
 #     设了它脚本只改它指向的位置。
