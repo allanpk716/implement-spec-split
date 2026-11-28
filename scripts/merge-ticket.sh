@@ -267,10 +267,12 @@ numbered_pairs() { # base integration_tip merge_base ticket_tip
 }
 
 # The newest commit of <side> that touched <path>, `<hash> <subject>`, for the
-# lines of a collision: the Integration side from the base to its tip (merge
-# commits counted: a landed Ticket's change appears in its merge commit), the
-# Ticket side from the Integration tip to the Ticket tip (its own commits
-# only). Prints nothing when no commit of that side did.
+# lines of a collision: the Integration side from the base to its tip (with
+# no `--no-merges`: a conflict-resolving merge can be the commit that touched
+# the path; a plain landing merge is TREESAME to its Ticket parent and git
+# names the Ticket's own commit instead), the Ticket side from the Integration
+# tip to the Ticket tip (its own commits only). Prints nothing when no commit
+# of that side did.
 side_commit() { # side from to path
   if [ "$1" = ticket ]; then
     git -C "$WORKTREE" log --no-merges -1 --format='%h %s' "$2..$3" -- "$4" 2>/dev/null
