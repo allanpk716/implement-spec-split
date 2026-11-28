@@ -10,7 +10,8 @@
 # Read-only: it never tags and never pushes. claim.sh status creates an empty
 # .git/implement-spec-split/claims/ when that directory does not exist yet;
 # nothing else is written, --run-dir aside: what its verify writes stays
-# inside the run directory it is given (the model it read, in each sidecar).
+# inside the run directory it is given (the model it read, in each sidecar,
+# and the worker-show receipt of a live reading beside it).
 #
 # --run-dir <dir> names the Spec's run directory (the Spec Run root, where
 # scripts/stage-dispatch.sh keeps its sidecars) and makes the report end with

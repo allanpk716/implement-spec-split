@@ -964,7 +964,9 @@ write_claim() { # spec, pid_start of the recorded holder
 
 # Scenario 21: the human-only Spec has its integration branch and a live claim
 # record: it reads as 实现中, and the release advice names it instead of A.
-# (Numbered from 21: 16–18 are --run-dir's, 票 #47, ahead in this file.)
+# (Numbered from 21: 16–18 are --run-dir's, 票 #47, ahead in this file. On
+# main these five were 16–20; the merge moved them up by 5 as a block, so
+# 19–20 are unused.)
 git -C "$REPO" branch spec-26
 write_claim 26 "$HOLDER_START"
 run_report "$WORK/s21.out" "$WORK/s21.err" "$REPO"
@@ -1051,6 +1053,17 @@ cat > "$WORK/s25.expected" <<'EOF'
    回复「发版」我来打 tag 并推送（打之前会先跟你确认版本号）。
 EOF
 expect_same_file "$WORK/s25.expected" 'graph running with a free claim still reads as 实现中 and recommends B' "$WORK/s25.out"
+
+# Scenario 26: the shape #15 was reported in — a stale claim record whose
+# integration branch is gone (since Scenario 25). claim.sh status says free,
+# so the graph's word stands and nobody is named: byte for byte as Scenario
+# 23, which had no record at all.
+GH_DATA=$GH_J
+rm -f "$CLAIMS_J/spec-27.json"
+write_claim 26 dead-for-test
+run_report "$WORK/s26.out" "$WORK/s26.err" "$REPO"
+expect_exit 0 'stale claim without an integration branch exits zero'
+expect_same_file "$WORK/s23.expected" 'stale claim without an integration branch reads as 待开始 and recommends A' "$WORK/s26.out"
 
 # ---------------------------------------------------------------- usage errors
 
