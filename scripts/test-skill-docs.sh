@@ -9,7 +9,10 @@
 # going red. The cumulative review's settled points (MAINTAINING 第 51 条) are
 # pinned the same way: find-next's flash default, delegate-guard's flash
 # reason, the === TASK === form the guards read and the hooks README's
-# fail-open wording.
+# fail-open wording. So is the merger's exit 6 wiring (规格 #61 票 #74 and the
+# review fixes after it): the step 5 / 9.1 re-bump dispatch forms, the one
+# review of the re-bump and the conflict resolution, and every 9.1 round
+# taking the next free --attempt.
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
