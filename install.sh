@@ -385,10 +385,11 @@ stale_links() {
 #             command names the hook -- the one doctor.sh judges; without such an
 #             entry it is unregistered, which is not drift.
 #   fix       tighten item <item>: append its missing tools to that entry's
-#             matcher, keep the file's indentation and trailing newline, and put
-#             the new text in place through a temporary file beside it (rename is
-#             atomic on one filesystem). Exit 3 when settings.json is not JSON,
-#             4 when there is nothing to fix, 5 when the write failed.
+#             matcher, keep the file's indentation, trailing newline and rwx
+#             permission bits, and put the new text in place through a temporary
+#             file beside it (rename is atomic on one filesystem). Exit 3 when
+#             settings.json is not JSON, 4 when there is nothing to fix, 5 when
+#             the write failed.
 #   validate  exit 0 when settings.json parses, 1 when it does not.
 config_node() {
   SETTINGS_JSON=$SETTINGS_JSON EXPECTATIONS=$EXPECTATIONS ISS_OP=$1 ISS_ITEM=${2:-} node <<'NODE'
@@ -499,6 +500,11 @@ function fix() {
   const tmp = file + '.install-' + process.pid + '.tmp';
   try {
     fs.writeFileSync(tmp, text);
+    // The new file takes the rwx bits of the one it replaces (0600 stays
+    // 0600): the backup and the restore keep them (cp -p), so a rewrite must
+    // not be the one path that widens the file. A fresh file would get the
+    // default mode of the process umask instead.
+    fs.chmodSync(tmp, fs.statSync(file).mode & 0o777);
     fs.renameSync(tmp, file);
   } catch (e) {
     try { fs.unlinkSync(tmp); } catch {}

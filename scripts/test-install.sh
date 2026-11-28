@@ -285,6 +285,23 @@ expect_same_file() { # a b name
   fi
 }
 
+# mode_of <file>: the rwx bits of the file's mode in octal (600, 644, ...), read
+# the way install.sh reads them.
+mode_of() {
+  node -e 'process.stdout.write((require("fs").statSync(process.argv[1]).mode & 0o777).toString(8))' "$1"
+}
+
+# expect_mode <file> <octal rwx bits> <name>
+expect_mode() {
+  local mode
+  mode=$(mode_of "$1" 2>/dev/null)
+  if [ "$mode" = "$2" ]; then
+    record PASS "$3"
+  else
+    record FAIL "$3" "mode is ${mode:-?}, expected $2: $(ls -l "$1" 2>&1 | head -c 200)"
+  fi
+}
+
 # expect_settings_at <file> <name> <js body of a function (orig, now, deepEqual)>:
 # the copy the case saved as settings.before (orig) and the settings file (now),
 # both parsed, go through the body, which must return; deepEqual compares
@@ -918,6 +935,49 @@ else
   record FAIL "no trailing newline is added" "the file ends with a newline"
 fi
 expect_settings "no-newline file: the matcher is fixed" 'return now.hooks.PreToolUse[0].matcher === "Edit|Write|Bash"'
+
+# 23b. The permission bits of settings.json survive the rewrite (规格 #58 审查
+# 做错 5). The fix writes a temporary file and renames it over the old one, so
+# without care the file would end up with the umask's default mode: 0600 would
+# become 0644, readable by everyone. The rewritten file, the backup and a
+# restore from the backup all keep the mode the file had -- the backup and the
+# restore go through cp -p, the rewrite sets the bits on the temporary file
+# before the rename. Three modes are tried, so that at least one always differs
+# from what the umask would give (022 makes new files 644, 077 makes them 600).
+for MODE in 600 640 644; do
+  new_case
+  make_repo "$CASE_DIR/repo" find-next
+  write_settings 'Edit|Write|NotebookEdit'
+  chmod "$MODE" "$CASE_SETTINGS"
+  cp "$CASE_SETTINGS" "$CASE_DIR/settings.before"
+  expect_mode "$CASE_SETTINGS" "$MODE" "mode $MODE: the fixture starts with that mode"
+  run_install "$REPO"
+  expect_exit 0 "mode $MODE: the install exits 0"
+  expect_settings "mode $MODE: the matcher is fixed" 'return now.hooks.PreToolUse[0].matcher === "Edit|Write|NotebookEdit|Bash"'
+  expect_out_count 1 '已补为' "mode $MODE: one modification line"
+  expect_mode "$CASE_SETTINGS" "$MODE" "mode $MODE: the rewritten settings.json keeps its permission bits"
+  expect_backups 1 "mode $MODE: one backup"
+  expect_mode "$CASE_CLAUDE/backups/install-$(ls "$CASE_CLAUDE/backups" | sed -n 's/^install-//p' | head -n 1)/settings.json" "$MODE" "mode $MODE: the backup keeps the permission bits"
+  # Nothing else was left beside settings.json: no temporary file of the fix.
+  if [ "$(ls -A "$CASE_CLAUDE" | tr '\n' ' ')" = "backups settings.json " ]; then
+    record PASS "mode $MODE: no temporary file is left beside settings.json"
+  else
+    record FAIL "mode $MODE: no temporary file is left beside settings.json" "$(ls -A "$CASE_CLAUDE" | tr '\n' ' ')"
+  fi
+done
+# The restore path keeps them too: when the written file does not parse and
+# the backup is put back, the file has the mode it started with.
+new_case
+make_repo "$CASE_DIR/repo" find-next
+write_settings 'Edit|Write|NotebookEdit'
+chmod 600 "$CASE_SETTINGS"
+cp "$CASE_SETTINGS" "$CASE_DIR/settings.before"
+EXTRA_ENV='ISS_INSTALL_FAULT=corrupt-settings'
+run_install "$REPO"
+expect_exit 1 "mode 600: a restore after an unparseable write exits 1"
+expect_same_file "$CASE_SETTINGS" "$CASE_DIR/settings.before" "mode 600: the restored file is the original"
+expect_mode "$CASE_SETTINGS" 600 "mode 600: the restored settings.json keeps its permission bits"
+expect_mode "$CASE_CLAUDE/backups/install-$(ls "$CASE_CLAUDE/backups" | sed -n 's/^install-//p' | head -n 1)/settings.json" 600 "mode 600: the backup of the restored file keeps the permission bits"
 
 # 24. No delegate-guard registration: not drift, not handled, not reported --
 # a settings.json with other hooks only, or a PreToolUse that is not an array.
