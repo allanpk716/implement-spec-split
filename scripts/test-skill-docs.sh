@@ -29,15 +29,17 @@
 # left and 要你做的 naming a Ticket merged and left open by its number, the
 # `剩余：` lines under 细节, all four forms of what a Ticket waits for in SKILL.md
 # and GLOSSARY, and no umbrella "implementation ticket" on the `实现票` line.
-# So are the two
-# rules of ticket #79: tests and verification finish in the foreground before
-# the final report (the Brief templates and the dispatch texts of steps 5, 8
-# and 9.1), and a main session verifies a worker gone idle without a report
-# itself (ps, git) instead of waiting again. Its review settled where each is
-# written and pointed to, and that is pinned too: the rule once in step 5's
-# `3` line and once in the section every find-next Brief template shares,
-# Recovery's never-stop rule with that worker as its one exception, Orca's
-# mail read by its body, and the evidence of such a worker in a file of its own.
+# The merge review after that (合并复审) pinned one sentence more: step 9's `2`
+# line hands a live role that went idle without a report to "Dispatching a role"
+# item 6, never waited for again.
+# So are the two rules of ticket #79: tests and verification finish in the
+# foreground before the final report (the Brief templates and the dispatch texts
+# of steps 5, 8 and 9.1), and a main session verifies a worker gone idle without
+# a report itself (ps, git) instead of waiting again. Its review settled where
+# each is written and pointed to, and that is pinned too: the rule once in step
+# 5's `3` line and once in the section every find-next Brief template shares,
+# Recovery's never-stop rule with that worker as its one exception, Orca's mail
+# read by its body, and the evidence of such a worker in a file of its own.
 # The re-review after that (r3) is pinned the same way: GLOSSARY defines the
 # rule and the worker gone idle without a report; the Watchdog's `3` report on
 # a live worker, and a `wait` that timed out, read the worker's last line first
@@ -275,6 +277,13 @@ has 'answers `exited` for every dispatch of this Run that is not released, and e
   'SKILL.md step 9 asks Orca which implementing roles are alive, after the ended ones are handled' "$SKILL"
 has 'one that is `unverifiable` is never parked over (the Watchdog rule)' \
   'SKILL.md step 9 never parks over an unverifiable role' "$SKILL"
+# A role Orca calls `live` may be one that ended its turn without a report:
+# that one is "Dispatching a role" item 6's case, so the `2` line says so where
+# it calls a live role still working. It is verified and wrapped up by item 6's
+# evidence before exit 2 is judged, never waited for again; the pointer names
+# the item, not the ticket (合并复审, 取舍 1).
+has 'one that is `live` is still working (the Run waits for it as step 5 says) — unless it went idle without a report, which is "Dispatching a role" item 6'"'"'s case: that one is verified and wrapped up as item 6 says before this is judged, never waited for again' \
+  'SKILL.md step 9 hands a live role gone idle without a report to item 6, never waiting for it again' "$SKILL"
 has 'a Ticket under `# waiting` waits for another Spec, a standalone issue, or a human' \
   'SKILL.md step 9 names everything a waiting Ticket can wait for' "$SKILL"
 has 'the `# report` lines go in the report as they are (`剩余：#<t> 等 #<spec>` for another Spec, `剩余：#<t> 等 #<issue>` for a standalone issue, `剩余：#<t> 等人工 #<t>` behind a human Ticket, `剩余：#<t> 等搁置 #<t>` behind a shelved one)' \
