@@ -513,7 +513,7 @@ $S migrate                                                              # 迁移
 
 ## 更新与回滚
 
-- **更新**：`cd ~/.claude/skills/implement-spec-split && git pull && ./install.sh`（clone 直装形态；软链形态在克隆目录里跑同一条）。`install.sh` 补上仓库新增技能的软链、删掉已退役技能的悬空链、把期望项里新的 tighten 项补上（先备份）；重复运行零修改。模板和脚本立即生效；hook 下次调用即生效。无人值守落地会在每次落地后自动跑它（根 `SKILL.md` 第 9 步），clone 直装的这份会先被快进到新 main，所以平时不用手工更新；快进不了（不在 `main` 或不干净）时落地报告的「要你做」会写一句 `git pull`。
+- **更新**：`cd ~/.claude/skills/implement-spec-split && git pull && ./install.sh`（clone 直装形态；软链形态在克隆目录里跑同一条）。`install.sh` 补上仓库新增技能的软链、删掉已退役技能的悬空链、把期望项里新的 tighten 项补上（先备份）；重复运行零修改。模板和脚本立即生效；hook 下次调用即生效。无人值守落地会在每次落地后自动跑它（根 `SKILL.md` 第 9 步），clone 直装的这份会先被快进到新 main，所以平时不用手工更新；快进不了（不在 `main` 或不干净）时落地报告的「要你做」会写一句 `git pull`。已知限制：clone 直装形态下如果别处还有一份主 checkout（落地流程从那份主 checkout 跑 `install.sh`），`~/.claude/skills/implement-spec-split` 这个真实目录每次都会报一条 WARN「是真实目录不是软链，未动…另一份 clone？确认后改名或删除」，`install.sh` 因此每次落地都退出 1、落地报告的「要你做」每次挂这一条，重复运行清不掉——属预期，不影响已经完成的落地；要它消失，按提示把这份 clone 改名或删除（改用软链形态）后重跑 `./install.sh`。
 - **分工规则更新**：仓库里的 `templates/global-claude-md.md` 改了之后，需要手动同步到 `~/.claude/CLAUDE.md`（全局文件不在仓库管理范围内）。
 - **升级到阶段路由表**：旧版装过 `judgment-model`、`worker-model` 两个开关的，`./install.sh` 会删掉 `~/.claude/skills/` 下这两个悬空软链、软链 `grill-router`；第一次运行 `/grill-router` 会迁移旧设置（见阶段 4）。
 - **暂停分工**：从 `settings.json` 删掉 delegate-guard 那一项，并从 CLAUDE.md 删掉分工一节。之后 `install.sh` 不再对它有期望（hook 没注册不算漂移），只是阶段 4 用不了。

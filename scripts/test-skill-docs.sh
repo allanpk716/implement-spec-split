@@ -50,7 +50,9 @@
 # templates justify ready-for-human by identity, credentials or physical action
 # and carry a guardrail sample for a local or smoke ops ticket next to the ssh
 # one, each "样例见下" naming its sample (Spec 3); step 8 of SKILL.md never picks
-# an option that needs the owner's own hands (Spec 7, trade-off 3 = A).
+# an option that needs the owner's own hands (Spec 7, trade-off 3 = A); both
+# setup guides state the two-clone limitation of a clone-direct install (Spec 6,
+# trade-off 2 = A: one WARN at every landing, which never clears).
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -703,6 +705,19 @@ has 'turns each unexecuted loosening into a loose ticket, whatever repository th
 # are not touched.
 has "An option that needs the owner's own hands — a physical action the Run cannot carry out — is never picked either, whatever the rule above would pick: list it under 要你做 in the landing report and decide among the remaining options as above; when no option is left, the item parks by the two parking rules above." \
   "SKILL.md step 8 never picks an option that needs the owner's own hands" "$SKILL"
+
+# --- the two-clone shape of the clone-direct install is a known limitation (规格 #58 复审 Spec 6, 取舍 2 选 A) ---
+
+# With ~/.claude/skills/implement-spec-split a clone of its own and a second,
+# main checkout elsewhere, the landing runs install.sh from the main checkout,
+# which sees the root skill's place as the real directory of another clone: one
+# WARN it never clears (test-install.sh case 9 pins that on purpose), so every
+# landing exits 1 and lists that manual step. Nothing changes in the script; the
+# limitation is recorded in MAINTAINING 第 55 条 and in both setup guides.
+has '已知限制：clone 直装形态下如果别处还有一份主 checkout' \
+  'docs/setup.md states the two-clone limitation of the clone-direct install' "$SETUP"
+has 'Known limitation: with the clone-direct shape and a second, main checkout elsewhere' \
+  'docs/setup.en.md states the two-clone limitation of the clone-direct install' "$SETUP_EN"
 
 printf '\n%d passed, %d failed\n' "$PASSED" "$FAILED"
 exit "$FAILED"
