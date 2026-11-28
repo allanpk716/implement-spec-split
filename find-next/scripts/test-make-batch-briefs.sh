@@ -16,6 +16,16 @@ LOG=$WORK/gh.log
 # (MAINTAINING 第 46 条); every drafted Brief is checked for both.
 COUNTER_RULE='会改同一处计数器的执行票按顺序挂 `blocked_by` 链，本组内写 `T<n>`，后一张等前一张，不是全部等第一张'
 COUNTER_LABEL_RULE='并给这些票在清单 `labels` 里写上 `shared-counter`'
+# The ops-ticket entry of the three drafting templates (MAINTAINING 第 61 条, 规格
+# #58 票 #68) as they word it: an execution ticket that needs this machine, a real
+# environment, a remote server or a real device is not a human ticket but an ops
+# ticket, and a step that would need a loosened permission is a loosening that
+# is only recorded. Every drafted Brief is checked for these sentences, and the
+# entry itself is compared across the three kinds of Brief (see the end).
+OPS_RULE_LOCAL='在本机执行 → 本机运维票：正文写明「在本机执行」，带一节 `## 护栏`'
+OPS_RULE_SMOKE='真实环境验证（含规格 Testing Decisions 的「真实冒烟」）→ agent 驱动冒烟运维票：正文写明 Orca 操作序列'
+OPS_RULE_LOOSEN='需要放宽权限 → 不写「本票由 Opus 执行」'
+OPS_RULE_HUMAN='只有真的不能交给实现者的——需要用户本人身份或凭据的外部操作（首次登录授权、付款、验证码）、物理动作——才在正文里写明「本票由 Opus 执行」'
 PASSED=0
 FAILED=0
 RUN_EXIT=
@@ -96,6 +106,29 @@ expect_no_directory() {
   else
     record PASS "$name"
   fi
+}
+
+# expect_ops_rules <brief> <label>: the ops-ticket rule sentences of 规格 #58
+# 票 #68, as the drafting templates word them.
+expect_ops_rules() {
+  brief=$1
+  label=$2
+  expect_has "$OPS_RULE_LOCAL" "$label brief maps this machine to a local ops ticket" \
+    "$brief"
+  expect_has "$OPS_RULE_SMOKE" "$label brief maps a real-environment check to an agent-driven smoke ops ticket" \
+    "$brief"
+  expect_has "$OPS_RULE_LOOSEN" "$label brief makes a loosened permission a recorded loosening" \
+    "$brief"
+  expect_has "$OPS_RULE_HUMAN" "$label brief keeps the human ticket to identity, credentials and physical action" \
+    "$brief"
+}
+
+# ops_entry <brief>: the ops-ticket entry of a drafted Brief -- its parent bullet
+# and the sub-bullets under it, up to the next top-level bullet of 写作要求.
+ops_entry() {
+  awk '/^- 执行票要用到本机、真实环境、远程服务器或真机的，都不算人工票/ { entry = 1 }
+       /^- 用中文，遵守目标仓库的写作规范/ { entry = 0 }
+       entry' "$1"
 }
 
 mkdir -p "$BIN" "$REPO" || exit 1
@@ -257,6 +290,7 @@ expect_has "${COUNTER_RULE}" \
   'spec-group brief carries the shared-counter rule' "$SUCCESS/S1/brief.md"
 expect_has "${COUNTER_LABEL_RULE}" \
   'spec-group brief tells the drafter to label shared-counter tickets' "$SUCCESS/S1/brief.md"
+expect_ops_rules "$SUCCESS/S1/brief.md" 'spec-group'
 
 EXISTING_SPEC=$WORK/existing-spec
 run_brief "$WORK/existing-spec.out" --example 205 "$EXISTING_SPEC" \
@@ -287,6 +321,7 @@ expect_has "${COUNTER_RULE}" \
   'existing-spec brief carries the shared-counter rule' "$EXISTING_SPEC/S2/brief.md"
 expect_has "${COUNTER_LABEL_RULE}" \
   'existing-spec brief tells the drafter to label shared-counter tickets' "$EXISTING_SPEC/S2/brief.md"
+expect_ops_rules "$EXISTING_SPEC/S2/brief.md" 'existing-spec'
 
 MAP_SPEC=$WORK/map-spec
 run_brief "$WORK/map-spec.out" "$MAP_SPEC" S1=map:22
@@ -309,6 +344,7 @@ expect_has "${COUNTER_RULE}" \
   'map-spec brief carries the shared-counter rule' "$MAP_SPEC/S1/brief.md"
 expect_has "${COUNTER_LABEL_RULE}" \
   'map-spec brief tells the drafter to label shared-counter tickets' "$MAP_SPEC/S1/brief.md"
+expect_ops_rules "$MAP_SPEC/S1/brief.md" 'map-spec'
 
 DUPLICATE_MAP=$WORK/duplicate-map
 run_brief "$WORK/duplicate-map.out" "$DUPLICATE_MAP" S1=map:22 S2=map:22
@@ -517,6 +553,32 @@ if [ "$env_identical" -eq 1 ]; then
 else
   record FAIL 'environment-constraints section is identical in every Brief template' \
     'a template lacks the section or differs from the others'
+fi
+
+# The ops-ticket entry (规格 #58 票 #68) is one text shared by the three drafting
+# templates: fail as soon as one copy drifts or goes missing. It is compared in
+# the drafted Briefs of the three kinds of group, which is where a drafting
+# worker reads it.
+ops_first=
+ops_identical=1
+ops_index=0
+for brief in "$SUCCESS/S1/brief.md" "$EXISTING_SPEC/S2/brief.md" "$MAP_SPEC/S1/brief.md"; do
+  ops_index=$((ops_index + 1))
+  entry_file=$WORK/ops-entry-$ops_index.md
+  ops_entry "$brief" > "$entry_file"
+  [ -s "$entry_file" ] || ops_identical=0
+  if [ -z "$ops_first" ]; then
+    ops_first=$entry_file
+  elif ! cmp -s "$ops_first" "$entry_file"; then
+    ops_identical=0
+  fi
+done
+[ -n "$ops_first" ] || ops_identical=0
+if [ "$ops_identical" -eq 1 ]; then
+  record PASS 'ops-ticket entry is identical in the three drafted Briefs'
+else
+  record FAIL 'ops-ticket entry is identical in the three drafted Briefs' \
+    'a Brief lacks the entry or its entry differs from the others'
 fi
 
 printf '\n%d passed, %d failed\n' "$PASSED" "$FAILED"

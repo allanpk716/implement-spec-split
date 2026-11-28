@@ -80,11 +80,11 @@ usage: $SCRIPT_NAME [--once] [--dry-run] [--repo <owner/name>] [--state <file>]
 Runs one keeper round: resumes quota/transient parking and dead sessions when
 their recoverable time has passed, asks Orca whether a silent or interrupted
 session is still alive and restarts it only when Orca says it exited (or lists
-no worker for it), notifies a human about parking that needs a decision, about
-sessions Orca cannot vouch for and about an interrupted claim whose session is
-still live, and sweeps abandoned Spec and Ticket worktrees
-(scripts/sweep-worktrees.sh). Reads GitHub, claims, run directories, session
-transcripts and Orca; with --dry-run it writes nothing.
+no worker for it), notifies a human once about auth and error parking, which it
+never resumes, about sessions Orca cannot vouch for and about an interrupted
+claim whose session is still live, and sweeps abandoned Spec and Ticket
+worktrees (scripts/sweep-worktrees.sh). Reads GitHub, claims, run directories,
+session transcripts and Orca; with --dry-run it writes nothing.
 
   --once     one round and exit (launchd); without it, rounds every
              KEEPER_INTERVAL seconds (default 600)
@@ -447,7 +447,9 @@ newest_jsonl() { # directory -> newest *.jsonl mtime in seconds, or 0
 }
 
 # The machine-readable block of a parking report, with the keyword fallback for
-# reports written before the two lines existed.
+# reports written before the two lines existed. The fallback is for a report
+# with no category line only: one whose line names a word outside the four
+# categories is error without it.
 report_info() { # spec number -> kind<US>id<US>url<US>category<US>recover_at<US>source<US>created_at
   local comments=$WORK/comments.json
   if ! "$GH" api "repos/$REPO/issues/$1/comments" --paginate --slurp >"$comments" 2>"$WORK/gh.err" </dev/null; then
@@ -535,14 +537,20 @@ report_info() { # spec number -> kind<US>id<US>url<US>category<US>recover_at<US>
     }
     let category = "";
     let recoverRaw = "";
+    // The category line names a word outside the four (decision and other
+    // retired with 票 #70): error below, never the keyword fallback.
+    let retired = false;
     if (start >= 0) {
       for (let i = start + 1; i < Math.min(lines.length, start + 16); i++) {
         if (/^\s*#/.test(lines[i])) break;
         const line = lines[i].replace(/\*/g, "").trim();
         let match = line.match(/^停车类别\s*[：:]\s*(.*)$/);
         if (match && !category) {
-          const word = String(match[1]).match(/quota|transient|decision|error|other/i);
-          category = word ? word[0].toLowerCase() : "";
+          // The four categories of the SKILL.md table: quota and transient are
+          // resumed once their time has passed, auth and error only notified.
+          const word = String(match[1]).match(/quota|transient|auth|error/i);
+          if (word) category = word[0].toLowerCase();
+          else retired = true;
         }
         match = line.match(/^可恢复时间\s*[：:]\s*(.*)$/);
         if (match && !recoverRaw) recoverRaw = match[1].trim();
@@ -560,6 +568,13 @@ report_info() { # spec number -> kind<US>id<US>url<US>category<US>recover_at<US>
           if (piece) recover = parseClock(piece[0].replace(" ", "T"));
         }
       }
+    } else if (retired) {
+      // A category line naming a word outside the four: error, notified once
+      // and never resumed, as under its old name. The keyword fallback is not
+      // taken — the body of such a report may still mention 额度 or a reset
+      // time, and a decision someone has to make must not resume the Run.
+      category = "error";
+      recover = "";
     } else {
       source = "legacy";
       const low = last.body.toLowerCase();
@@ -574,7 +589,10 @@ report_info() { # spec number -> kind<US>id<US>url<US>category<US>recover_at<US>
         for (const value of future) if (value < best) best = value;
         recover = best;
       } else {
-        category = "decision";
+        // No quota keyword: a report a human must act on. error is the category
+        // keeper only notifies (auth names an identity it cannot supply, which
+        // the old reports never said in words).
+        category = "error";
         recover = "";
       }
     }
@@ -1014,6 +1032,9 @@ EOF
         fi
         ;;
       *)
+        # auth and error (and anything unrecognized): a human must act first, so
+        # the report is notified once and never resumed — the category alone
+        # decides this, whatever 可恢复时间 says.
         notify_park_once "$spec" "$id" "$url" "$category"
         ;;
     esac

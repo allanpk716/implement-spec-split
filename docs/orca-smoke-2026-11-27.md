@@ -759,3 +759,437 @@ ctx_6f36c1bb1ff8  succeeded  released
 ctx_4b75841db491  succeeded  retained   ← 外部终端的记账记录，终端已 close（ptyKilled:true）
 ctx_9fa4a8e56970  succeeded  released
 ```
+
+---
+
+## 第三轮（阶段路由表真实冒烟：讨论、审查、诊断、实现、调研起草各切换一次）
+
+> 日期：2026-11-28 · 主机：mini6（local）· Orca 1.4.274 · Claude Code 2.1.332 · codex-cli 0.164.0 · 票 #49（规格 #25 的真实冒烟，经规格 #58 派发）
+> 被测的是本机安装的技能与脚本（`~/.claude/skills/implement-spec-split` 软链指向的主 checkout `/Users/allan716/orca/implement-spec-split`）和真实路由表 `~/.claude/state/stage-route`，不是仓库文件。冒烟途中（15:41:14）主 checkout 被别的会话从 `819f816` 快进到 `7a39284`；两个提交之间受测文件只有 `scripts/opus-review.sh` 变了，第 3 节跑的是 `7a39284` 这一份。
+> 场地 `allanpk716/iss-e2e-test`（本地 `~/orca/iss-e2e-test`，main @ `cc6c51e`）。证据目录 `~/.cache/implement-spec-split/runs/implement-spec-split-58-20261128-1213/implement-49/evidence/`，每一步的命令原文、回执、屏幕和 transcript 摘录都在里面。
+> 路由表是全局的，别的会话随时在派发：每次切换只保留到对应的派发读完路由就还原（第 3、4 节各 7–18 秒；讨论那一次留到 Design session 结束，约 10 分半），清理时与 0.1 记下的表逐字节比对。除为场地 clone 接受一次 Claude Code 的目录信任对话（写进 `~/.claude.json` 的 `projects` 条目）外，未改 Orca 设置、`~/ops`、`~/.claude/settings.json`、hooks；旧开关文件 `~/.claude/state/judgment-model` 没有碰。
+
+### 0. 六条总结
+
+1. **审查、诊断、实现、调研起草各切换一次，下一次派发都按新路由跑，模型与思考强度在多处留痕，报告首部写对。** findings 首行、无头 transcript 的 `effort`、sidecar 的 `route` 与 `launch_command`、`status.json` 和 codex rollout 的 `turn_context` 互相印证；两份 findings 的「需要人取舍」一次写成合格的 `推荐：` 与 `可自动采纳：是|否`。讨论的模型与强度同样生效（`glm-5.4` / `medium`）。
+2. **讨论阶段收编启动的三处风险：两处成立，上游技能加载不成立。** 开终端 + `worker-start --terminal` 收编成立，自动切到 Design session 标签、交接后切回成立，handoff 上报被 Orca 接受、主会话收到成立。但 `mattpocock-skills:grill-with-docs` 设了 `disable-model-invocation: true`，Skill 工具拒绝加载，`design-session.sh` 写进 prompt 的首句做不到，Design session 第一步就停下等用户；这次是用户在它的标签里手敲 `/mattpocock-skills:grill-with-docs` 才走完（见 2.1）。
+3. **迁移在真机走通**：临时表上，两份未到期的旧状态文件迁出五项、带上到期时间，旧文件按规则删除；已到期的设置不迁入，目录外的设置迁不进、旧文件保留；真实表全程未动。
+4. **改回默认后下一次派发恢复**，已经开着的 worker 不受影响（表改回默认后它新的一轮仍是启动时的强度）。
+5. **doctor 的两条 matcher 行都是 PASS**，与 `~/.claude/settings.json` 的 `Edit|Write|NotebookEdit|Bash` 一致。doctor 整体退出 1，两个 FAIL 都与 matcher 无关：一个是本机 `~/.claude/CLAUDE.md` 里没有分工标记（标记在 `~/.claude/rules/opus-codex-split.md`），一个是在 claude-glm 会话里跑、环境带着 `DELEGATE_GUARD_DISABLE=1` 让冒烟测试假失败。
+6. **场地和工具的几处出入**：`orca terminal create --worktree path:<新 clone>` 报 `selector_not_found`，要先 `orca repo add`；新目录第一次开会话有 Claude Code 的信任对话（默认选中「No, exit」）。另外 #84 之后，flash 会话里 GLM 路由的审查、诊断走会话内子代理（强度未生效），第 3 节的「强度生效」只对出会话形态成立。
+
+### 0.1 准备：起始状态
+
+**命令**
+
+```bash
+orca worktree list --json; orca terminal list --json; orca terminal list --include-visual-layouts --json
+bash ~/.claude/skills/implement-spec-split/scripts/stage-route.sh
+shasum -a 256 ~/.claude/state/stage-route
+gh repo clone allanpk716/iss-e2e-test /Users/allan716/orca/iss-e2e-test
+```
+
+**关键输出**
+
+```text
+Orca：31 个工作区、25 个终端（之后「无残留」都对照这两份）
+~/.claude/state/stage-route（95 字节，无尾换行）
+sha256 911078b20d70a0beee3f0b2dff03beeba1e8fc711edf4e1d0e975364bc17393f
+design=claude-glm/glm-5.4/high
+review=claude-glm/glm-5.4/high
+diagnosis=claude-glm/glm-5.4/high
+编排（orchestration）：claude-flash / glm-5.3-flash / 启动器默认（锁定，不可改）
+讨论（design）：claude-glm / glm-5.4 / high，不会自动切回；切回用 /grill-router use design=claude/opus/high
+调研起草（research）：codex-glm / glm-5.4 / high（默认）
+实现（implementation）：claude-glm / glm-5.4 / high（默认）
+审查（review）：claude-glm / glm-5.4 / high，不会自动切回；切回用 /grill-router use review=claude/opus/high
+诊断（diagnosis）：claude-glm / glm-5.4 / high，不会自动切回；切回用 /grill-router use diagnosis=claude/opus/high
+```
+
+起始表里讨论、审查、诊断三行本来就是非默认（`claude-glm / glm-5.4 / high`）。所以这三项的「切换一次」是把强度换成 `medium`（不是任何启动器的默认档，「强度生效」才有别于默认值），还原是设回 `high`；实现、调研起草从阶段默认切到非默认，再设回阶段默认。真实表的每次改动都是 `stage-route.sh use …`，也就是 `/grill-router` 第 2 步运行的那条命令。
+
+**判据：通过。** 起始清单与路由表落盘。
+
+### 1. 迁移（只在临时表上）
+
+**命令**
+
+```bash
+# 临时目录 <A> 里先放两份未到期的旧状态文件，不放 stage-route
+printf 'grill=glm-5.4\ngrill.until=\nreview=glm-5.4\nreview.until=%s\n' $(( $(date +%s) + 3600 )) > <A>/judgment-model
+printf 'worker=glm-5.3\nworker.until=\n' > <A>/worker-model
+orca repo add --path /Users/allan716/orca/iss-e2e-test --json        # 见下：terminal create 之前必须先做
+orca terminal create --worktree path:/Users/allan716/orca/iss-e2e-test --title smoke49-step2-migrate \
+  --command "ISS_STAGE_ROUTE_FILE=<A>/stage-route claude-flash --dangerously-skip-permissions" --json
+orca terminal send --terminal <handle> --text "/grill-router" --enter --json
+# 补充一组（脚本直跑，不起会话）：<B> 里 grill.until 是过去的时间、worker=glm-5.3-flash
+ISS_STAGE_ROUTE_FILE=<B>/stage-route bash ~/.claude/skills/implement-spec-split/scripts/stage-route.sh
+```
+
+**关键输出**
+
+```text
+terminal create（repo add 之前）→ {"ok":false,"error":{"code":"selector_not_found",
+  "message":"No Orca workspace matched the worktree selector \"path:/Users/allan716/orca/iss-e2e-test\"."}}
+repo add → repo id 0457b82d-d0d9-4d8b-a7c5-63eee93ebd21，工作区 0457b82d-…::/Users/allan716/orca/iss-e2e-test（Orca 工作区 31 → 32）
+terminal wait --for tui-idle → satisfied:false, blockedReason:"agent-trust-workspace"   ← 信任对话，默认选中「No, exit」
+横幅: Claude Code v2.1.332 · glm-5.3-flash[1m] · API Usage Billing · ~/orca/iss-e2e-test · ● high · /effort
+
+/grill-router 之后（会话里跑的是 ~/.claude/skills/implement-spec-split/scripts/stage-route.sh，不带参数）：
+stage-route: 已迁移：旧开关 judgment-model 的 grill=glm-5.4 → design=claude-glm/glm-5.4/high
+stage-route: 已迁移：旧开关 judgment-model 的 review=glm-5.4 → review=claude-glm/glm-5.4/high@1795855112、diagnosis=claude-glm/glm-5.4/high@1795855112
+stage-route: 已迁移：旧开关 worker-model 的 worker=glm-5.3 → research=codex-glm/glm-5.3/high、implementation=codex-glm/glm-5.3/high
+stage-route: 旧开关状态文件 <A>/judgment-model 已删除
+stage-route: 旧开关状态文件 <A>/worker-model 已删除
+编排（orchestration）：claude-flash / glm-5.3-flash / 启动器默认（锁定，不可改）
+讨论（design）：claude-glm / glm-5.4 / high，不会自动切回；切回用 /grill-router use design=claude/opus/high
+调研起草（research）：codex-glm / glm-5.3 / high，不会自动切回；切回用 /grill-router use research=codex-glm/glm-5.4/high
+实现（implementation）：codex-glm / glm-5.3 / high，不会自动切回；切回用 /grill-router use implementation=claude-glm/glm-5.4/high
+审查（review）：claude-glm / glm-5.4 / high，到 2026-11-28 16:38 +08:00 自动切回默认
+诊断（diagnosis）：claude-glm / glm-5.4 / high，到 2026-11-28 16:38 +08:00 自动切回默认
+（会话的回复把这五行 stderr 和六行状态逐字转述，再空一行说明「这是路由表第一次运行…」）
+
+<A>/stage-route：
+design=claude-glm/glm-5.4/high
+research=codex-glm/glm-5.3/high
+implementation=codex-glm/glm-5.3/high
+review=claude-glm/glm-5.4/high@1795855112
+diagnosis=claude-glm/glm-5.4/high@1795855112
+
+<B> 组（脚本直跑）：
+stage-route: 旧开关 judgment-model 的 grill=glm-5.4 已到期，不迁入
+stage-route: 旧开关 worker-model 的 worker=glm-5.3-flash 迁不进 research、implementation：codex-glm/glm-5.3-flash 不在已验证目录，旧文件 <B>/worker-model 保留
+stage-route: 旧开关状态文件 <B>/judgment-model 已删除
+六行全是默认；<B>/stage-route 写出但是空文件（0 字节）；--print research model 的 stdout 只有 glm-5.4
+真实表 sha256：911078b2…（全程不变）
+```
+
+**判据：通过。** 五项等于迁移结果，编排行不变，旧文件按 #29 的规则处理：每一项都迁走的文件被删，有一项迁不进的文件保留，已到期的设置不迁入。两处与预期不同：(a) `orca terminal create --worktree path:` 对刚 clone 的目录不当场收编，要先 `orca repo add`（第一轮第 8 项的当场收编是 `worker-start --worktree path:`）；(b) 新目录第一次开会话有信任对话，实现者以用户身份选了「Yes, I trust this folder」。
+
+### 2. 讨论
+
+**命令**
+
+```bash
+orca terminal create --worktree path:/Users/allan716/orca/iss-e2e-test --command bash --title smoke49-coord --json
+# 协调终端里：bash ~/.claude/skills/implement-spec-split/scripts/lock.sh acquire find-next-supervise --scope repo --owner-pid $$
+bash ~/.claude/skills/implement-spec-split/scripts/stage-route.sh use design=claude-glm/glm-5.4/medium
+orca terminal create --worktree path:/Users/allan716/orca/iss-e2e-test \
+  --command "claude-flash --dangerously-skip-permissions" --title smoke49-flash-main --json
+orca terminal send --terminal <flash 主会话> --text "/grill-feature 给 bin/convert.js 加一个可选参数 --precision <0..6>…" --enter --json
+orca terminal list --json; orca terminal list --include-visual-layouts --json
+orca orchestration worker-show --dispatch <Design session 的 dispatch> --full --json
+orca terminal read --terminal <Design session> --screen --json
+```
+
+话题里写明「不发布 issue、不 commit / push、handoff 回来后不进 find-next」，又在场地仓库里持着 `find-next-supervise` 锁：两者都是为了不让主会话在场地上起 find-next 的推进模式（它会起草、发布、起实现会话）。这次主会话按话题里的交代没有走到查锁那一步。
+
+**关键输出**
+
+```text
+flash 主会话（claude-flash / glm-5.3-flash[1m]）：Write 话题文件 → 后台跑 design-session.sh →
+  路由提示（来自脚本 stderr）：本次讨论路由：讨论（design）：claude-glm / glm-5.4 / medium（用户用 /grill-router 设置）
+
+design-session.sh 的 stderr / stdout：
+design-session: 本次讨论路由：讨论（design）：claude-glm / glm-5.4 / medium（用户用 /grill-router 设置）：本次 Design session 由 glm-5.4 经 claude-glm 执行
+/Users/allan716/.cache/implement-spec-split/design/iss-e2e-test-20261128-1544-feature/handoff.md
+
+run-create.json: {"runId":"run_d2d62237290e","objective":"Design session handoff for iss-e2e-test"}
+worker-start.json: {"ok":true,"result":{"dispatchId":"ctx_d08281b3a41c","taskId":"task_470a50ffb797",
+  "runId":"run_d2d62237290e","state":"ready","mode":"terminal","terminal":"term_e569df34-…"}}
+worker-show --full（收编记录）:
+  effects: {"kind":"worktree","action":"reused"}, {"kind":"setup","action":"not_applicable"},
+           {"kind":"terminal","role":"agent","action":"reused","id":"term_e569df34-…"},
+           {"kind":"dispatch_input","role":"agent","id":"term_e569df34-…","state":"accepted"}
+  launch.requested / effective: agent、model、effort 都是 null
+  projection.provider: {"id":"claude","model":"glm-5.4[1m]"}
+  terminalResource: ownershipState external, releaseState not_requested, autoReleaseAt null
+
+模型与强度：/status → Model: glm-5.4[1m]（这一版的 /status 不显示强度）
+  进程命令行: claude --settings ~/ops/etc/claude-glm/settings.json … --dangerously-skip-permissions --model glm-5.4[1m] --effort medium
+  transcript fd5ec98c-0155-456b-9f20-095d0217631a：40 条 assistant 记录全是 "model":"glm-5.4"、"effort":"medium"
+
+terminal list --include-visual-layouts（Design session 运行中）:
+  activeTabId = 313427d4-…（title "Design session feature"）；标签依次 smoke49-coord、smoke49-flash-main、Design session feature
+```
+
+**判据：收编启动通过。** `orca terminal list` 多出终端，`worker-start --terminal` 回执 `state: ready`，effects 是 `terminal reused` + `dispatch_input accepted`；Orca 不记收编终端的模型和强度（`launch.effective` 都是 null，与第一轮 2.1 一致），模型从状态行（provider `glm-5.4[1m]`）取，强度从命令行和 transcript 取。风险 3（自动切到新标签）通过：`--focus` 生效，当前标签是 Design session。
+
+#### 2.1 风险 1：上游技能加载——不通过
+
+Design session 的第一个工具调用：
+
+```text
+Skill({"skill":"mattpocock-skills:grill-with-docs"})
+→ <tool_use_error>Skill mattpocock-skills:grill-with-docs cannot be used with Skill tool due to disable-model-invocation.
+  Ask the user to run /mattpocock-skills:grill-with-docs themselves — it cannot be invoked via the Skill tool.
+  Do not replicate this skill's workflow by other means — it is reserved for explicit user invocation.</tool_use_error>
+```
+
+它没有绕过去，而是发了一条 escalation（`msg_a81800d5beaf`）就结束了回合，没有发 worker_done；Orca 随后发「Worker stopped without reporting」。用户（这次是实现者）在 Design session 标签里手敲 `/mattpocock-skills:grill-with-docs …` 之后，`mattpocock-skills:grilling` 和 `mattpocock-skills:domain-modeling` 两个子技能经 Skill 工具加载成功，讨论才继续。
+
+根因是 `design-session.sh` 写进 prompt 的首句（「请先用 Skill 工具加载上游技能 ${UPSTREAM}…不要让用户手敲斜杠命令」）与上游技能的标记冲突：`grill-with-docs`、`wayfinder`、`to-spec`、`to-tickets` 的 SKILL.md 都带 `disable-model-invocation: true`，Skill 工具对它们一律拒绝，MAINTAINING「find-next 设计要点」第 6、19 条早有记录。worker 前言排在本消息前面之后首行斜杠命令不再由 CLI 展开，于是换成了 Skill 工具加载（规格 #34），换的时候没有对照上游的标记；`scripts/test-design-session.sh` 断言的正是这句做不到的话。第 3 节的诊断拿这次失败当输入，得出同样的结论和一组具体改法。
+
+#### 2.2 风险 2：handoff 上报被接受、主会话收到并切回——通过（手敲之后）
+
+```text
+Design session 的最后一条命令:
+  orca orchestration send --from term_e569df34-… --type worker_done --subject "convert CLI --precision 设计已定稿，handoff 已写" \
+    --body '…' --task-id task_470a50ffb797 --dispatch-id ctx_d08281b3a41c --outcome succeeded --report-path <运行目录>/handoff.md
+check.json（design-session.sh 的 check --run … --take 取到）:
+  {"id":"msg_403d5e2edbae","type":"worker_done","payload":{"taskId":"task_470a50ffb797","dispatchId":"ctx_d08281b3a41c",
+   "outcome":"succeeded","reportPath":"…/iss-e2e-test-20261128-1544-feature/handoff.md"}}
+worker-show: state succeeded, stage settled（dispatch completed 2026-11-28T07:51:29Z）
+switch.out: Focused terminal term_515d8495-… (tab ead08247-…).
+close.out: Closed terminal tab 313427d4-… (term_e569df34-…).
+exit-code: 143      session-wait.out: condition exit satisfied, exitCause {"kind":"operator_close"}
+主会话屏幕:
+  ⏺ Background command "启动 grill-feature Design session 并后台等待 handoff" completed (exit code 0)
+  ⏺ Design session 已完成并交回本会话（退出码 0）。按你的指示，不进入 find-next，就此停下。
+    handoff 路径：/Users/allan716/.cache/implement-spec-split/design/iss-e2e-test-20261128-1544-feature/handoff.md
+terminal list --include-visual-layouts（交接后）: activeTabId = ead08247-…（smoke49-flash-main），Design session 标签已关
+```
+
+**判据：通过。** 带全 `--task-id` / `--dispatch-id` 的 worker_done 被接受，`design-session.sh` 打印 handoff 路径、切回主会话、关掉 Design session 标签并以 0 退出，主会话收到完成通知。
+
+#### 2.3 这一轮另外看到的
+
+- **Design session 停下等人时主会话没有任何提示。** `design-session.sh` 的等待循环用 `check --run … --take` 取走 Run 的全部邮件，只认 reportPath 等于 handoff.md 的 worker_done，其余的不打印就继续等。这次 Design session 自己的 escalation、Orca 的「Worker stopped without reporting」、它讨论第一轮发给协调者的 question（`msg_d97079cd4dd3`）三封都是这样被取走的（Run 信箱里三封都是已读，收件人是 `run:run_d2d62237290e`；`check.json` 每轮覆盖，`check.err` 只有 keepalive）；后台任务的 stderr 只在任务结束时出现在主会话屏幕上。`stage-dispatch.sh` 对同类邮件是逐条打印并退出 8，`design-session.sh` 没有对应处理。发现问题的唯一途径是用户正看着 Design session 标签（这次正是风险 3 保证了这一点）。
+- **交接约定第 5 条把 `--outcome` 写死成 `succeeded`**，失败时无法如实上报（Design session 自己在 handoff 里提的）。
+- 刚建好的后台终端在 `terminal show` 里是 `orphaned: true`，也不在 `--include-visual-layouts` 的 `visualLayouts` 里；`orca terminal switch` 到它一次之后才正常。判断「当前标签」前要先确认这个工作区的布局已经出现过。
+- 主会话有后台 shell 在跑时 `terminal wait --for tui-idle` 一直不满足（等 handoff 的那几分钟都是这样），不能用等它来判断「主会话这一轮说完了」。
+- 靠 `exit-code` 判定结束这条路径只见到收尾那一次（终端被关时写下 143）；「没交接就退出」的分支（退出码 7）没有触发。
+- mockit 提交、`claude-glm --resume` 续接、map（wayfinder）这次都没有跑。
+
+还原：`stage-route.sh use design=claude-glm/glm-5.4/high`（15:52:35），表回到起始值。
+
+### 3. 审查、诊断
+
+**命令**
+
+```bash
+bash ~/.claude/skills/implement-spec-split/scripts/stage-route.sh use review=claude-glm/glm-5.4/medium diagnosis=claude-glm/glm-5.4/medium
+bash ~/.claude/skills/implement-spec-split/scripts/opus-review.sh --kind code --input ac93eb6 \
+  --out <证据目录>/step4-review/findings-code.md --cwd /Users/allan716/orca/iss-e2e-test --timeout 1500
+bash ~/.claude/skills/implement-spec-split/scripts/opus-review.sh --kind diagnose --input <2.1 那次失败写成的失败记录> \
+  --out <证据目录>/step4-review/findings-diagnose.md --cwd /Users/allan716/orca/iss-e2e-test --timeout 1200
+# 两个进程都起来、读完路由之后：stage-route.sh use review=claude-glm/glm-5.4/high diagnosis=claude-glm/glm-5.4/high
+```
+
+`--input ac93eb6` 是测试仓库 HEAD 的父提交（diff 是 `cc6c51e` 一个提交，3 个文件 +14/−1）。
+
+**关键输出**
+
+```text
+stderr:
+opus-review: the review route is claude-glm / glm-5.4 / medium (set by the user with /grill-router, scripts/stage-route.sh): this review runs on glm-5.4 through 'claude-glm'; official Opus is not called
+opus-review: the diagnosis route is claude-glm / glm-5.4 / medium (set by the user with /grill-router, scripts/stage-route.sh): this review runs on glm-5.4 through 'claude-glm'; official Opus is not called
+进程命令行（两个）: claude --settings ~/ops/etc/claude-glm/settings.json … -p --model glm-5.4[1m] --effort medium --allowedTools Read Grep Glob Bash(git status:*) …
+退出码: code 0（15:56:26）  diagnose 0（15:56:22）；没有触发修复重试
+
+findings-code.md 首行:
+路由：审查（review）claude-glm / glm-5.4 / medium · 2026-11-28 15:56:26 +0800
+  ## 需要人取舍：1 条，带「推荐：A — …」「可自动采纳：是」
+findings-diagnose.md 首行:
+路由：诊断（diagnosis）claude-glm / glm-5.4 / medium · 2026-11-28 15:56:22 +0800
+  ## 需要人取舍：4 条，每条带「推荐：…」和「可自动采纳：是 | 否 — …」
+无头 transcript（entrypoint sdk-cli）: 1b471f99-… 22 条、61133d34-… 44 条，全是 "model":"glm-5.4"、"effort":"medium"
+```
+
+诊断的结论是「改 Brief」：启动脚本的 prompt 与上游标记冲突、等待循环丢弃 escalation，并给出七项具体改法（与 2.3 一致）。
+
+**判据：通过。** 启动器、模型、强度生效；两份 findings 首行写对，结论标记一次写成合格的 `推荐：` 与 `可自动采纳：是|否`。这就是已验证目录里 `claude-glm / glm-5.4` 审查、诊断那一格的真实冒烟证据。
+
+**注意**
+
+- 这份 `opus-review.sh` 是主 checkout `7a39284` 的（带 #84 的 `--where / --prompt / --stamp`）。`--where` 的判定是：本会话没设 `CLAUDE_CODE_SUBAGENT_MODEL` 时出会话；换成 flash 会话的设置（`CLAUDE_CODE_SUBAGENT_MODEL=glm-5.4[1m]`、`CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`）时，code 和 diagnose 都是 `in-session`。也就是说 flash 会话里 GLM 路由的审查、诊断现在走会话内子代理，强度未生效；本节的「强度生效」只对出会话形态成立。
+- 代码审查注明 `gh issue list` 和 `npm test` 被权限系统拒绝（只读工具白名单，设计如此），两个评审子代理显式指定为 `opus`（别名映射到 GLM）。
+
+### 4. 实现、调研起草
+
+#### 4.1 调研起草（`codex-worker.sh --read-only`）
+
+**命令**
+
+```bash
+bash ~/.claude/skills/implement-spec-split/scripts/stage-route.sh use research=codex-glm/glm-5.3/medium
+bash ~/.claude/skills/implement-spec-split/scripts/codex-worker.sh --cwd /Users/allan716/orca/iss-e2e-test --brief <调研 Brief> \
+  --run-dir <运行目录>/smoke-research-1 --read-only --time-limit 600 --idle-timeout 300
+# worker 起来、读完路由之后：stage-route.sh use research=codex-glm/glm-5.4/high
+```
+
+**关键输出**
+
+```text
+stderr（也写进运行目录的 stderr.log）:
+codex-worker: 阶段路由生效：调研起草（research）：codex-glm / glm-5.3 / medium；复位 /grill-router use research=codex-glm/glm-5.4/high
+codex 进程: codex exec --json … -m glm-5.3 … -c model_reasoning_effort=medium
+resume.json / status.json: "model":"glm-5.3", "thinking":"medium", "profile":"codex-glm"
+status.json: status ok, attempts 1, duration_s 51, read_only true, read_only_violation false, changed_paths []
+codex rollout（~/.codex-worker/sessions/2026/11/28/rollout-…-01a22128-….jsonl）: {"type":"turn_context","model":"glm-5.3","effort":"medium"}
+退出码 0
+```
+
+**判据：通过。** 路由行、`status.json`、codex 自己的 rollout 三处一致，只读没有违规。
+
+#### 4.2 实现（`stage-dispatch.sh dispatch --stage implementation`）
+
+**命令**（在协调终端里；Run 的协调者必须是发起 `worker-start` 的终端，所以派发、等待都敲在它里面）
+
+```bash
+git -C /Users/allan716/orca/iss-e2e-test branch spec-14 main          # 派发模块要 --base-branch spec-<n>
+orca orchestration run-create --objective "smoke #49 implementation dispatch (route table smoke)" --json
+# → run_5a226db6d81b
+bash ~/.claude/skills/implement-spec-split/scripts/stage-route.sh use implementation=claude-glm/glm-5.4/medium
+# 协调终端里敲：
+bash ~/.claude/skills/implement-spec-split/scripts/stage-dispatch.sh dispatch --stage implementation --brief <极小任务的 Brief> \
+  --run run_5a226db6d81b --run-dir <运行目录>/smoke-run --parent-worktree /Users/allan716/orca/iss-e2e-test \
+  --base-branch spec-14 --repo /Users/allan716/orca/iss-e2e-test --ticket 2
+# sidecar 写出 route 之后：stage-route.sh use implementation=claude-glm/glm-5.4/high
+# 协调终端里敲：
+bash ~/.claude/skills/implement-spec-split/scripts/stage-dispatch.sh wait --sidecar <运行目录>/smoke-run/dispatch-implement-2.json --timeout 600
+```
+
+Brief 是「在工作区根目录建一个一行的 `smoke-impl-probe.md`，不 commit、不 push」。
+
+**关键输出**
+
+```text
+dispatch 的 stderr: stage-dispatch: 本次派发路由：实现（implementation）：claude-glm / glm-5.4 / medium（用户用 /grill-router 设置）
+dispatch exit=0，stdout 是 sidecar 路径
+sidecar: "route":{"profile":"claude-glm","model":"glm-5.4","effort":"medium"}
+  "launch_command":"claude-glm --dangerously-skip-permissions --model glm-5.4\\[1m\\] --effort medium; echo $? > …/exit-code"
+  "bare":false（主 checkout 没有 templates/lean-rules.md，普通启动）
+worktree create → /Users/allan716/orca/workspaces/iss-e2e-test/spec-14-t2（分支 spec-14-t2，baseRef spec-14，父是场地工作区）
+worker-start.json: {"dispatchId":"ctx_6dbcc2c4e60c","taskId":"task_b4bf0841fbd4","runId":"run_5a226db6d81b","state":"ready","mode":"terminal",…}
+worker-show --full: launch.effective {agent: claude, model: null, effort: null}；provider {"id":"claude","model":"glm-5.4[1m]"}
+  effects: worktree reused / setup not_applicable / terminal reused / dispatch_input accepted
+worker 终端状态行: [glm-5.4[1m]] │ spec-14-t2 git:(spec-14-t2*)      （没有信任对话）
+worker transcript adefa3f9-…: 5 条全是 "model":"glm-5.4"、"effort":"medium"
+wait: exit=0，stdout 是报告路径；wait.json {"id":"msg_507b7f01aa9b","type":"worker_done","outcome":"succeeded",…}
+stage-dispatch.sh verify --run-dir …: 实现 #2 → glm-5.4 / glm-5.4[1m] / 一致（sidecar actual_model 的来源是 status-line）
+```
+
+**判据：通过。** 下一次派发按切过的路由执行：sidecar 的 `route` 和 `launch_command`、终端状态行、transcript 一致。worker 19 秒完成，探针文件一行，报告 3 行。
+
+### 5. 改回默认
+
+**命令**
+
+```bash
+bash ~/.claude/skills/implement-spec-split/scripts/stage-route.sh use design=claude/opus/high review=claude/opus/high \
+  diagnosis=claude/opus/high implementation=claude-glm/glm-5.4/high research=codex-glm/glm-5.4/high
+bash ~/.claude/skills/implement-spec-split/scripts/stage-route.sh            # 以及 --launch <stage> interactive|headless ×5
+# 同一秒把默认指向官方 Opus 的三行设回起始值，不让全局表停在 Opus 上：
+bash ~/.claude/skills/implement-spec-split/scripts/stage-route.sh use design=claude-glm/glm-5.4/high review=claude-glm/glm-5.4/high diagnosis=claude-glm/glm-5.4/high
+# 再派一次调研起草（smoke-research-2）和一次实现（--ticket 3，sidecar 是 dispatch-implement-3.json）
+```
+
+**关键输出**
+
+```text
+六行全是「默认」，表文件 0 字节；--launch：design / review / diagnosis → claude --model opus --effort high，
+  research → codex -m glm-5.4 -c model_reasoning_effort=high，implementation → claude-glm --model glm-5.4[1m] --effort high
+调研起草 #2: codex-worker: 阶段路由：调研起草（research）：codex-glm / glm-5.4 / high（默认）
+  status.json "model":"glm-5.4","thinking":"high"；rollout {"model":"glm-5.4","effort":"high"}；退出 0
+实现 #3: stderr「本次派发路由：实现（implementation）：claude-glm / glm-5.4 / high」；sidecar route {claude-glm, glm-5.4, high}，
+  launch_command … --effort high；transcript 73342552-… 12 条 effort high；wait exit=0，msg_950998fdefaa worker_done succeeded
+对照（4.2 留着的 worker，起在 claude-glm / glm-5.4 / medium）: 表改回默认之后 /status 仍是 Model: glm-5.4[1m]；
+  16:04 再问它一句，transcript 新增的一条仍是 "effort":"medium"
+```
+
+**判据：通过。** 改回默认后，下一次派发恢复到阶段默认；已经开着的 worker 不受影响。讨论、审查、诊断的阶段默认是官方 Opus，没有为它们再派一次（不花 Opus 额度），只记了表和启动命令。
+
+### 6. doctor
+
+**命令**
+
+```bash
+bash /Users/allan716/orca/implement-spec-split/scripts/doctor.sh      # 主 checkout；doctor 按脚本位置解析路径，等于在主 checkout 里跑
+bash <票工作区>/scripts/doctor.sh                                     # 规格 #58 的版本（带 #65 的 install.sh --check），对照用
+```
+
+**关键输出**（主 checkout 的 doctor，`7a39284`）
+
+```text
+## 阶段 3
+[FAIL] 阶段 3 只配置了一半：缺少全局 CLAUDE.md 分工标记 -> 按 docs/setup.md 阶段 3 同步模板
+[PASS] hook matcher 覆盖 Edit 和 Write
+[PASS] hook matcher 覆盖 Bash
+[PASS] delegate-guard.js 存在
+[WARN] hook 指向另一个 delegate-guard.js：/Users/allan716/.claude/skills/implement-spec-split/hooks/delegate-guard.js -> …
+[FAIL] delegate-guard 冒烟测试未拒绝 15 行 Write -> hook 会静默失效；运行 hooks/test-delegate-guard.js 并检查配置
+[WARN] 未注册 subagent-guard hook：flash 主线程仍能开会话内子代理 -> …
+PASS 10 / WARN 3 / FAIL 2   退出 1
+本机实际 matcher: Edit|Write|NotebookEdit|Bash（/opt/homebrew/bin/node /Users/allan716/.claude/skills/implement-spec-split/hooks/delegate-guard.js）
+```
+
+**判据：通过。** #36 落地的两条 matcher 检查在真机给出的结果与本机一致。两个 FAIL 都不是 matcher：
+
+- 「缺少全局 CLAUDE.md 分工标记」：标记 `<!-- opus-codex-division: v1 -->` 在 `~/.claude/rules/opus-codex-split.md` 里，`~/.claude/CLAUDE.md` 没有（模板是 v2）。本机配置与 doctor 的预期不一致。
+- 「delegate-guard 冒烟测试未拒绝 15 行 Write」：这次是从 claude-glm 会话里跑的，环境带着启动器导出的 `DELEGATE_GUARD_DISABLE=1`，doctor 的冒烟继承了它；只去掉这一个变量、用同一份输入再跑，得到 `permissionDecision: deny`。在 claude-glm 会话里跑 doctor 会有这一条。
+
+**注意**
+
+- 主 checkout 没有 `install.sh`，它的 doctor 也没有 #65 的接入（这两样只在规格 #58 的分支上）。规格 #58 版 doctor 从票工作区跑时，`install.sh --check` 以自己所在的 checkout 为主 checkout，于是五条技能链都报「软链指错」（WARN），配置期望项 `delegate-guard-matcher` 是 PASS（「已覆盖 Edit|Write|Bash」），`unexecutedLoosenings` 为空。
+- doctor 的「技能目录不在 …」「hook 指向另一个 delegate-guard.js」是拿物理路径和 `~/.claude/skills/...` 软链路径按字符串比，从主 checkout 跑也会报。
+
+### 清理
+
+```bash
+rm <子工作区>/smoke-impl-probe.md                       # 探针文件各用一条独立的 rm
+rm <子工作区>/smoke-impl-probe-2.md
+bash ~/.claude/skills/implement-spec-split/scripts/stage-dispatch.sh release --sidecar <运行目录>/smoke-run/dispatch-implement-2.json
+bash ~/.claude/skills/implement-spec-split/scripts/stage-dispatch.sh release --sidecar <运行目录>/smoke-run/dispatch-implement-3.json
+orca terminal close --terminal term_515d8495-… --json   # flash 主会话
+(cd /Users/allan716/orca/iss-e2e-test && bash ~/.claude/skills/implement-spec-split/scripts/lock.sh release find-next-supervise --scope repo --force)
+orca terminal close --terminal term_38defa05-… --json   # 协调终端
+git -C /Users/allan716/orca/iss-e2e-test branch -D spec-14
+rm /tmp/grill-feature-topic-20261128-precision.md
+```
+
+说明：两次 `release` 各是 `worker-release`（外部终端，返回 `retained / external_terminal`）→ `terminal close --tab` → `worktree rm --delete-branch`（`removed: true`），子工作区里 Orca 自建的「Terminal 1」随 worktree 一起没了；第 1 节的终端和 Design session 标签在此之前已关。场地 clone 按 Brief 保留（下次复用），它在 Orca 里的登记（`orca repo add` 建的）留着，CLI 只能 hide、删不掉。两条 Run 记录 `run_5a226db6d81b`、`run_d2d62237290e` 和 Design session 的运行目录（含 `handoff.md`）留着，不占终端和工作区。
+
+### 清理后证据
+
+路由表还原为 0.1 记下的表（`cmp` 与 0.1 的副本逐字节一致，sha256 `911078b2…`）：
+
+```text
+编排（orchestration）：claude-flash / glm-5.3-flash / 启动器默认（锁定，不可改）
+讨论（design）：claude-glm / glm-5.4 / high，不会自动切回；切回用 /grill-router use design=claude/opus/high
+调研起草（research）：codex-glm / glm-5.4 / high（默认）
+实现（implementation）：claude-glm / glm-5.4 / high（默认）
+审查（review）：claude-glm / glm-5.4 / high，不会自动切回；切回用 /grill-router use review=claude/opus/high
+诊断（diagnosis）：claude-glm / glm-5.4 / high，不会自动切回；切回用 /grill-router use diagnosis=claude/opus/high
+```
+
+`git worktree list`（场地仓库，只剩主 checkout；本地分支只有 `main`，工作区干净，远端 `main` 仍是 `cc6c51e`）：
+
+```text
+/Users/allan716/orca/iss-e2e-test cc6c51e [main]
+```
+
+`orca worktree list`：30 条（0.1 时 31 条）。与 0.1 相比，多的是场地 clone 的登记 `0457b82d-…::/Users/allan716/orca/iss-e2e-test`（clone 保留复用）；少的两条（`…/implement-71/smoke/iss-e2e-test`、`…/implement-spec-split/spec-58-t71`）是并行的票 #71 收走的。`orca worktree list | grep -E 'iss-e2e-test|spec-14'` 只剩这一条登记，`spec-14-t2` / `spec-14-t3` 都不在。
+
+`orca terminal list`：22 条（0.1 时 25 条），差异都是别的会话的；`orca terminal list | grep -E 'iss-e2e-test|smoke49|spec-14'` 无输出。本次开的终端（第 1 节的 `smoke49-step2-migrate`、flash 主会话、协调终端、两个 worker、子工作区里的两个「Terminal 1」）和 Design session 标签全部关闭，`orca agent list` 在场地仓库下没有条目。
+
+`orca orchestration worker-list --run run_5a226db6d81b`：
+
+```text
+ctx_4f558b2404f1  succeeded  retained   ← 外部终端的记账记录，终端已关（terminal close --tab）
+ctx_6dbcc2c4e60c  succeeded  retained   ← 同上
+```
+
+Design session 的 `ctx_d08281b3a41c` 同样是 `succeeded / settled / retained`，它的标签由 `design-session.sh` 关掉。
+
+### 结论对照（票 #49 的七条验收）
+
+| # | 验收标准 | 结论 |
+|---|---|---|
+| 1 | 五个阶段各切换一次，下一次派发生效、模型与思考强度生效、报告首部写对 | 审查、诊断、实现、调研起草**通过**；讨论的模型、强度和路由行**通过**，但 Design session 的上游技能加载不过（2.1） |
+| 2 | 讨论阶段收编启动的三处风险各有明确结论 | 上游技能加载**不通过**；handoff 上报被接受、主会话收到并切回**通过**（用户手敲之后）；自动切到新标签**通过** |
+| 3 | 迁移在真机走一遍；目录里审查、诊断那一格的证据补齐 | **通过**（第 1 节、第 3 节） |
+| 4 | 结果写进实测记录或规格评论 | 本节 |
+| 5 | doctor 的 delegate-guard matcher 检查与本机一致 | **通过**；doctor 整体退出 1，两个 FAIL 与 matcher 无关 |
+| 6 | `claude-glm / glm-5.4` 的审查、诊断能写出合格的结论标记 | **通过**（一次写成，没有修复重试） |
+| 7 | MAINTAINING「尚未验证的事项」对应条目已清 | 已清路由表冒烟那条；讨论那条改成只剩没跑过的部分和没过的那一点 |

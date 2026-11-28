@@ -58,19 +58,39 @@ English: [setup.en.md](setup.en.md)
 
 1. Claude Code、Git、Node.js（脚本用 node 处理 JSON 和进程）。
 2. Windows：Git Bash（wrapper 都是 Bash 脚本）。
-3. 把本仓库克隆到 Claude 的技能目录，**路径不要改**，阶段 3 的规则和 hook 都按这个路径引用：
+3. 克隆本仓库，然后运行安装脚本——规格 #58 起安装只有这一条路，幂等、重复运行零修改：
 
    ```bash
    git clone https://github.com/allanpk716/implement-spec-split ~/.claude/skills/implement-spec-split
+   cd ~/.claude/skills/implement-spec-split && ./install.sh
+   ```
+
+   两种安装形态都受支持：**clone 直装**（上面这种，`~/.claude/skills/implement-spec-split` 本身就是仓库，根技能位置就是主 checkout 的真实目录、算已就位，脚本只给子技能建链）和**软链**（克隆在别处，比如 `~/orca/implement-spec-split`，在那个克隆里运行 `./install.sh`，五个技能链都指向它）。`install.sh` 以自己所在的 checkout 为主 checkout，链指向它。两种形态下 `~/.claude/skills/implement-spec-split` 这个路径都成立（clone 直装是仓库本身，软链形态经链解析到克隆），阶段 3 的规则和 hook 照这个路径引用即可。
+
+   `./install.sh` 做两件事：
+
+   - **建技能软链**：扫描 git 跟踪的、含 `SKILL.md` 的目录（根技能和子技能 `find-next`、`grill-feature`、`grill-map`、`grill-router`），逐个确保 `~/.claude/skills/<name>` 是指向主 checkout 对应目录的软链——缺的建、指错的改指、仓库里已不存在的技能留下的悬空链删掉；同名真实目录不动、只警告。「指向正确」按链解析到的物理目录判定，所以下文手工写的 `ln -s ~/.claude/skills/implement-spec-split/<name> …` 解析到同一目录同样算就位。
+   - **本机配置期望项**：一份「仓库对本机配置的期望」清单（`install.sh` 内置的数据），每项标 tighten（收紧）或 loosen（放宽）。tighten 项本机不满足时（v1 唯一一项：`delegate-guard` 的 PreToolUse matcher 覆盖 `Edit`、`Write`、`Bash`），先把 `settings.json` 备份到 `<settings 所在目录>/backups/install-<时间戳>/`，再用 node 原地改，改后校验是合法 JSON，不是就用备份还原并报 FAIL。loosen 项永不执行，只列进「未执行的放宽项」（人类输出的专门一节，`--json` 的 `unexecutedLoosenings` 数组），记 WARN、退出码 1。hook 没注册的期望项不算漂移，不处理也不报告（阶段 3 是可选采纳的，没注册 hook 之前 `install.sh` 只建链）。
+
+   `./install.sh --check` 只报告不改（不建链、不写 `settings.json`、不建备份）：全部就位退出 0，有漂移退出 1。`./install.sh --json` 只输出一个 JSON 对象（形状沿用 `scripts/doctor.sh`：`checks` 数组 + `summary`），给脚本读。Windows（Git Bash）上不建链不删链，每个未就位的技能打印一行手工步骤（`mklink /J`，或者直接复制）记 WARN；期望项那段只经 node 读写文件，各平台一样。
+
+   不想用脚本时，手工等价于在 macOS / Linux 上建这四条链（Windows 用 `mklink /J`，或者直接复制；技能新增、改名、退役时要自己跟着改）：
+
+   ```bash
+   ln -s ~/.claude/skills/implement-spec-split/find-next ~/.claude/skills/find-next
+   ln -s ~/.claude/skills/implement-spec-split/grill-feature ~/.claude/skills/grill-feature
+   ln -s ~/.claude/skills/implement-spec-split/grill-map ~/.claude/skills/grill-map
+   ln -s ~/.claude/skills/implement-spec-split/grill-router ~/.claude/skills/grill-router
    ```
 
 **验证**
 
 ```bash
 ls ~/.claude/skills/implement-spec-split/{SKILL.md,scripts,templates,hooks}
+~/.claude/skills/implement-spec-split/install.sh --check      # 全部就位退出 0；有漂移退出 1 并列出每一处
 ```
 
-装完任意阶段后都可以运行 `scripts/doctor.sh` 检查。
+装完任意阶段后都可以运行 `scripts/doctor.sh` 检查；它报「本机安装状态」有漂移时，按提示运行 `./install.sh` 修。
 
 ---
 
@@ -145,21 +165,16 @@ spec 是一个 GitHub 父 issue，它的子 issue 就是 ticket，ticket 之间�
 
 被标成「搁置」的地图和票会跳过。实现阶段不扫，那是 `/implement-spec-split --status` 的事。
 
-**安装**：软链到技能目录（Windows 上用 `mklink /J`，或者直接复制）：
+**安装**：阶段 0 的 `./install.sh` 已经把它、两个 Design session 薄包装技能和阶段路由命令 `/grill-router`（用法见阶段 4）一起软链到技能目录，仓库更新后重跑一次即可（`git pull && ./install.sh`，落地流程会自动跑）。手工等价（Windows 用 `mklink /J`，或者直接复制）：
 
 ```bash
 ln -s ~/.claude/skills/implement-spec-split/find-next ~/.claude/skills/find-next
-```
-
-再软链两个 Design session 薄包装技能和阶段路由命令 `/grill-router`（用法见阶段 4；Windows 同样用 `mklink /J` 或复制）：
-
-```bash
 ln -s ~/.claude/skills/implement-spec-split/grill-feature ~/.claude/skills/grill-feature
 ln -s ~/.claude/skills/implement-spec-split/grill-map ~/.claude/skills/grill-map
 ln -s ~/.claude/skills/implement-spec-split/grill-router ~/.claude/skills/grill-router
 ```
 
-**用法**：`/find-next [--worker codex|self]`，也可以直接问「下一步做什么」。想看全貌时用 `/find-next --list`，或者直接问「还有什么没做完」：列出全部待办（正在实现、未拆票、缺规格、待讨论的决策票、状态没收尾、散票），不派 worker。决定接下来开发什么时用 `/find-next --batch --workers 4`（`--workers` 是全机 GLM worker 总数，`--specs` 是同时开几份规格，默认 2）：缺规格的票和有规格未拆票的规格，每组由一个 codex worker 起草，你确认一轮后统一发布；最后总是给出全仓库可以开发的规格的编号顺序和每个会话要跑的命令，你确认后它在 Orca 里自动开 worktree 并启动会话（不在 Orca 里时把命令复制到各个 worktree 运行）。一波合入后再跑一次开下一波。同一仓库同一时间只在一个会话里跑 `--batch`。
+**用法**：`/find-next [--worker codex|self]`，也可以直接问「下一步做什么」。想看全貌时用 `/find-next --list`，或者直接问「还有什么没做完」：列出全部待办（正在实现、未拆票、缺规格、待讨论的决策票、状态没收尾、散票），不派 worker。决定接下来开发什么时用 `/find-next --batch --workers 4`（`--workers` 是全机 GLM worker 总数，`--specs` 是同时开几份规格，默认 2）：缺规格的票和有规格未拆票的规格，每组由一个 codex worker 起草，审稿后每个待定条目按 worker 的推荐自动拍板（可推翻，不等回答）再统一发布；最后总是给出全仓库可以开发的规格的编号顺序和每个会话要跑的命令，随后它在 Orca 里自动开 worktree 并启动会话（不在 Orca 里时把命令复制到各个 worktree 运行）。要改某条拍板就回「推翻 #<n> <条目> 改选 <X>」。一波合入后再跑一次开下一波。同一仓库同一时间只在一个会话里跑 `--batch`。
 
 - 默认 `codex`：机械扫描交给脚本（本地 markdown 跟踪器用 `find-next/scripts/scan.py`，GitHub 用 `scripts/pipeline-status.sh`），判断交给一个只读的 codex worker，会话里只读它不超过 15 行的结论。需要先完成阶段 2。
 - `self`：会话自己判断，不依赖 codex。
@@ -263,7 +278,7 @@ scripts/selftest-codex.sh --only L1   # 真连一次 GLM，花极少 token；失
    }
    ```
 
-   macOS / Linux 把路径换成 `node ~/.claude/skills/implement-spec-split/hooks/delegate-guard.js` 的绝对路径。改之前先备份 `settings.json`。
+   macOS / Linux 把路径换成 `node ~/.claude/skills/implement-spec-split/hooks/delegate-guard.js` 的绝对路径。matcher 里的 `Bash` 不用手工核对和备份：之后在仓库里运行 `./install.sh`，它把「delegate-guard 的 matcher 覆盖 `Edit`、`Write`、`Bash`」列为期望项（tighten），发现已注册的这条缺 `Bash` 时先把 `settings.json` 备份到 `~/.claude/backups/install-<时间戳>/`，再把缺的工具追加到 matcher 末尾（已有的 `NotebookEdit` 原样保留），改后校验是合法 JSON；照上面原样注册（已含 `Bash`）就不用补。`install.sh` 不替你注册 hook——hook 没注册不算漂移，下面几个 hook 仍要手工加。
 
    **同时注册 unattended-ask-guard**：无人值守的 `/implement-spec-split --auto-land` 会话里没人会来回答，这个 hook 会拒绝 `AskUserQuestion`，并提示模型改走自动拍板或停车报告。在同一个 `hooks.PreToolUse` 数组里再追加一项：
 
@@ -420,7 +435,7 @@ node -e 'console.log(JSON.stringify({tool_name:"Write",tool_input:{file_path:"C:
 
 **前提**
 
-- 阶段 0（软链安装）和阶段 3（delegate-guard hook）已就绪；`/grill-feature`、`/grill-map`、`/grill-router` 三个软链按 README 安装。
+- 阶段 0（`./install.sh` 已跑，`/grill-feature`、`/grill-map`、`/grill-router` 三个软链就位）和阶段 3（delegate-guard hook）已就绪。
 - `claude-glm` 已配好（阶段 2 的 GLM 端点与 API Key）：`claude-flash` 复用它的端点和 `~/ops/state/claude-glm/apikey`，不复制密钥。
 - 安装启动器（四件套在 `~/ops/services/claude-flash/`，详见其 README.md）：
 
@@ -443,7 +458,7 @@ node -e 'console.log(JSON.stringify({tool_name:"Write",tool_input:{file_path:"C:
 **两个设计入口（Design session）**
 
 - `/grill-feature <想法>`：小功能。flash 主会话调 `scripts/design-session.sh` 开出一个 Design session（按「讨论」阶段的路由启动，默认官方 Opus），然后阻塞等待、不耗 token；Orca 会自动切到那个会话，你直接和 Opus 讨论，讨论完它当场做 to-spec、to-tickets、commit、push，写交接摘要后通知 flash 继续并自动切回主会话，flash 读完摘要就在主会话接着跑 `/find-next` 推进模式（起草、发布、启动第 1 波、总控都在这里）。
-- `/grill-map <地图或想法>`：大模块（wayfinder 地图）。同上，接上后 find-next 停在合成提问那一步等你；你说"先到这"就提前结束，这时不接 find-next，flash 只转述交接摘要里的地图状态和下一步。
+- `/grill-map <地图或想法>`：大模块（wayfinder 地图）。同上，接上后 find-next 把要拍板的取舍合成一轮按推荐自动拍板（可推翻）、不等回复，接着往下推进；你说"先到这"就提前结束，这时不接 find-next，flash 只转述交接摘要里的地图状态和下一步。
 - Design session 的运行目录在 `~/.cache/implement-spec-split/design/<repo>-<时间>-<kind>/`，交接摘要是其中的 `handoff.md`。
 
 **规格会话与 Opus review**
@@ -498,15 +513,15 @@ $S migrate                                                              # 迁移
 
 ## 更新与回滚
 
-- **更新**：`cd ~/.claude/skills/implement-spec-split && git pull`。模板和脚本立即生效；hook 下次调用即生效。
+- **更新**：`cd ~/.claude/skills/implement-spec-split && git pull && ./install.sh`（clone 直装形态；软链形态在克隆目录里跑同一条）。`install.sh` 补上仓库新增技能的软链、删掉已退役技能的悬空链、把期望项里新的 tighten 项补上（先备份）；重复运行零修改。模板和脚本立即生效；hook 下次调用即生效。无人值守落地会在每次落地后自动跑它（根 `SKILL.md` 第 9 步），clone 直装的这份会先被快进到新 main，所以平时不用手工更新；快进不了（不在 `main` 或不干净）时落地报告的「要你做的」会写一句 `git pull`。已知限制：clone 直装形态下如果别处还有一份主 checkout（落地流程从那份主 checkout 跑 `install.sh`），`~/.claude/skills/implement-spec-split` 这个真实目录每次都会报一条 WARN「是真实目录不是软链，未动…另一份 clone？确认后改名或删除」，`install.sh` 因此每次落地都退出 1、落地报告的「要你做的」每次挂这一条，重复运行清不掉——属预期，不影响已经完成的落地；要它消失，按提示把这份 clone 改名或删除（改用软链形态）后重跑 `./install.sh`。
 - **分工规则更新**：仓库里的 `templates/global-claude-md.md` 改了之后，需要手动同步到 `~/.claude/CLAUDE.md`（全局文件不在仓库管理范围内）。
-- **升级到阶段路由表**：旧版装过 `judgment-model`、`worker-model` 两个开关的，删掉 `~/.claude/skills/` 下这两个软链、软链 `grill-router`；第一次运行 `/grill-router` 会迁移旧设置（见阶段 4）。
-- **暂停分工**：从 `settings.json` 删掉 delegate-guard 那一项，并从 CLAUDE.md 删掉分工一节。
-- **换机器**：要搬三样东西：克隆本仓库（阶段 0）、`~/.codex/config.toml` 与代理（阶段 2）、CLAUDE.md 分工一节和 `settings.json` 的 hook 注册（阶段 3）。只克隆仓库不够。
+- **升级到阶段路由表**：旧版装过 `judgment-model`、`worker-model` 两个开关的，`./install.sh` 会删掉 `~/.claude/skills/` 下这两个悬空软链、软链 `grill-router`；第一次运行 `/grill-router` 会迁移旧设置（见阶段 4）。
+- **暂停分工**：从 `settings.json` 删掉 delegate-guard 那一项，并从 CLAUDE.md 删掉分工一节。之后 `install.sh` 不再对它有期望（hook 没注册不算漂移），只是阶段 4 用不了。
+- **换机器**：要搬三样东西：克隆本仓库并运行 `./install.sh`（阶段 0）、`~/.codex/config.toml` 与代理（阶段 2）、CLAUDE.md 分工一节和 `settings.json` 的 hook 注册（阶段 3）。只克隆仓库不够。
 
 ## 自检
 
-`scripts/doctor.sh` 自身的检查只读取本机配置，不修改配置文件。它按"基础、阶段 1、阶段 2、阶段 3"报告当前状态：
+`scripts/doctor.sh` 自身的检查只读取本机配置，不修改配置文件。它按"基础、阶段 1、阶段 2、阶段 3"报告当前状态，其中「基础」组的「本机安装状态」一项调 `install.sh --check --json`（同样只读）：技能链缺 / 指错 / 悬空记 WARN，tighten 期望项未满足记 FAIL，这两种的提示是「运行 install.sh（落地时会自动运行）」；提示不全是这一句——脚本不替人做的，提示写明要手工做：另一份 clone 的真实目录（确认后改名或删除）、Windows 的建链（`install.sh --check` 打印的 `mklink /J` 步骤）、放宽项（需要的话手工改，安装脚本不放宽配置），其余是「在技能目录里运行 bash install.sh --check 看详情」。阶段 3 自己的检查（如 matcher 缺 `Bash`）报 FAIL 时给的也是手工改法，不是「运行 install.sh」。各状态的含义：
 
 - `PASS`：检查通过。
 - `WARN`：该项可能影响对应阶段，但不阻塞其他阶段；按提示修复。

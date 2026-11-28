@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # Read-only environment doctor for implement-spec-split.
+#
+# The local install state (规格 #58 票 #65) is judged by install.sh --check,
+# which is read-only too: doctor hands it the settings.json and skills
+# directory it reads itself and translates what it reports (see 本机安装状态
+# below). doctor never runs the install mode.
 
 set -u
 
@@ -52,10 +57,13 @@ SUBAGENT_TSV=$TMP_ROOT/subagent.tsv
 PREFLIGHT_TSV=$TMP_ROOT/preflight.tsv
 SMOKE_OUT=$TMP_ROOT/smoke.out
 GLM_OUT=$TMP_ROOT/glm.out
+INSTALL_OUT=$TMP_ROOT/install.json
+INSTALL_ERR=$TMP_ROOT/install.err
+INSTALL_ROWS=$TMP_ROOT/install.rows
 : > "$CHECKS"
 
 cleanup() {
-  for file in "$CHECKS" "$HOOKS_TSV" "$SUBAGENT_TSV" "$PREFLIGHT_TSV" "$SMOKE_OUT" "$GLM_OUT"; do
+  for file in "$CHECKS" "$HOOKS_TSV" "$SUBAGENT_TSV" "$PREFLIGHT_TSV" "$SMOKE_OUT" "$GLM_OUT" "$INSTALL_OUT" "$INSTALL_ERR" "$INSTALL_ROWS"; do
     [ -e "$file" ] && rm -f "$file"
   done
   rmdir "$TMP_ROOT" 2>/dev/null || true
@@ -131,7 +139,122 @@ esac
 if same_path "$SKILL_DIR" "$EXPECTED_SKILL_DIR"; then
   add basic PASS "技能目录在期望位置" "The skill directory is in the expected location"
 else
-  add basic WARN "技能目录不在 $EXPECTED_SKILL_DIR" "The skill directory is not at $EXPECTED_SKILL_DIR" "全局规则和 hook 按 ~/.claude/skills/implement-spec-split 引用，位置不同需要改路径" "Global rules and hooks reference ~/.claude/skills/implement-spec-split; adjust paths if this location differs"
+  add basic WARN "技能目录不在 $EXPECTED_SKILL_DIR" "The skill directory is not at $EXPECTED_SKILL_DIR" "全局规则和 hook 按 ~/.claude/skills/implement-spec-split 引用，位置不同需要改路径；运行 install.sh 建链" "Global rules and hooks reference ~/.claude/skills/implement-spec-split; adjust paths if this location differs; run install.sh to create the link"
+fi
+
+# 本机安装状态（规格 #58 票 #65）。install.sh --check --json 只读：不建链、不改
+# settings.json、不建备份。两处位置透传 doctor 自己的解析（ISS_CLAUDE_SETTINGS 与
+# 上面的 SETTINGS_JSON、ISS_SKILLS_DIR 与 EXPECTED_SKILL_DIR 的父目录同一口径），外层
+# 环境里的同名变量不作数。它的每一行非 PASS 结果翻成 doctor 的一行：
+#   技能链缺 / 指错 / 悬空 / 是真实目录（install.sh --check 把前三类记 FAIL）
+#       → WARN，同「技能目录不在 …」；前三类提示统一「运行 install.sh（落地时会自动运行）」
+#   tighten 期望项未满足 → FAIL，同「未覆盖 Bash」，提示同上
+#   放宽项未执行、真实目录、Windows 手工步骤 → WARN，提示写明要手工做（install.sh 不替人改）
+#   install.sh 自己出的错（技能清单 / 期望项清单坏、settings.json 不是 JSON）→ FAIL
+#   → 原话带上，提示去 install.sh --check 看详情
+# 全部就位记一条 PASS。退出码不是 0 / 1 或输出不是 JSON = 跑不起来：一条 WARN，stderr 原
+# 样转给 doctor 的 stderr，doctor 照常往下走。
+ISS_CLAUDE_SETTINGS=$SETTINGS_JSON ISS_SKILLS_DIR=$HOME/.claude/skills \
+  bash "$SKILL_DIR/install.sh" --check --json > "$INSTALL_OUT" 2> "$INSTALL_ERR"
+INSTALL_EXIT=$?
+if [ "$INSTALL_EXIT" -ne 0 ] && [ "$INSTALL_EXIT" -ne 1 ]; then
+  cat "$INSTALL_ERR" >&2
+  add basic WARN "install.sh --check 跑不起来（退出码 ${INSTALL_EXIT}），无法核对本机安装状态" "install.sh --check could not run (exit code ${INSTALL_EXIT}); the local install state is unknown" "在技能目录里运行 bash install.sh --check 看原因" "Run bash install.sh --check in the skill directory to see why"
+elif ! INSTALL_OUT=$INSTALL_OUT INSTALL_ROWS=$INSTALL_ROWS node <<'NODE'
+const fs = require('fs');
+let out;
+try { out = JSON.parse(fs.readFileSync(process.env.INSTALL_OUT, 'utf8')); } catch { process.exit(3); }
+if (!out || !Array.isArray(out.checks)) process.exit(3);
+const sep = '\x1f';
+// What install.sh --check fixes by itself when it runs at landing: one hint for all.
+const RUN_ZH = '运行 install.sh（落地时会自动运行）';
+const RUN_EN = 'Run install.sh (it runs automatically at landing)';
+// What it never does by itself: the row says so and points at the manual step.
+const MANUAL_ZH = '需要的话手工改（安装脚本不放宽配置）';
+const MANUAL_EN = 'Change it by hand if intended (install.sh never loosens the configuration)';
+const DETAILS_ZH = '在技能目录里运行 bash install.sh --check 看详情';
+const DETAILS_EN = 'Run bash install.sh --check in the skill directory for details';
+// A link's own text (not resolved), or nothing when it is not a link.
+const readlink = link => { try { return fs.readlinkSync(link); } catch { return ''; } };
+const rows = [];
+for (const row of out.checks) {
+  if (row.level === 'PASS') continue;
+  const name = row.name || '', link = row.link || '', target = row.target || '';
+  const where = readlink(link);
+  let level = row.level, zh, en, hintZh = RUN_ZH, hintEn = RUN_EN;
+  if (row.group === 'skills') {
+    // A skill not in place is a WARN here whatever --check calls it: the
+    // same drift as「技能目录不在 …」, and install.sh repairs it by itself.
+    level = 'WARN';
+    switch (row.status) {
+      case 'missing':
+        zh = `技能 ${name} 未安装：${link} 缺链`;
+        en = `Skill ${name} is not installed: ${link} is missing`;
+        break;
+      case 'wrong':
+        zh = `技能 ${name} 软链指错：${link}${where ? ` 指向 ${where}` : ''}（主 checkout 是 ${target}）`;
+        en = `Skill ${name} links elsewhere: ${link}${where ? ` points at ${where}` : ''} (the main checkout is ${target})`;
+        break;
+      case 'dangling':
+        zh = `悬空链 ${name}：${link} 指向已不存在的 ${where || target}`;
+        en = `Dangling link ${name}: ${link} points at ${where || target}, which no longer exists`;
+        break;
+      case 'real-dir':
+        hintZh = '另一份 clone？确认后改名或删除后运行 install.sh（安装脚本不动真实目录）';
+        hintEn = 'Another clone? Rename or remove it, then run install.sh (install.sh never touches a real directory)';
+        zh = `技能 ${name} 是真实目录不是软链：${link}（主 checkout 是 ${target}）`;
+        en = `Skill ${name} is a real directory, not a link: ${link} (the main checkout is ${target})`;
+        break;
+      case 'manual':
+        hintZh = row.hint || '';
+        hintEn = `Do by hand what install.sh --check prints for ${name} (mklink /J in cmd.exe, or copy the directory)`;
+        zh = `技能 ${name} 未就位（Windows 不自动建链）：${link}`;
+        en = `Skill ${name} is not in place (Windows does not link automatically): ${link}`;
+        break;
+      default:
+        level = 'FAIL';
+        hintZh = DETAILS_ZH; hintEn = DETAILS_EN;
+        zh = `install.sh 核对技能时出错（它自己修不了）：${row.message || ''}`;
+        en = `install.sh could not check a skill (${name || 'the skill list'}) and cannot fix it by itself`;
+    }
+  } else {
+    switch (row.status) {
+      case 'unmet':
+        zh = `配置期望项 ${name} 未满足：本机 settings.json 与仓库期望不一致`;
+        en = `Configuration expectation ${name} is not met: settings.json differs from what the repository expects`;
+        break;
+      case 'loosen':
+        level = 'WARN';
+        hintZh = MANUAL_ZH; hintEn = MANUAL_EN;
+        zh = `放宽项 ${name} 未执行：本机配置比仓库期望严`;
+        en = `Loosening ${name} is not applied: the local configuration is stricter than the repository expects`;
+        break;
+      default:
+        level = 'FAIL';
+        hintZh = DETAILS_ZH; hintEn = DETAILS_EN;
+        zh = `install.sh 核对配置期望项时出错：${row.message || ''}`;
+        en = `install.sh could not check configuration expectation ${name || 'list'} and cannot fix it by itself`;
+    }
+  }
+  rows.push([level, zh, en, hintZh, hintEn].map(field => String(field).replace(/[\r\n\x1f]/g, ' ')).join(sep));
+}
+if (!rows.length) {
+  const skills = out.checks.filter(row => row.group === 'skills').length;
+  const config = out.checks.filter(row => row.group === 'config').length;
+  rows.push(['PASS',
+    `本机安装与仓库期望一致（${skills} 个技能就位${config ? `，${config} 项配置期望项满足` : ''}）`,
+    `The local install matches the repository (${skills} skills in place${config ? `, ${config} configuration expectation${config === 1 ? '' : 's'} met` : ''})`,
+    '', ''].join(sep));
+}
+fs.writeFileSync(process.env.INSTALL_ROWS, rows.join('\n') + '\n');
+NODE
+then
+  add basic WARN "install.sh --check 的输出无法解析，无法核对本机安装状态" "install.sh --check produced output doctor could not parse; the local install state is unknown" "在技能目录里运行 bash install.sh --check 看原因" "Run bash install.sh --check in the skill directory to see why"
+else
+  while IFS=$'\x1f' read -r level zh en hint_zh hint_en; do
+    [ -n "$level" ] || continue
+    add basic "$level" "$zh" "$en" "$hint_zh" "$hint_en"
+  done < "$INSTALL_ROWS"
 fi
 
 # 阶段 1

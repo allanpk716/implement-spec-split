@@ -498,6 +498,19 @@ testCase('implement phase ending with a full-width question mark blocks', () => 
       assert.match(reason, /可自动采纳：是/);
       assert.match(reason, /## 停车报告/);
       assert.match(reason, /不要问人/);
+      // 票 #70 (规格 #58): a trade-off is never a reason to ask. The reason
+      // names the 可自动采纳：否 / 推荐：无 outcome (pick a reversible option by
+      // the reversibility rule) and the only two categories that still park.
+      assert.match(reason, /可自动采纳：否/);
+      assert.match(reason, /推荐：无/);
+      assert.match(reason, /可逆/);
+      assert.match(reason, /停车类别 auth/);
+      assert.match(reason, /停车类别 error/);
+      // 规格 #58 review fix r3 (trade-off 2 = A): auth covers a physical action
+      // too, in the words of the category table and the hooks README's rule B.
+      assert.match(reason, /需要本人身份、凭据或物理动作（停车类别 auth）/);
+      assert.doesNotMatch(reason, /需要本人身份或凭据/);
+      assert.doesNotMatch(reason, /真要人决定的写停车报告/);
     }
   );
 });

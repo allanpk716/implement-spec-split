@@ -14,9 +14,12 @@ const TOOL_NAME = 'AskUserQuestion';
 const DISABLE_ENV = 'UNATTENDED_ASK_GUARD_DISABLE';
 const DENY_REASON =
   '无人值守 Run（--auto-land）不能问人，没人会来答。' +
-  'Opus 标了『可自动采纳：是』且有推荐的取舍，按推荐做并记进落地报告的『### 自动拍板（可推翻）』；' +
+  'Opus 审查『需要人取舍』的条目按 SKILL.md 处理、不停车：『可自动采纳：是』且有推荐的按推荐做；' +
+  '『可自动采纳：否』或『推荐：无』的按可逆性规则自选一个可逆选项并写理由；' +
+  '两者都记进落地报告的『### 自动拍板（可推翻）』；' +
   '合并冲突按 SKILL.md 交 merger 处理并经 Opus 审查；' +
-  '其余真要人决定的事按 SKILL.md 写停车报告（## 停车报告 / ### 需要你决定）后停车。' +
+  '只有需要本人身份、凭据或物理动作（停车类别 auth）、或列出的选项里没有可逆的（停车类别 error）' +
+  '才按 SKILL.md 写停车报告（## 停车报告 / ### 需要你决定）后停车。' +
   '不要再调用 AskUserQuestion。';
 
 function deny(reason) {

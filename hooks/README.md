@@ -4,7 +4,7 @@
 
 ## 注册
 
-完整的安装步骤（含全局分工规则）见 [docs/setup.md](../docs/setup.md) 第 3 阶段。把 `<you>` 换成你的用户名；macOS / Linux 换成脚本的绝对路径。在 `~/.claude/settings.json` 中加入：
+完整的安装步骤（含全局分工规则）见 [docs/setup.md](../docs/setup.md) 第 3 阶段；技能软链与下面的 matcher 核对由仓库根的 `./install.sh` 负责（见本节末）。把 `<you>` 换成你的用户名；macOS / Linux 换成脚本的绝对路径。在 `~/.claude/settings.json` 中加入：
 
 ```json
 {
@@ -27,7 +27,9 @@
 
 若 `settings.json` 已有 `hooks.PreToolUse`，把上面的 matcher 配置合并到现有数组中即可。
 
-matcher 必须包含 `Bash`，flash 模式才能识别 `sed -i`、heredoc、`>` / `>>` 重定向和 `tee` 这类源码写入。未设置 `FLASH_ORCHESTRATOR` 时，hook 收到 Bash 输入会直接放行，普通会话行为不变。`scripts/doctor.sh` 会检测这一项：matcher 缺 `Bash` 时在阶段 3 报 FAIL 并给出修正提示；它只检测，不改 `settings.json`。
+matcher 必须包含 `Bash`，flash 模式才能识别 `sed -i`、heredoc、`>` / `>>` 重定向和 `tee` 这类源码写入。未设置 `FLASH_ORCHESTRATOR` 时，hook 收到 Bash 输入会直接放行，普通会话行为不变。
+
+「matcher 覆盖 `Edit`、`Write`、`Bash`」是仓库根 `./install.sh` 的第一条本机配置期望项（规格 #58，方向 tighten）。在仓库里运行 `./install.sh`（落地流程每次落地后也会自动运行它）：已注册的 delegate-guard 这一条 matcher 缺 `Bash` 时，它先把 `settings.json` 备份到 `<settings 所在目录>/backups/install-<时间戳>/`，再把缺的工具追加到 matcher 末尾（已有的 `NotebookEdit` 原样保留），改后校验是合法 JSON、不是就用备份还原；已含 `Bash` 的一字不动。`./install.sh --check` 只报告不改，有漂移退出 1。它不替你注册 hook：没注册 delegate-guard 时这一项不算漂移、不处理也不报告，上面的注册步骤照旧是手工的。`scripts/doctor.sh` 只检测：matcher 缺 `Bash` 时报两条 FAIL——阶段 3 自己那条给手工改法（参考本文件和 `docs/setup.md` 第 3 阶段，把 `Bash` 加进 matcher），基础组「本机安装状态」那条（调 `install.sh --check --json` 得来）提示「运行 install.sh（落地时会自动运行）」；它自己不改 `settings.json`（它调的 `install.sh --check` 同样只读）。
 
 ## 裸调 codex exec 拦截
 
@@ -122,7 +124,7 @@ implement-spec-split 派发实现类 worker（票的实现、fix）时默认精�
 }
 ```
 
-macOS / Linux 用上面的绝对路径；Windows 把路径换成 `node C:/Users/<you>/.claude/skills/implement-spec-split/hooks/subagent-guard.js`。claude-flash 和 openclaude 是用 `--settings` 叠加启动的，用户级 `~/.claude/settings.json` 照样生效，不需要在各自的 settings 里重复注册。**这一步是用户手工步骤**：仓库只带脚本和上面这段配置，不改 `~/.claude/settings.json`；没注册之前 hook 不生效，flash 主线程仍能开会话内子代理。精简启动的实现 worker 不加载本 hook（见上节），派发出去的 worker 本来就不该再派发，这条由 Brief 的「不再派发」条款兜底。
+macOS / Linux 用上面的绝对路径；Windows 把路径换成 `node C:/Users/<you>/.claude/skills/implement-spec-split/hooks/subagent-guard.js`。claude-flash 和 openclaude 是用 `--settings` 叠加启动的，用户级 `~/.claude/settings.json` 照样生效，不需要在各自的 settings 里重复注册。**这一步仍是用户手工步骤**：`./install.sh` 只会收紧已注册的 delegate-guard 那条 matcher（见上文 delegate-guard「注册」），期望项清单里没有 subagent-guard，也不替人注册任何 hook——仓库带脚本和上面这段配置，subagent-guard 要自己加进 `~/.claude/settings.json`；没注册之前 hook 不生效，flash 主线程仍能开会话内子代理。精简启动的实现 worker 不加载本 hook（见上节），派发出去的 worker 本来就不该再派发，这条由 Brief 的「不再派发」条款兜底。
 
 测试命令：
 
@@ -211,7 +213,7 @@ Run 状态：从 command-args 取第一个数字参数作为 `<n>`，再从 `ISS
 两条规则：
 
 - **规则 A（自关）**：`phase` 为 `done`、`waiting` 或 `parked`，且 transcript 里没有任何 Bash tool_use 的 command 包含 `close-self.sh` 时，block。理由提醒先确认落地/停车报告评论已发出，最后一条命令运行 `<skill dir>/scripts/close-self.sh --run-dir <Spec Run root>`（落地后加 `--remove-worktree <集成 worktree>`，停车不加；`--run-dir` 两种情况都带，不带它不释放票工作区），见 SKILL.md 第 10 步。
-- **规则 B（问人）**：`phase` 不是 `parked`、`done`、`waiting`，且最后一条 assistant 消息的文本（取最后一个 text block 的最后 300 个字符）以 `？` / `?` 结尾，或包含 `请确认`、`等你`、`需要你`、`要不要`、`是否继续`、`你来决定`、`请选择`、`回复我` 时，block。理由告诉模型：可自动采纳的按推荐做，合并冲突交 merger + Opus 审查，真要人决定的写停车报告后停车并自关；只是在等后台任务就继续等通知，不要问人。
+- **规则 B（问人）**：`phase` 不是 `parked`、`done`、`waiting`，且最后一条 assistant 消息的文本（取最后一个 text block 的最后 300 个字符）以 `？` / `?` 结尾，或包含 `请确认`、`等你`、`需要你`、`要不要`、`是否继续`、`你来决定`、`请选择`、`回复我` 时，block。理由告诉模型：Opus 审查『需要人取舍』的条目按 SKILL.md 处理、不停车——`可自动采纳：是` 的按推荐做，`可自动采纳：否` 或 `推荐：无` 的按可逆性规则自选一个可逆选项并写理由，都记进落地报告的 `### 自动拍板（可推翻）`；合并冲突交 merger + Opus 审查；只有需要本人身份、凭据或物理动作（停车类别 `auth`）、或列出的选项里没有可逆的（停车类别 `error`）才写停车报告后停车并自关；只是在等后台任务就继续等通知，不要问人。
 
 `phase` 为 `split`、`implement`、`integrate`、`review`、`land` 且最后一条消息不是在问人时放行，所以等后台任务通知时正常结束一轮不会被拦。
 

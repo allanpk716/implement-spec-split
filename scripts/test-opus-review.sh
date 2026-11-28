@@ -1114,7 +1114,7 @@ check "the plain command's first line is the unchanged route line" \
 export CLAUDE_CODE_SUBAGENT_MODEL="glm-5.4" CLAUDE_CODE_SUBAGENT_MODEL_FORCE="glm-5.4"
 export FAKE_CLAUDE_LOG="$WORK/doc-claude.log" FAKE_GLM_LOG="$WORK/doc-glm.log"
 
-EXIT_CODE_SENTENCE='退出码为 3（额度或 429）时按 quota 停车，其余非 0 退出码仍按原规则停车并说明（退出码含义见 scripts/opus-review.sh 头注释）'
+EXIT_CODE_SENTENCE='退出码为 3（额度或 429）时按 quota 停车，2（认证失败）按 auth 停车，4 按 transient 停车，其余非 0 退出码按 error 停车并说明（退出码含义见 scripts/opus-review.sh 头注释）'
 check "SKILL delegates exit codes to the wrapper header" \
   grep -Fq "$EXIT_CODE_SENTENCE" "$HERE/../SKILL.md"
 check "find-next delegates exit codes to the wrapper header" \
