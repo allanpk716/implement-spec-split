@@ -53,6 +53,13 @@
 # an option that needs the owner's own hands (Spec 7, trade-off 3 = A); both
 # setup guides state the two-clone limitation of a clone-direct install (Spec 6,
 # trade-off 2 = A: one WARN at every landing, which never clears).
+# The third review fix of 规格 #58 (r3) pins, group by group: auth covers a
+# physical action too (trade-off 2 = A — the category table's auth row, step
+# 8's auth rule, the hands-on bullet, Flash mode's Stopping, GLOSSARY's Parking
+# report and the hooks README's rule B all say identity, credentials or
+# physical action, and the flash paths — Stopping and the input of find-next's
+# selecting Opus review — pick no option that needs the owner's hands; the
+# category set itself is not touched).
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -227,15 +234,16 @@ has '「环境约束（找文件与子进程）」一节是 worker 侧的对应�
 # Step 8: an item under 需要人取舍 is decided, never parked on. A usable
 # recommendation is applied; 可自动采纳：否 and 推荐：无 take the reversibility
 # rule, a recommendation that is reversible and not outward-facing first; only
-# an item that needs the owner's identity (auth) or lists no reversible option
-# (error) parks; an option that loosens a safety boundary is recorded under
-# 未执行的放宽项 and never taken. The two marks stay the reviewer's wording, so
-# the pins name the outcomes, not the marks.
+# an item that needs the owner's identity, credentials or physical action (auth)
+# or lists no reversible option (error) parks; an option that loosens a safety
+# boundary is recorded under 未执行的放宽项 and never taken. The two marks stay
+# the reviewer's wording, so the pins name the outcomes, not the marks.
 has 'never parks the Run for being a trade-off' 'SKILL.md step 8 never parks on a trade-off' "$SKILL"
 has 'pick a reversible option by 「可逆性高 > 改动面小 > 与现有 ADR 一致」' \
   'SKILL.md step 8 decides an item without a usable recommendation by the reversibility rule' "$SKILL"
 has 'preferring the reviewer' 'SKILL.md step 8 prefers a recommendation that is reversible and not outward-facing' "$SKILL"
-has 'parks with category `auth`' 'SKILL.md step 8 parks an item that needs the owner identity as auth' "$SKILL"
+has 'an action that needs the owner'\''s identity, credentials or physical action (a first login, a payment, a verification code) parks with category `auth`' \
+  'SKILL.md step 8 parks an item that needs the owner identity, credentials or physical action as auth' "$SKILL"
 has 'never invent an option' 'SKILL.md step 8 parks an item with no reversible option instead of inventing one' "$SKILL"
 # The loosening bullet of step 8 is pinned as its whole sentence: the string
 # 「未执行的放宽项」 alone appears on five lines of SKILL.md (eight times), so a
@@ -246,14 +254,17 @@ has 'An option that loosens a safety boundary is never taken, whatever the rule 
 without 'Park only for an item that is marked `可自动采纳：否`' 'SKILL.md step 8 no longer parks on 可自动采纳：否' "$SKILL"
 # The category table is down to quota / transient / auth / error, the same four
 # in the machine-readable line, the table and the keeper bullet; auth covers an
-# action that needs the owner's identity; the two cases that had no category
-# now have one (the landing lock after 2 hours → transient, opus-review exits
-# other than 2 / 3 / 4 → error), and every non-zero opus-review exit names its
-# category (test-opus-review.sh pins the whole sentence in SKILL.md and in
-# find-next/SKILL.md alike).
+# action that needs the owner's identity, credentials or physical action (r3:
+# an item whose options all need the owner's hands parks as auth); the two
+# cases that had no category now have one (the landing lock after 2 hours →
+# transient, opus-review exits other than 2 / 3 / 4 → error), and every
+# non-zero opus-review exit names its category (test-opus-review.sh pins the
+# whole sentence in SKILL.md and in find-next/SKILL.md alike).
 has '停车类别：quota|transient|auth|error' 'the parking category line names the four categories left' "$SKILL"
 without '停车类别：quota|transient|decision|error|other' 'the parking category line no longer names decision or other' "$SKILL"
-has '| `auth` | 需要本人身份或凭据的操作：首次登录授权、付款、验证码 | `无` |' 'the parking category table has the auth row' "$SKILL"
+has '| `auth` | 需要本人身份、凭据或物理动作的操作：首次登录授权、付款、验证码；真机插拔这类只有本人动手才做得出的物理动作 | `无` |' \
+  'the parking category table has the auth row' "$SKILL"
+without '需要本人身份或凭据的操作' 'the auth row no longer leaves out a physical action' "$SKILL"
 has '三轮审查后仍有正确性问题、护栏违反' 'the error row names a correctness problem left after three rounds and a guardrail violation' "$SKILL"
 has '`opus-review.sh` 非 0 退出且不是 2 / 3 / 4' 'the error row names the opus-review exits' "$SKILL"
 has '`auth` and `error` still need a human' 'keeper resumes only quota and transient' "$SKILL"
@@ -266,9 +277,23 @@ has "$OPUS_REVIEW_EXIT_SENTENCE" 'SKILL.md names the category of every non-zero 
 # usable mark goes to one more Opus review instead of parking the Run.
 without 'parks the Run, and its parking report' 'flash Stopping no longer parks on 可自动采纳：否' "$SKILL"
 has 'only an item that review marks as needing the owner' 'flash Stopping parks only what the Opus review marks as auth' "$SKILL"
+# 规格 #58 review fix r3 (trade-off 2 = A): auth covers a physical action, and
+# Flash mode's Stopping picks no option that needs the owner's own hands — the
+# second fix had written that exclusion into Unattended landing only, so under
+# flash an option the Run could not carry out could still be picked.
+has 'only an item that review marks as needing the owner'\''s identity, credentials or physical action parks, with category `auth`' \
+  'flash Stopping parks what needs identity, credentials or physical action as auth' "$SKILL"
+has 'an option that needs the owner'\''s own hands (a physical action the Run cannot carry out) is not picked here either, whatever that review recommends' \
+  'flash Stopping picks no option that needs the owner'\''s own hands' "$SKILL"
 # The hooks' reasons and the hooks README say the same (MAINTAINING 第 39 条).
 has '`可自动采纳：否` 或 `推荐：无` 的按可逆性规则自选一个可逆选项并写理由' 'hooks README rule B names the reversibility rule' "$HOOKS"
 has '（停车类别 `auth`）、或列出的选项里没有可逆的（停车类别 `error`）' 'hooks README rule B names the two categories that still park' "$HOOKS"
+# r3: rule B says what parks as auth with the category table's wording; the
+# hooks' own reason sentences are pinned by their two test files.
+has '只有需要本人身份、凭据或物理动作（停车类别 `auth`）、或列出的选项里没有可逆的（停车类别 `error`）' \
+  'hooks README rule B names identity, credentials or physical action as what parks as auth' "$HOOKS"
+has '(`auth`: an operation that needs the owner'\''s identity, credentials or physical action;' \
+  'GLOSSARY: the Parking report entry defines auth with a physical action' "$GLOSSARY"
 
 # --- find-next 推进模式：the question round became a decision round (票 #69, 规格 #58) ---
 
@@ -419,8 +444,11 @@ without '本步只直接转述选择题' 'flash mode no longer describes step 6 
 LOOSENING_RULE='放宽安全边界的选项一律不选，推荐是它的也不采纳'
 has '时优先用它。放宽安全边界的选项一律不选，推荐是它的也不采纳；除它之外没有可选项的条目不拍板、列入「要你做」并记进「未执行的放宽项」' \
   'find-next step 6 picks no loosening option' "$FIND_NEXT"
-has '要本人身份或凭据的不选；放宽安全边界的选项一律不选，推荐是它的也不采纳；除它之外没有可选项的写『推荐：无』' \
-  'flash mode writes the rule into the input of the selecting Opus review' "$FIND_NEXT"
+# r3 (trade-off 2 = A): the input also rules out an option that needs the
+# owner's hands, so an item whose options are all hands-on ends as 推荐无 (not
+# decided, listed for the user) instead of being picked for the Run.
+has '要本人身份或凭据的不选；需要本人动手（物理动作）的选项不选；放宽安全边界的选项一律不选，推荐是它的也不采纳；除它们之外没有可选项的写『推荐：无』' \
+  'flash mode writes the rule into the input of the selecting Opus review, hands-on options included' "$FIND_NEXT"
 has '口径同第 6 步，放宽安全边界的选项 flash 也不选' 'flash mode adopts no loosening recommendation either' "$FIND_NEXT"
 has '这条不拍板，列为「要你做」。放宽安全边界的选项一律不选，推荐是它的也不采纳；除它之外没有可选项的条目不拍板' \
   'the supervisor picks no loosening option' "$FIND_NEXT"
@@ -702,9 +730,13 @@ has 'turns each unexecuted loosening into a loose ticket, whatever repository th
 # out (it changes nothing, so it is the most "reversible" one), and only the fix
 # role's report parked the Run. Such an option is now listed under 要你做的 of
 # the landing report and never picked, the same exception as find-next's step 6;
-# the parking categories are not touched.
-has "An option that needs the owner's own hands — a physical action the Run cannot carry out — is never picked either, whatever the rule above would pick: list it under 要你做的 in the landing report and decide among the remaining options as above; when no option is left, the item parks by the two parking rules above." \
-  "SKILL.md step 8 never picks an option that needs the owner's own hands" "$SKILL"
+# the parking categories are not touched. The third review fix (r3, trade-off
+# 2 = A) names the category for the case that sentence left to "the two parking
+# rules above": an item whose options are all hands-on, which neither rule hit
+# when read literally, now parks as auth — the category's cases are identity,
+# credentials or physical action — while the set of categories stays the same.
+has "An option that needs the owner's own hands — a physical action the Run cannot carry out — is never picked either, whatever the rule above would pick: list it under 要你做的 in the landing report and decide among the remaining options as above; when no option is left, the item parks by the two parking rules above: with category \`auth\` when its options all need the owner's identity, credentials or physical action, with \`error\` when none of them is reversible." \
+  "SKILL.md step 8 never picks an option that needs the owner's own hands, and parks an all-hands-on item as auth" "$SKILL"
 
 # --- the two-clone shape of the clone-direct install is a known limitation (规格 #58 复审 Spec 6, 取舍 2 选 A) ---
 

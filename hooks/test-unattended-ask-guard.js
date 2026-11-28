@@ -152,6 +152,10 @@ testCase('--auto-land in string content denies', dir => {
   assert.match(reason, /可逆/);
   assert.match(reason, /停车类别 auth/);
   assert.match(reason, /停车类别 error/);
+  // 规格 #58 review fix r3 (trade-off 2 = A): auth covers a physical action
+  // too, in the words of the category table and the hooks README's rule B.
+  assert.match(reason, /需要本人身份、凭据或物理动作（停车类别 auth）/);
+  assert.doesNotMatch(reason, /需要本人身份或凭据/);
   assert.doesNotMatch(reason, /其余真要人决定的事/);
 });
 
