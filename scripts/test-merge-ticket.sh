@@ -880,13 +880,15 @@ expect_head "$HEAD_91" "the step 9.1 collision leaves the Integration branch whe
 expect_clean "the step 9.1 collision leaves no half-merged state"
 expect_test_not_run "the step 9.1 collision runs no tests"
 # The re-bump of step 9.1 is on the integration branch, the side this Spec can
-# change: spec-102 moves its own 0005-a and 0005-d to the free number 0021 and
-# commits, and the rerun of the same command merges main. The merged result
-# holds number 0005 once (main's 0005-c), as a merge commit of the re-bumped
-# tip and origin/main.
+# change: spec-102 moves its own 0005-a and 0005-d to two free numbers, 0021
+# and 0022 -- one per entry, so the re-bump leaves no duplicate of its own --
+# and commits, and the rerun of the same command merges main. The merged result
+# holds number 0005 once (main's 0005-c) and no number at all twice, the
+# fixture's own earlier pair 0005-a / 0005-d included, as a merge commit of the
+# re-bumped tip and origin/main.
 git -C "$INTEGRATION" mv docs/adr/0005-a.md docs/adr/0021-a.md
-git -C "$INTEGRATION" mv docs/adr/0005-d.md docs/adr/0021-d.md
-commit_in "$INTEGRATION" 'spec 102 re-bumps: ADR 0021-a, ADR 0021-d'
+git -C "$INTEGRATION" mv docs/adr/0005-d.md docs/adr/0022-d.md
+commit_in "$INTEGRATION" 'spec 102 re-bumps: ADR 0021-a, ADR 0022-d'
 HEAD_91_REBUMP=$(git -C "$INTEGRATION" rev-parse HEAD)
 ORIGIN_MAIN_91=$(git -C "$INTEGRATION" rev-parse origin/main)
 : > "$TEST_LOG"
@@ -901,10 +903,16 @@ if [ "$entries0005" = 1 ]; then
 else
   bad "the merged result holds number 0005 once" "entries: $(git -C "$INTEGRATION" ls-tree --name-only HEAD docs/adr/ | grep '/0005-' | tr '\n' ' ')"
 fi
+twice=$(git -C "$INTEGRATION" ls-tree --name-only HEAD docs/adr/ | sed 's|.*/||' | grep -o '^[0-9]*' | sort | uniq -d | tr '\n' ' ')
+if [ -z "$twice" ]; then
+  ok "the merged result holds no number twice under docs/adr"
+else
+  bad "the merged result holds no number twice under docs/adr" "doubled: $twice"
+fi
 expect_content "$INTEGRATION" docs/adr/0005-c.md 'adr five c' "the step 9.1 rerun brings main's entry 0005"
 expect_absent "$INTEGRATION" docs/adr/0005-a.md "the step 9.1 rerun brings no entry 0005 from the integration side's old number"
 expect_content "$INTEGRATION" docs/adr/0021-a.md 'adr five a' "the step 9.1 rerun keeps the renumbered entry 0021-a"
-expect_content "$INTEGRATION" docs/adr/0021-d.md 'adr five d' "the step 9.1 rerun keeps the renumbered entry 0021-d"
+expect_content "$INTEGRATION" docs/adr/0022-d.md 'adr five d' "the step 9.1 rerun keeps the renumbered entry 0022-d"
 expect_test_ran "the step 9.1 rerun runs the tests"
 expect_clean "the step 9.1 rerun leaves a clean worktree"
 # Without the switch the default gate is unchanged: origin/main is not a local
