@@ -60,10 +60,16 @@
 # listed under here, and each listing rests on a smoke test recorded in this
 # repository:
 #   claude / opus               design, review, diagnosis   the long-standing default
-#   claude-glm / glm-5.4        design, review, diagnosis   opus-review.sh through claude-glm,
-#                                                            headless smoke (MAINTAINING
-#                                                            "尚未验证的事项") and two
-#                                                            findings of 2026-11-27
+#   claude-glm / glm-5.4        design, review, diagnosis   the headless smoke and two
+#                                                            findings of 2026-11-27; review
+#                                                            and diagnosis at medium on
+#                                                            2026-11-28 (opus-review.sh
+#                                                            --kind code and --kind diagnose,
+#                                                            docs/orca-smoke-2026-11-27.md
+#                                                            round 3, section 3); a Design
+#                                                            session on it in round 3,
+#                                                            section 2 (the upstream skill
+#                                                            has to be typed by the user)
 #   claude-glm / glm-5.4        implementation               docs/orca-smoke-2026-11-27.md 2.1
 #   claude-flash / glm-5.4      design                      docs/orca-smoke-2026-11-27.md 2.2
 #   codex-glm / glm-5.4         research, implementation     codex worker's current default
