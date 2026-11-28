@@ -9,9 +9,11 @@
 # overrides the graph's status, a free claim leaves it as the graph has it.
 # Read-only: it never tags and never pushes. claim.sh status creates an empty
 # .git/implement-spec-split/claims/ when that directory does not exist yet;
-# nothing else is written, --run-dir aside: what its verify writes stays
-# inside the run directory it is given (the model it read, in each sidecar,
-# and the worker-show receipt of a live reading beside it).
+# nothing else is written (beyond `git fetch --tags origin`, which updates
+# .git's tags and remote-tracking refs), --run-dir aside: what its verify
+# writes stays inside the Spec Run root it is given (the model it read, in
+# each sidecar, and the worker-show receipt of a live reading — .json and
+# .err — beside it).
 #
 # --run-dir <dir> names the Spec's run directory (the Spec Run root, where
 # scripts/stage-dispatch.sh keeps its sidecars) and makes the report end with
