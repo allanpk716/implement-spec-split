@@ -499,9 +499,9 @@ commit_in "$INTEGRATION" 'spec 102 base: two ADRs, VERSION 1.0.0'
 BASE102=$(git -C "$INTEGRATION" rev-parse HEAD)
 HEAD_AFTER_USAGE=$BASE102
 
-# The two options: --counter may repeat, an empty one is a usage error, and
-# --no-ticket-worktree alone changes nothing about a local branch that is
-# checked out and clean.
+# The two --counter usage errors: an empty path, and the option without one.
+# (--counter repeating is exercised further down; --no-ticket-worktree has its
+# own cases in the step 9.1 shape below.)
 : > "$TEST_LOG"
 run_merge "$WORK/counter-empty.out" --worktree "$INTEGRATION" --integration spec-102 \
   --ticket spec-101-t7 --test 'fake-test' --counter ''
@@ -894,6 +894,170 @@ run_merge "$WORK/no-worktree-switch.out" --worktree "$INTEGRATION" --integration
 expect_exit 0 "a ticket branch without a worktree merges with --no-ticket-worktree"
 expect_merged "$(git -C "$MAIN" rev-parse spec-101-t9)" "the ticket branch without a worktree lands"
 expect_test_ran "the ticket branch without a worktree runs the tests"
+
+# The switch only skips the Ticket worktree checks; a local branch that has a
+# clean worktree merges with it as without it.
+new_ticket 21 "$(git -C "$INTEGRATION" rev-parse HEAD)"
+T21=$T
+printf '%s\n' 'feature twenty-one' > "$T21/feature21.txt"
+commit_in "$T21" 'ticket twenty-one adds a feature'
+TIP21=$(git -C "$T21" rev-parse HEAD)
+: > "$TEST_LOG"
+run_merge "$WORK/switch-checked-out.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t21 --no-ticket-worktree --test 'fake-test'
+expect_exit 0 "a checked-out, clean local branch merges with --no-ticket-worktree"
+expect_quiet "$WORK/switch-checked-out.out.err" "a checked-out local branch with the switch prints nothing"
+expect_merged "$TIP21" "the checked-out local branch lands with the switch"
+expect_test_ran "a checked-out local branch with the switch runs the tests"
+expect_untouched "$T21" "$TIP21" "the switch leaves the ticket worktree alone"
+
+# --- one directory per number (migrations) -------------------------------------
+# A file under a numbered entry counts as that number. spec-102 adds
+# migrations/0001-init/up.sql and migrations/0002-next/up.sql, so migrations is
+# a numbered directory; t15 adds migrations/0003-index/up.sql and lands; t16
+# from the tip before that adds migrations/0003-unique/up.sql. The files are
+# different paths, so git alone would merge them; the gate goes by the parent
+# entries' number.
+mkdir -p "$INTEGRATION/migrations/0001-init" "$INTEGRATION/migrations/0002-next"
+printf '%s\n' 'create table users' > "$INTEGRATION/migrations/0001-init/up.sql"
+printf '%s\n' 'add column email' > "$INTEGRATION/migrations/0002-next/up.sql"
+commit_in "$INTEGRATION" 'spec 102 adds two migrations'
+HEAD_MIG_BASE=$(git -C "$INTEGRATION" rev-parse HEAD)
+new_ticket 15 "$HEAD_MIG_BASE"
+T15=$T
+mkdir -p "$T15/migrations/0003-index"
+printf '%s\n' 'create index users_email' > "$T15/migrations/0003-index/up.sql"
+commit_in "$T15" 'ticket fifteen adds migration 0003-index'
+TIP15=$(git -C "$T15" rev-parse HEAD)
+SHORT15=$(git -C "$T15" rev-parse --short HEAD)
+run_merge "$WORK/counter-t15.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t15 --test 'fake-test'
+expect_exit 0 "a migration under a new number merges"
+HEAD_AFTER_T15=$(git -C "$INTEGRATION" rev-parse HEAD)
+
+new_ticket 16 "$HEAD_MIG_BASE"
+T16=$T
+mkdir -p "$T16/migrations/0003-unique"
+printf '%s\n' 'create unique index users_email' > "$T16/migrations/0003-unique/up.sql"
+commit_in "$T16" 'ticket sixteen adds migration 0003-unique'
+TIP16=$(git -C "$T16" rev-parse HEAD)
+SHORT16=$(git -C "$T16" rev-parse --short HEAD)
+: > "$TEST_LOG"
+run_merge "$WORK/counter-migration.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t16 --test 'fake-test'
+expect_exit 6 "two migrations under the same number, one directory each, exit 6"
+expect_has 'numbered-dir migrations 0003' "the migration collision names the directory and the number" "$WORK/counter-migration.out.err"
+expect_has 'migrations/0003-index/up.sql' "the migration collision names the Integration side's file" "$WORK/counter-migration.out.err"
+expect_has 'migrations/0003-unique/up.sql' "the migration collision names the ticket side's file" "$WORK/counter-migration.out.err"
+expect_has $'integration\t'"$SHORT15" "the migration collision cites the Integration side's commit" "$WORK/counter-migration.out.err"
+expect_has $'ticket\t'"$SHORT16" "the migration collision cites the ticket side's commit" "$WORK/counter-migration.out.err"
+expect_head "$HEAD_AFTER_T15" "a migration collision leaves the Integration branch where it was"
+expect_clean "a migration collision leaves no half-merged state"
+expect_test_not_run "a migration collision runs no tests"
+expect_untouched "$T16" "$TIP16" "a migration collision leaves the ticket branch and worktree alone"
+
+git -C "$T16" mv migrations/0003-unique migrations/0004-unique
+commit_in "$T16" 'ticket sixteen re-bumps: migration 0004-unique'
+TIP16=$(git -C "$T16" rev-parse HEAD)
+: > "$TEST_LOG"
+run_merge "$WORK/counter-migration-rebump.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t16 --test 'fake-test'
+expect_exit 0 "after the migration re-bump the rerun merges"
+expect_quiet "$WORK/counter-migration-rebump.out.err" "a cleared migration collision prints nothing"
+expect_content "$INTEGRATION" migrations/0004-unique/up.sql 'create unique index users_email' "the merge brings the renumbered migration"
+expect_absent "$INTEGRATION" migrations/0003-unique/up.sql "the merge brings no migration 0003 from the ticket"
+expect_content "$INTEGRATION" migrations/0003-index/up.sql 'create index users_email' "the merge keeps the Integration side's migration 0003"
+expect_test_ran "the migration rerun runs the tests"
+
+# --- the separator may be an underscore, the digits may be long -----------------
+# spec-102 adds db/migrate/20260725000000_create_users.rb and
+# 20260726000000_add_email.rb, so db/migrate is a numbered directory. t17 adds
+# 20260727000000_create_index.rb and lands; t18 from the tip before that adds
+# 20260727000000_add_unique_index.rb: the same timestamp, so they collide.
+mkdir -p "$INTEGRATION/db/migrate"
+printf '%s\n' 'create_table :users' > "$INTEGRATION/db/migrate/20260725000000_create_users.rb"
+printf '%s\n' 'add_column :users, :email, :string' > "$INTEGRATION/db/migrate/20260726000000_add_email.rb"
+commit_in "$INTEGRATION" 'spec 102 adds two timestamped migrations'
+HEAD_BEFORE_T17=$(git -C "$INTEGRATION" rev-parse HEAD)
+new_ticket 17 "$HEAD_BEFORE_T17"
+T17=$T
+printf '%s\n' 'add_index :users, :email' > "$T17/db/migrate/20260727000000_create_index.rb"
+commit_in "$T17" 'ticket seventeen adds the 20260727 migration'
+TIP17=$(git -C "$T17" rev-parse HEAD)
+SHORT17=$(git -C "$T17" rev-parse --short HEAD)
+run_merge "$WORK/counter-t17.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t17 --test 'fake-test'
+expect_exit 0 "a timestamped migration under a new timestamp merges"
+HEAD_AFTER_T17=$(git -C "$INTEGRATION" rev-parse HEAD)
+
+new_ticket 18 "$HEAD_BEFORE_T17"
+T18=$T
+printf '%s\n' 'add_index :users, :email, unique: true' > "$T18/db/migrate/20260727000000_add_unique_index.rb"
+commit_in "$T18" 'ticket eighteen adds a migration with the same timestamp'
+TIP18=$(git -C "$T18" rev-parse HEAD)
+SHORT18=$(git -C "$T18" rev-parse --short HEAD)
+: > "$TEST_LOG"
+run_merge "$WORK/counter-underscore.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t18 --test 'fake-test'
+expect_exit 6 "two migrations with the same timestamp and an underscore exit 6"
+expect_has 'numbered-dir db/migrate 20260727000000' "the timestamp collision names the digits without the underscore" "$WORK/counter-underscore.out.err"
+expect_has 'db/migrate/20260727000000_create_index.rb' "the timestamp collision names the Integration side's entry" "$WORK/counter-underscore.out.err"
+expect_has 'db/migrate/20260727000000_add_unique_index.rb' "the timestamp collision names the ticket side's entry" "$WORK/counter-underscore.out.err"
+expect_has $'integration\t'"$SHORT17" "the timestamp collision cites the Integration side's commit" "$WORK/counter-underscore.out.err"
+expect_has $'ticket\t'"$SHORT18" "the timestamp collision cites the ticket side's commit" "$WORK/counter-underscore.out.err"
+expect_head "$HEAD_AFTER_T17" "a timestamp collision leaves the Integration branch where it was"
+expect_test_not_run "a timestamp collision runs no tests"
+expect_untouched "$T18" "$TIP18" "a timestamp collision leaves the ticket branch and worktree alone"
+
+# --- VERSION alone -------------------------------------------------------------
+# t19 bumps VERSION to 1.6.0 and lands. t20 from the tip before that sets it to
+# 1.6.0 too, adding no numbered entry, and merges the Integration branch back
+# (as t2 does, so that its later re-bump merges without a textual conflict):
+# only the version file collides, and moving that one file on lets the rerun
+# merge.
+HEAD_BEFORE_T19=$(git -C "$INTEGRATION" rev-parse HEAD)
+new_ticket 19 "$HEAD_BEFORE_T19"
+T19=$T
+printf '%s\n' '1.6.0' > "$T19/VERSION"
+commit_in "$T19" 'ticket nineteen bumps VERSION to 1.6.0'
+TIP19=$(git -C "$T19" rev-parse HEAD)
+SHORT19=$(git -C "$T19" rev-parse --short HEAD)
+run_merge "$WORK/counter-t19.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t19 --test 'fake-test'
+expect_exit 0 "the nineteenth ticket lands"
+HEAD_AFTER_T19=$(git -C "$INTEGRATION" rev-parse HEAD)
+
+new_ticket 20 "$HEAD_BEFORE_T19"
+T20=$T
+printf '%s\n' '1.6.0' > "$T20/VERSION"
+commit_in "$T20" 'ticket twenty sets VERSION to 1.6.0 as well'
+SHORT20=$(git -C "$T20" rev-parse --short HEAD)
+git -C "$T20" merge --quiet --no-edit spec-102
+TIP20=$(git -C "$T20" rev-parse HEAD)
+: > "$TEST_LOG"
+run_merge "$WORK/counter-version-only.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t20 --test 'fake-test'
+expect_exit 6 "VERSION set to the same value by both sides, nothing else, exits 6"
+expect_has 'version VERSION' "a VERSION-only collision names the version file" "$WORK/counter-version-only.out.err"
+expect_without 'numbered-dir' "a VERSION-only collision lists no numbered directory" "$WORK/counter-version-only.out.err"
+expect_has $'integration\t'"$SHORT19" "a VERSION-only collision cites the Integration side's commit" "$WORK/counter-version-only.out.err"
+expect_has $'ticket\t'"$SHORT20" "a VERSION-only collision cites the ticket side's commit" "$WORK/counter-version-only.out.err"
+expect_head "$HEAD_AFTER_T19" "a VERSION-only collision leaves the Integration branch where it was"
+expect_clean "a VERSION-only collision leaves no half-merged state"
+expect_test_not_run "a VERSION-only collision runs no tests"
+expect_untouched "$T20" "$TIP20" "a VERSION-only collision leaves the ticket branch and worktree alone"
+
+printf '%s\n' '1.7.0' > "$T20/VERSION"
+commit_in "$T20" 'ticket twenty re-bumps VERSION to 1.7.0'
+TIP20=$(git -C "$T20" rev-parse HEAD)
+: > "$TEST_LOG"
+run_merge "$WORK/counter-version-only-rebump.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t20 --test 'fake-test'
+expect_exit 0 "after a re-bump of VERSION alone the rerun merges"
+expect_quiet "$WORK/counter-version-only-rebump.out.err" "a cleared VERSION-only collision prints nothing"
+expect_merged "$TIP20" "the re-bumped VERSION-only ticket lands"
+expect_content "$INTEGRATION" VERSION '1.7.0' "the merge brings the re-bumped VERSION"
+expect_test_ran "the VERSION-only rerun runs the tests"
 
 printf '\n%d passed, %d failed\n' "$PASSED" "$FAILED"
 [ "$FAILED" -eq 0 ]
