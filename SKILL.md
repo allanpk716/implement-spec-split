@@ -1,6 +1,6 @@
 ---
 name: implement-spec-split
-description: Implement a spec and its tickets like implement-spec, but with split models - a headless read-only exploration runs once before the Tickets, and every Ticket's implementation, fix and merge-conflict role is dispatched through scripts/stage-dispatch.sh as an Orca worker on the Stage route table's 实现 route, whatever the session; merges are done by a script and a worker only on a conflict; the code-review subagents always run on a stronger model (Opus). Use when the user wants "Sonnet/GLM 开发 + 高阶模型 review", or invokes /implement-spec-split.
+description: Implement a spec and its tickets like implement-spec, but with split models - a headless read-only exploration runs once before the Tickets, and every Ticket's implementation, fix and merge-conflict role is dispatched through scripts/stage-dispatch.sh as an Orca worker on the Stage route table's 实现 route, whatever the session; merges are done by a script and a worker only on a conflict or a colliding shared counter; the code-review subagents always run on a stronger model (Opus). Use when the user wants "Sonnet/GLM 开发 + 高阶模型 review", or invokes /implement-spec-split.
 disable-model-invocation: true
 ---
 

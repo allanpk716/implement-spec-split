@@ -77,7 +77,7 @@ After installing any stage, you can run `scripts/doctor.sh` to check it.
 
 ## Stage 1: parallel implementation by spec (`/implement-spec-split`)
 
-This is a modified version of [Matt Pocock's `implement-spec`](https://github.com/mattpocock/skills): the orchestration logic is the same, but each role specifies its model separately. The implementing roles (exploration / implementer / fix; merges are done by a script first and a worker only on a conflict) use a cheaper model, all dispatched by the Spec session as Orca workers through `scripts/stage-dispatch.sh`, with the launcher, model and reasoning effort taken from the Stage route table; the two code-review subagents are fixed to Opus.
+This is a modified version of [Matt Pocock's `implement-spec`](https://github.com/mattpocock/skills): the orchestration logic is the same, but each role specifies its model separately. The implementing roles (exploration / implementer / fix; merges are done by a script first and a worker only on a conflict or a colliding shared counter) use a cheaper model, all dispatched by the Spec session as Orca workers through `scripts/stage-dispatch.sh`, with the launcher, model and reasoning effort taken from the Stage route table; the two code-review subagents are fixed to Opus.
 
 **Install**
 
@@ -107,7 +107,7 @@ A spec is a parent GitHub issue. Its child issues are tickets, and dependencies 
 **How parallelism happens**
 
 - The skill first reads the spec and tickets, then builds a task graph. Tickets whose dependencies are all satisfied form the "frontier"; each ticket in the frontier gets its own child worktree (under the Spec's) and is implemented in parallel.
-- Merges happen serially, and a script goes first: `scripts/merge-ticket.sh` merges a ticket into the integration branch and runs the tests when there is no conflict; a worker is dispatched only to resolve a conflict.
+- Merges happen serially, and a script goes first: `scripts/merge-ticket.sh` merges a ticket into the integration branch and runs the tests when there is no conflict; a worker is dispatched only to resolve a conflict or a colliding shared counter.
 - Concurrency limit: governed by `GLM_MAX_PARALLEL` (default 2), and `--parallel n` overrides it for the current run only. A value of 2-3 is recommended, with 4 at most during quiet hours: Zhipu rate-limits at peak times, and any worker that hits a 429 stops the whole run to ask you.
 - After each ticket is complete, it must pass the verification gate and two Opus reviews (Standards and Spec) before it counts as done.
 - Several specs at once: open one session per Orca worktree of the same clone and run the skill in each. Without a spec number the skill does not scan or list candidates: it says "run `/find-next --batch` first; it gives the build order and the command to type in each worktree" and stops, since what to build is decided in one place (find-next) and several worktrees started at once never scan and pick in parallel. With a number, it links the session's worktree to that issue and retitles the tab `spec-<n> …`. An in-progress or interrupted spec is listed under "resume first" in find-next's build order with its command; running that continues the unfinished work (Recovery). `--parallel` counts per run: the workers of parallel runs add up and share one GLM quota.
