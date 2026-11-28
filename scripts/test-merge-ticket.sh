@@ -886,6 +886,39 @@ expect_without 're-bump them on the ticket side' \
 expect_head "$HEAD_91" "the step 9.1 collision leaves the Integration branch where it was"
 expect_clean "the step 9.1 collision leaves no half-merged state"
 expect_test_not_run "the step 9.1 collision runs no tests"
+# The re-bump of step 9.1 is on the integration branch, the side this Spec can
+# change: spec-102 moves its own 0005-a and 0005-d to the free number 0021 and
+# commits, and the rerun of the same command merges main. The merged result
+# holds number 0005 once (main's 0005-c), as a merge commit of the re-bumped
+# tip and origin/main.
+git -C "$INTEGRATION" mv docs/adr/0005-a.md docs/adr/0021-a.md
+git -C "$INTEGRATION" mv docs/adr/0005-d.md docs/adr/0021-d.md
+commit_in "$INTEGRATION" 'spec 102 re-bumps: ADR 0021-a, ADR 0021-d'
+HEAD_91_REBUMP=$(git -C "$INTEGRATION" rev-parse HEAD)
+ORIGIN_MAIN_91=$(git -C "$INTEGRATION" rev-parse origin/main)
+: > "$TEST_LOG"
+run_merge "$WORK/step91-rebump.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket origin/main --no-ticket-worktree --test 'fake-test unit'
+expect_exit 0 "step 9.1 merges after the integration side's re-bump"
+expect_quiet "$WORK/step91-rebump.out.err" "a cleared step 9.1 collision prints nothing"
+parents=$(git -C "$INTEGRATION" log -1 --format='%P' HEAD)
+if [ "$parents" = "$HEAD_91_REBUMP $ORIGIN_MAIN_91" ]; then
+  ok "the step 9.1 rerun is a merge commit of the re-bumped tip and origin/main"
+else
+  bad "the step 9.1 rerun is a merge commit of the re-bumped tip and origin/main" "parents=[$parents]"
+fi
+entries0005=$(git -C "$INTEGRATION" ls-tree --name-only HEAD docs/adr/ | grep -c '/0005-')
+if [ "$entries0005" = 1 ]; then
+  ok "the merged result holds number 0005 once"
+else
+  bad "the merged result holds number 0005 once" "entries: $(git -C "$INTEGRATION" ls-tree --name-only HEAD docs/adr/ | grep '/0005-' | tr '\n' ' ')"
+fi
+expect_content "$INTEGRATION" docs/adr/0005-c.md 'adr five c' "the step 9.1 rerun brings main's entry 0005"
+expect_absent "$INTEGRATION" docs/adr/0005-a.md "the step 9.1 rerun brings no entry 0005 from the integration side's old number"
+expect_content "$INTEGRATION" docs/adr/0021-a.md 'adr five a' "the step 9.1 rerun keeps the renumbered entry 0021-a"
+expect_content "$INTEGRATION" docs/adr/0021-d.md 'adr five d' "the step 9.1 rerun keeps the renumbered entry 0021-d"
+expect_test_ran "the step 9.1 rerun runs the tests"
+expect_clean "the step 9.1 rerun leaves a clean worktree"
 # Without the switch the default gate is unchanged: origin/main is not a local
 # branch, so it does not exist as far as --ticket is concerned.
 run_merge "$WORK/step91-default.out" --worktree "$INTEGRATION" --integration spec-102 \
