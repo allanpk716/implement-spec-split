@@ -47,6 +47,13 @@
 # and the wait's mail only pointing to it; the PR path's fix role carries the
 # rule; a conclusion's sources name session-verify.md in Flash mode and in the
 # two setup documents; and the ticket number stays in the title of item 6 only.
+# So is 票 #80: a multi-line script is never wrapped into one Bash command
+# (`bash -c`, `sh -c`, a `$'…'` string) — an `rm` inside it asks for
+# confirmation even under --dangerously-skip-permissions, and an unattended
+# session then sits at the prompt. SKILL.md states the rule next to its `rm`
+# rule, with the two ways out (a script file in a `mktemp -d` directory that
+# cleans up after itself, or separate Bash calls), and the section every
+# find-next Brief template shares states it next to the foreground-test rule.
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -479,22 +486,31 @@ has "${FOREGROUND_RULE_COMMON}" \
 # it and nothing else. What is guarded is the empty case, with the first
 # template found, as test-make-batch-briefs.sh guards its section check with
 # the first section it read: a check against a fixed number would go red the
-# day the number of templates changes.
-templates_with_rule=0
-templates_total=0
-templates_first=
-for template in "$ROOT"/find-next/templates/*.md; do
-  [ -f "${template}" ] || continue
-  templates_total=$((templates_total + 1))
-  [ -n "${templates_first}" ] || templates_first=${template}
-  grep -Fq -- "${FOREGROUND_RULE_COMMON}" "$template" && templates_with_rule=$((templates_with_rule + 1))
-done
-if [ -n "${templates_first}" ] && [ "${templates_with_rule}" -eq "${templates_total}" ]; then
-  ok "every find-next Brief template (${templates_total}) carries the rule in the section they share"
-else
-  bad "every find-next Brief template carries the rule in the section they share" \
-    "${templates_with_rule} of ${templates_total} templates have [${FOREGROUND_RULE_COMMON}]"
-fi
+# day the number of templates changes. The rule of 票 #80 (below) is counted
+# the same way over the same templates, so the count is a function: <what>
+# names the rule on the check's line, and a template counts when it holds
+# every text given.
+in_every_template() { # what text...
+  local what=$1 total=0 holding=0 first= template holds text
+  shift
+  for template in "$ROOT"/find-next/templates/*.md; do
+    [ -f "${template}" ] || continue
+    total=$((total + 1))
+    [ -n "${first}" ] || first=${template}
+    holds=1
+    for text in "$@"; do
+      grep -Fq -- "${text}" "${template}" || holds=0
+    done
+    [ "${holds}" -eq 1 ] && holding=$((holding + 1))
+  done
+  if [ -n "${first}" ] && [ "${holding}" -eq "${total}" ]; then
+    ok "every find-next Brief template (${total}) carries ${what} in the section they share"
+  else
+    bad "every find-next Brief template carries ${what} in the section they share" \
+      "${holding} of ${total} templates have [${*}]"
+  fi
+}
+in_every_template 'the rule' "${FOREGROUND_RULE_COMMON}"
 # Step 5's `3` line keeps the rule and leaves the reason to "Dispatching a role"
 # item 6, which writes it once; its `6` and `4` lines already point back to it.
 has 'and then ends its turn; the reason is "Dispatching a role" item 6' \
@@ -613,6 +629,34 @@ has 'that copy `report-from-worktree.md`, and, for a worker gone Idle without a 
   'GLOSSARY Sidecar entry lists session-verify.md in the dispatch directory' "$GLOSSARY"
 has "the Run's final report names that file as the dispatch's report path and says 主会话核实 where another dispatch's line says \`worker_done.outcome\`" \
   'GLOSSARY Sidecar entry names 主会话核实 in place of the outcome' "$GLOSSARY"
+
+# --- no inline script, in SKILL.md and in every Brief template (票 #80) ----------
+
+# On 2026-11-28 two unattended sessions (spec-25's diagnostic cleanup, spec-26's
+# fix-26-r2) sat at a confirmation nobody answered: a worker had wrapped a
+# multi-line script holding an `rm` into one Bash command — `bash -c '…'`,
+# `sh -c '…'` or a `$'…'` string — and the permission layer asked for
+# confirmation all the same. The rule against it is written where a reader
+# looks for the rule about an `rm`: in SKILL.md, next to "No unresolvable
+# `rm`", and once more in the section every find-next Brief template shares,
+# next to the foreground-test rule, so every role a template is written for
+# gets it. Each place is pinned as a whole — the rule with its three forms,
+# then the two ways out — so neither can be dropped on its own. A hook that
+# let such a script through would loosen a guard: it is recorded in
+# MAINTAINING and was not built.
+has "**No inline script.** A multi-line script wrapped into one Bash command — \`bash -c '…'\`, \`sh -c '…'\` or a \`$'…'\` string — meets the same confirmation when it holds an \`rm\` or another deleting command" \
+  'SKILL.md forbids wrapping a multi-line script into one Bash command' "$SKILL"
+has 'written to a file in a `mktemp -d` directory and run from there, with a `trap` of its own to clean up, or the work is split into separate Bash calls' \
+  'SKILL.md gives the two ways out of an inline script' "$SKILL"
+# The Ticket Brief template is where the check of the section's sentence is
+# read, as for the foreground-test rule; the count over the templates that
+# exist is the other check, with the two ways out counted in.
+INLINE_RULE_COMMON="不得用 \`bash -c\`、\`sh -c\`、\`\$'…'\` 内联包裹多行脚本（含 \`rm\` / \`del\` 等删除类命令时尤其如此）"
+INLINE_WAYS_OUT_COMMON='多行脚本写进 `mktemp -d` 目录下的脚本文件执行，脚本里配 `trap` 清理；或拆成多次独立调用'
+has "${INLINE_RULE_COMMON}" \
+  'Ticket Brief template keeps a worker from wrapping a multi-line script inline' \
+  "$BRIEF_FIND_NEXT"
+in_every_template 'the rule and its two ways out' "${INLINE_RULE_COMMON}" "${INLINE_WAYS_OUT_COMMON}"
 
 # --- hooks README ----------------------------------------------------------------
 
