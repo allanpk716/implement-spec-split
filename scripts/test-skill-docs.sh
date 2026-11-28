@@ -178,6 +178,9 @@ has '--bare' 'hooks README says --bare loads no hooks' "$HOOKS"
 has 'unattended-stop-guard' 'hooks README names the hooks a lean worker lacks' "$HOOKS"
 # Rule A's reminder is step 10's sentence again: it carries the run directory too.
 has 'close-self.sh --run-dir <Spec Run root>' 'hooks README rule A closes with the run directory' "$HOOKS"
+# The script gate counts the shared-counter gate in (规格 #61 票 #74): a
+# collision exits 6 and merges nothing, as a gate miss exits 2.
+has '以「需 re-bump」退出 6' 'hooks README counts the counter gate in' "$HOOKS"
 
 # --- what the cumulative review of 规格 #26 settled (MAINTAINING 第 51 条) -------
 
