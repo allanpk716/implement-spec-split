@@ -340,14 +340,28 @@ fi
 
 cat > "$BIN/gh" <<'EOF'
 #!/usr/bin/env bash
+# The fake gh of test-pipeline-status.sh, test-frontier.sh and
+# test-landing-check.sh. The three tests hold one text, so that a knob means
+# the same in each: change one copy, change all three.
+#
+# Knobs, read from the environment:
+#   FAKE_GH_FAIL=1                  the issue list fails
+#   FAKE_GH_FAIL_BLOCKERS=1         every dependencies/blocked_by query fails
+#   FAKE_GH_FAIL_BLOCKERS_AT=<k>    blocked_by queries from the k-th on fail
+#   FAKE_GH_FAIL_BLOCKERS_OF=<n>    with FAKE_GH_FAIL_BLOCKERS_NTH=<k>, the
+#   FAKE_GH_FAIL_BLOCKERS_NTH=<k>   k-th blocked_by query of issue <n> fails
+#
+# FIXTURE_DIR holds issues.json, sub-<n>.json and blocker-<n>.json. Every
+# blocked_by query, answered or failed, adds its issue number to
+# FIXTURE_DIR/blocker-calls, one per line in call order.
 set -u
 FIXTURE_DIR=${FIXTURE_DIR:?FIXTURE_DIR is required}
-if [ "${FAKE_GH_FAIL:-0}" = 1 ]; then
-  printf '%s\n' 'fake gh: simulated failure' >&2
-  exit 1
-fi
 case "$*" in
   *'issues?state=all&per_page=100'*)
+    if [ "${FAKE_GH_FAIL:-0}" = 1 ]; then
+      printf '%s\n' 'fake gh: simulated failure' >&2
+      exit 1
+    fi
     cat "$FIXTURE_DIR/issues.json"
     exit $?
     ;;
@@ -358,6 +372,21 @@ case "$*" in
     ;;
   */issues/*/dependencies/blocked_by)
     number=$(printf '%s\n' "$*" | sed -n 's#.*/issues/\([0-9][0-9]*\)/dependencies/blocked_by.*#\1#p')
+    printf '%s\n' "$number" >> "$FIXTURE_DIR/blocker-calls"
+    if [ "${FAKE_GH_FAIL_BLOCKERS:-0}" = 1 ]; then
+      printf '%s\n' 'fake gh: blocked_by unavailable' >&2
+      exit 1
+    fi
+    calls=$(wc -l < "$FIXTURE_DIR/blocker-calls" | tr -d ' ')
+    if [ "${FAKE_GH_FAIL_BLOCKERS_AT:-0}" -gt 0 ] && [ "$calls" -ge "${FAKE_GH_FAIL_BLOCKERS_AT}" ]; then
+      printf 'fake gh: blocked_by unavailable on call %s\n' "$calls" >&2
+      exit 1
+    fi
+    nth=$(grep -cx "$number" "$FIXTURE_DIR/blocker-calls" | tr -d ' ')
+    if [ "$number" = "${FAKE_GH_FAIL_BLOCKERS_OF:-}" ] && [ "$nth" = "${FAKE_GH_FAIL_BLOCKERS_NTH:-}" ]; then
+      printf 'fake gh: blocked_by unavailable for #%s on its query %s\n' "$number" "$nth" >&2
+      exit 1
+    fi
     cat "$FIXTURE_DIR/blocker-$number.json"
     exit $?
     ;;
@@ -368,6 +397,24 @@ case "$*" in
 esac
 EOF
 chmod +x "$BIN/gh"
+
+# The fake gh above is one text in three tests (this one, test-frontier.sh and
+# test-landing-check.sh). Before 票 #86 they were three copies that had drifted
+# apart — the same failure had a knob of its own name in each — so each test
+# now holds its copy against the next test's: a copy edited alone turns its own
+# test red here.
+fake_gh_of() { # test script: the fake gh it writes, without the heredoc's fences
+  awk '/^cat > "\$BIN\/gh" <<.EOF.$/ {on = 1; next} on && /^EOF$/ {exit} on {print}' \
+    "$ROOT/scripts/$1" > "$WORK/fake-gh-of-$1.txt"
+}
+fake_gh_of test-pipeline-status.sh
+fake_gh_of test-landing-check.sh
+if cmp -s "$WORK/fake-gh-of-test-pipeline-status.sh.txt" "$WORK/fake-gh-of-test-landing-check.sh.txt"; then
+  record PASS 'the fake gh is one text with test-landing-check.sh'
+else
+  record FAIL 'the fake gh is one text with test-landing-check.sh' \
+    "$(diff "$WORK/fake-gh-of-test-pipeline-status.sh.txt" "$WORK/fake-gh-of-test-landing-check.sh.txt")"
+fi
 
 # The fake orca lives outside PATH on purpose: pipeline-status.sh must reach
 # Orca only through ISS_ORCA, never through an `orca` that happens to be on
@@ -1616,8 +1663,140 @@ RUN_EXIT=$?
 expect_exit 0 "graph carries shared-counter as a ticket-level flag on every path"
 [ "$RUN_EXIT" -eq 0 ] || cat "$WORK/counter-graph-check.txt"
 expect_has 'shared_counter' 'help documents the shared_counter graph flag' "$WORK/help.out"
-expect_has 'shelved, human, shared_counter, source}' 'help lists the source graph flag among the ticket fields' "$WORK/help.out"
+expect_has 'shelved, human, ready_for_agent, shared_counter, source}' 'help lists the source graph flag among the ticket fields' "$WORK/help.out"
 expect_has 'not an execution Ticket.' 'help says a source flag marks a ticket that is not an execution Ticket' "$WORK/help.out"
+
+# An open Ticket without `ready-for-agent` waits for a person's triage (票 #86).
+# The graph carries the label as a ticket-level flag, `ready_for_agent`, on
+# every path that builds ticket records — an open Spec, a landed Spec, a
+# shelved-only Spec, a legacy parent and a map — so that frontier.sh and
+# landing-check.sh read one judgement. The flag is the label and nothing else:
+# it does not follow the state, `ready-for-human`, or another triage label
+# beside it. The board renders neither it nor `shared_counter`.
+LABEL_FIXTURE=$WORK/label-fixture
+mkdir -p "$LABEL_FIXTURE" || exit 1
+
+LABEL_FIXTURE=$LABEL_FIXTURE node > /dev/null <<'NODE'
+const fs = require('fs');
+const directory = process.env.LABEL_FIXTURE;
+
+function sub(total, completed = total) {
+  return {total, completed, percent_completed: total ? Math.round(100 * completed / total) : 0};
+}
+
+function issue(number, title, state, labels, body = '', children = sub(0)) {
+  return {
+    number,
+    title,
+    state,
+    labels: labels.map((name) => ({name})),
+    body,
+    sub_issues_summary: children,
+    issue_dependencies_summary: {blocked_by: 0, total_blocked_by: 0, blocking: 0, total_blocking: 0},
+    assignees: [],
+  };
+}
+
+const openTickets = [
+  issue(951, 'Ready ticket', 'open', ['ready-for-agent']),
+  issue(952, 'Unlabelled ticket', 'open', []),
+  issue(953, 'Needs info ticket', 'open', ['needs-info']),
+  issue(954, 'Human ticket', 'open', ['ready-for-human']),
+  issue(955, 'Ready ticket that needs info', 'open', ['ready-for-agent', 'needs-info']),
+];
+const doneTickets = [
+  issue(961, 'Done ready ticket', 'closed', ['ready-for-agent']),
+  issue(962, 'Done unlabelled ticket', 'closed', []),
+];
+const shelvedTickets = [
+  issue(971, '【搁置】Shelved ready ticket', 'open', ['ready-for-agent']),
+  issue(972, '【搁置】Shelved unlabelled ticket', 'open', []),
+];
+const legacyTickets = [
+  issue(981, 'Legacy ready ticket', 'open', ['ready-for-agent']),
+  issue(982, 'Legacy unlabelled ticket', 'open', []),
+];
+const mapTickets = [
+  issue(991, 'Map ready ticket', 'open', ['ready-for-agent']),
+  issue(992, 'Map unlabelled ticket', 'open', []),
+];
+
+const issues = [
+  issue(950, 'Triaged spec', 'open', [], '## Problem Statement\nLabels.', sub(openTickets.length, 0)),
+  ...openTickets,
+  issue(960, 'Landed triaged spec', 'closed', [], '## Problem Statement\nLanded.', sub(doneTickets.length, doneTickets.length)),
+  ...doneTickets,
+  issue(970, 'Shelved triaged spec', 'open', [], '## Problem Statement\nShelved.', sub(shelvedTickets.length, 0)),
+  ...shelvedTickets,
+  issue(980, 'Legacy triaged spec', 'open', [], 'Old parent shape', sub(legacyTickets.length, 0)),
+  ...legacyTickets,
+  issue(990, 'Ticket map', 'open', ['wayfinder:map'], 'Destination.', sub(mapTickets.length, 0)),
+  ...mapTickets,
+];
+
+const responses = {
+  'sub-950': openTickets,
+  'sub-960': doneTickets,
+  'sub-970': shelvedTickets,
+  'sub-980': legacyTickets,
+  'sub-990': mapTickets,
+  'blocker-951': [],
+  'blocker-952': [],
+  'blocker-953': [],
+  'blocker-954': [],
+  'blocker-955': [],
+  'blocker-981': [],
+  'blocker-982': [],
+};
+
+fs.writeFileSync(`${directory}/issues.json`, JSON.stringify(issues, null, 2));
+for (const [name, value] of Object.entries(responses)) {
+  fs.writeFileSync(`${directory}/${name}.json`, JSON.stringify(value, null, 2));
+}
+NODE
+
+run_label_status() {
+  output=$1
+  shift
+  (
+    cd "$REPO" || exit 125
+    env FIXTURE_DIR="$LABEL_FIXTURE" PATH="$BIN:$PATH" \
+      bash "$SCRIPT" --repo test/repo "$@"
+  ) > "$output" 2> "${output}.err"
+  RUN_EXIT=$?
+}
+
+run_label_status "$WORK/label-graph.json" --graph
+expect_exit 0 "ready-for-agent graph succeeds"
+node - "$WORK/label-graph.json" > "$WORK/label-graph-check.txt" 2>&1 <<'NODE'
+const fs = require('fs');
+const assert = require('assert');
+const graph = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const spec = (n) => graph.specs.find((item) => item.number === n);
+const flags = (tickets) => tickets.map((t) => [t.number, t.ready_for_agent]);
+// Every ticket record carries the flag; it is the `ready-for-agent` label.
+assert.deepStrictEqual(flags(spec(950).tickets), [[951, true], [952, false], [953, false], [954, false], [955, true]]);
+assert.strictEqual(spec(960).status, 'landed');
+assert.deepStrictEqual(flags(spec(960).tickets), [[961, true], [962, false]]);
+assert.strictEqual(spec(970).status, 'shelved');
+assert.deepStrictEqual(flags(spec(970).tickets), [[971, true], [972, false]]);
+assert.strictEqual(spec(980).kind, 'legacy');
+assert.deepStrictEqual(flags(spec(980).tickets), [[981, true], [982, false]]);
+assert.deepStrictEqual(flags(graph.maps.find((map) => map.number === 990).tickets), [[991, true], [992, false]]);
+// The flag is the label alone. It does not follow `ready-for-human`, which is
+// read apart, or another triage label beside `ready-for-agent`.
+assert.strictEqual(spec(950).tickets.find((t) => t.number === 954).human, true);
+assert.strictEqual(spec(950).tickets.find((t) => t.number === 955).human, false);
+// Reading the label changes no classification of this script: the Spec with
+// unlabelled Tickets is listed as before.
+assert.strictEqual(spec(950).status, 'ready');
+assert.strictEqual(spec(950).human_only, false);
+NODE
+RUN_EXIT=$?
+expect_exit 0 "graph carries ready-for-agent as a ticket-level flag on every path"
+[ "$RUN_EXIT" -eq 0 ] || cat "$WORK/label-graph-check.txt"
+expect_has '`ready-for-agent` label (an open Ticket with neither label that' 'help documents the ready_for_agent graph flag' "$WORK/help.out"
+expect_has '`# decision`' 'help says a Ticket without ready-for-agent is listed under # decision' "$WORK/help.out"
 
 # A 实现票 line may name a loose ticket (#83): the source ticket a Spec was
 # drafted from. It is covered like a map implementation ticket — the Ticket of

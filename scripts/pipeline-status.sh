@@ -39,16 +39,21 @@ tracker documentation instead.
                          spec_numbers, tickets[]}; specs[] {number, title, kind, state,
                          status landed|needs_tickets|ready|running|interrupted|shelved|human, map
                          (number or null), has_tickets, tickets[] {number, title, state,
-                         shelved, human, shared_counter, source}, tickets_total, tickets_closed, claim
-                         {state active|reserved|interrupted|idle, branch, worktree, claimed_at}
-                         or null, depends_on, extra_blockers}; loose_specs[] (Specs
-                         without a map); next_wave (same object as --order --json).
+                         shelved, human, ready_for_agent, shared_counter, source},
+                         tickets_total, tickets_closed, claim {state active|reserved|
+                         interrupted|idle, branch, worktree, claimed_at} or null,
+                         depends_on, extra_blockers}; loose_specs[] (Specs without a map);
+                         next_wave (same object as --order --json).
                          Ticket flags come from GitHub labels, the title or the body:
-                         `human` is the `ready-for-human` label, `shared_counter` the
-                         `shared-counter` label (a Ticket that bumps a shared counter;
-                         frontier.sh releases one such Ticket at a time), `source` the
-                         loose source ticket of a Spec without sub-issues (the mapless
-                         ticket its 实现票 line names), which is not an execution Ticket.
+                         `human` is the `ready-for-human` label, `ready_for_agent` the
+                         `ready-for-agent` label (an open Ticket with neither label that
+                         is neither shelved nor the source waits for a person's triage:
+                         frontier.sh lists it under `# decision` and dispatches nothing for
+                         it, landing-check.sh holds no landing back for it), `shared_counter`
+                         the `shared-counter` label (a Ticket that bumps a shared counter;
+                         frontier.sh releases one such Ticket at a time), `source` the loose
+                         source ticket of a Spec without sub-issues (the mapless ticket its
+                         实现票 line names), which is not an execution Ticket.
 
 PIPELINE_STATUS_NOW may set an ISO-8601 current time for deterministic stale-claim tests.
 PIPELINE_STATUS_ORCA_TERMINALS_JSON may name a file holding `orca terminal list --json`
@@ -585,6 +590,11 @@ if (mode === 'collect') {
       title: issue ? issue.title : '',
       shelved: issue ? isShelved(issue) : false,
       human: issue ? hasLabel(issue, 'ready-for-human') : false,
+      // Read for the graph alone (ticketOf below reports it as `ready_for_agent`):
+      // an open Ticket without the label waits for a person's triage, and
+      // frontier.sh and landing-check.sh keep it apart from the execution
+      // Tickets (票 #86). Nothing in this script's own sections reads it yet.
+      readyForAgent: issue ? hasLabel(issue, 'ready-for-agent') : false,
       sharedCounter: issue ? hasLabel(issue, 'shared-counter') : false,
       source,
     };
@@ -1760,6 +1770,7 @@ if (mode === 'order') {
       state: child.state,
       shelved: isShelved(child),
       human: child.human === true || hasLabel(child, 'ready-for-human'),
+      ready_for_agent: child.readyForAgent === true || hasLabel(child, 'ready-for-agent'),
       shared_counter: child.sharedCounter === true || hasLabel(child, 'shared-counter'),
       source: child.source === true,
     });

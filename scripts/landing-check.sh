@@ -8,18 +8,25 @@
 # The ticket set follows the Spec-to-Ticket rules in SKILL.md step 0 (the
 # Spec's sub-issues, otherwise the implementation tickets named on its
 # `实现票：#N` line and their sub-issues), read from pipeline-status.sh --graph
-# as scripts/frontier.sh reads it. A landed Spec has had each of its
-# `ready-for-agent` Tickets closed as it merged (merge-ticket.sh
-# --close-ticket), so before the landing every one of them is closed. Four
-# kinds of open Ticket do not hold the landing back, and are listed so that the
-# report can name them:
+# through scripts/lib-graph.sh, the reading layer scripts/frontier.sh shares. A
+# landed Spec has had each of its `ready-for-agent` Tickets closed as it merged
+# (merge-ticket.sh --close-ticket), so before the landing every one of them is
+# closed. Five kinds of open Ticket do not hold the landing back, and are listed
+# so that the report can name them:
 #   waiting  an open blocker of it lies outside this Spec's Tickets (a Ticket
 #            of another Spec, a standalone issue), or it is blocked, through
-#            Tickets of this Spec, by a human or a shelved one; waiting runs
-#            along the blocked_by edges inside the Spec, so a chain behind such
-#            a Ticket waits too (SKILL.md "Tickets blocked by another Spec": a
-#            partial landing);
+#            Tickets of this Spec, by one that waits for a person — a human
+#            Ticket, or one under `# decision` — or by a shelved one; waiting
+#            runs along the blocked_by edges inside the Spec, so a chain behind
+#            such a Ticket waits too (SKILL.md "Tickets blocked by another
+#            Spec": a partial landing);
 #   human    carrying `ready-for-human`: never dispatched;
+#   decision carrying no `ready-for-agent` label (票 #86): `needs-info`,
+#            `needs-triage`, `wontfix` or no triage label at all. It waits for a
+#            person's triage — the label back, or its closure — so nothing is
+#            dispatched for it, and it is no debt of the Spec's while it waits.
+#            A Ticket that carries `ready-for-agent` is an execution Ticket
+#            whatever else it carries;
 #   shelved  titled 【搁置】, or marked so in its body;
 #   source   the loose source ticket of a Spec without sub-issues (the graph's
 #            `source` flag: the mapless ticket its 实现票 line names, 票 #83).
@@ -35,163 +42,66 @@
 #              `#<t> <title>` and, when it has open blockers, `（阻塞：#a #b）`;
 #   # waiting  the Tickets that wait, in the same form;
 #   # human    `#<t> <title>（人工）`;
+#   # decision `#<t> <title>（待定）`;
 #   # shelved  `#<t> <title>（搁置）`;
 #   # source   `#<t> <title>（源票）`;
-#   # report   one line per open Ticket that is neither human, shelved nor the
-#              source ticket, under # open or # waiting alike — the line the
-#              report takes as it is, so that no report hides a Ticket the Spec
-#              still owes, and the session never reads the reasons off the
+#   # report   one line per open Ticket that is neither human, decision, shelved
+#              nor the source ticket, under # open or # waiting alike — the line
+#              the report takes as it is, so that no report hides a Ticket the
+#              Spec still owes, and the session never reads the reasons off the
 #              issues: `剩余：#<t>` under # open, with its open blockers
 #              (`剩余：#<t>（阻塞：#a #b）`), and `剩余：#<t> 等 …` for a
 #              waiting one: `等 #<spec>` when the blocker is a Spec, `等 #<issue>`
 #              when it is a standalone issue (several: `等 #a #b`), `等人工 #<t>`
-#              a human Ticket of this Spec, `等搁置 #<t>` a shelved one; a
+#              a Ticket of this Spec that waits for a person — a human Ticket,
+#              or one under # decision — and `等搁置 #<t>` a shelved one; a
 #              Ticket that waits only behind another one names what that one
 #              waits for.
 # Tickets are ascending in every section. One that is both human and shelved
-# is in both, and a source that is human or shelved is in those sections too.
+# is in both, and a source that is human or shelved is in those sections too; a
+# Ticket under # decision is in that section alone.
 #
 # Exit codes:
 #   0  the check passes: `# open` is empty (a Spec without Tickets passes)
-#   1  fail closed: pipeline-status.sh or a gh query failed, or the graph has
-#      no such Spec. Nothing is printed on stdout in this case.
+#   1  fail closed: pipeline-status.sh or a gh query failed. Nothing is printed
+#      on stdout in this case. The failure may pass: step 9 runs it once more.
 #   2  the check fails: `# open` names at least one Ticket. Do not land.
+#   3  fail closed for good: the graph has no such Spec. Nothing is printed on
+#      stdout in this case. Waiting brings nothing back: step 9 parks at once.
 #  64  bad usage
 
 set -u
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=lib-graph.sh
+source "$HERE/lib-graph.sh"
 
-usage_error() {
-  printf 'landing-check: %s\n' "$1" >&2
-  exit 64
-}
+graph_parse_args "$@"
+graph_require_tools
+graph_load
 
-fail_closed() {
-  printf 'landing-check: %s\n' "$1" >&2
-  exit 1
-}
-
-REPO=""
-SPEC=""
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --repo)
-      [ $# -ge 2 ] || usage_error "--repo requires <owner/name>"
-      REPO=$2
-      shift 2
-      ;;
-    --spec)
-      [ $# -ge 2 ] || usage_error "--spec requires <n>"
-      SPEC=$2
-      shift 2
-      ;;
-    -h|--help)
-      sed -n '2,/^set -u$/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
-      exit 0
-      ;;
-    *)
-      usage_error "unknown argument: $1"
-      ;;
-  esac
-done
-
-[ -n "$REPO" ] || usage_error "--repo is required"
-[ -n "$SPEC" ] || usage_error "--spec is required"
-[[ "$SPEC" =~ ^[0-9]+$ ]] || usage_error "--spec must be an issue number (got $SPEC)"
-command -v gh >/dev/null 2>&1 || fail_closed "gh is required but was not found on PATH"
-command -v node >/dev/null 2>&1 || fail_closed "node is required but was not found on PATH"
-[ -f "$HERE/pipeline-status.sh" ] || fail_closed "pipeline-status.sh not found next to landing-check.sh"
-
-GRAPH_FILE=$(mktemp "${TMPDIR:-/tmp}/landing-check-graph.XXXXXX") ||
-  fail_closed "could not create a temporary graph file"
-GRAPH_ERR=$(mktemp "${TMPDIR:-/tmp}/landing-check-graph-err.XXXXXX") ||
-  fail_closed "could not create a temporary graph error file"
-trap 'rm -f "$GRAPH_FILE" "$GRAPH_ERR" 2>/dev/null' EXIT
-
-if ! "$HERE/pipeline-status.sh" --repo "$REPO" --graph > "$GRAPH_FILE" 2> "$GRAPH_ERR"; then
-  printf 'landing-check: pipeline-status.sh --graph failed for %s\n' "$REPO" >&2
-  sed -n '1,20p' "$GRAPH_ERR" >&2
-  exit 1
-fi
-
-node - "$GRAPH_FILE" "$REPO" "$SPEC" <<'NODE'
-const fs = require('fs');
-const cp = require('child_process');
-
-const graphFile = process.argv[2];
-const repo = process.argv[3];
-const specNumber = Number(process.argv[4]);
-
-function fail(message) {
-  process.stderr.write(`landing-check: ${message}\n`);
-  process.exit(1);
-}
-
-let graph;
-try {
-  graph = JSON.parse(fs.readFileSync(graphFile, 'utf8'));
-} catch (error) {
-  fail(`cannot parse pipeline-status --graph output: ${error.message}`);
-}
-
-const spec = (Array.isArray(graph.specs) ? graph.specs : [])
-  .find((item) => Number(item.number) === specNumber);
-if (!spec) {
-  fail(`spec #${specNumber} not found in the ${repo} graph; is it an issue with a ## Problem Statement heading?`);
-}
-
-function parsePage(text, number) {
-  const trimmed = String(text || '').trim();
-  if (trimmed === '') return [];
-  try {
-    return JSON.parse(trimmed);
-  } catch (_) {
-    // gh --paginate may concatenate one JSON array per page; join them.
-    try {
-      const joined = JSON.parse(`[${trimmed.replace(/]\s*\[/g, '],[')}]`);
-      return joined.flat();
-    } catch (error) {
-      fail(`cannot parse dependencies/blocked_by for issue #${number}: ${error.message}`);
-    }
-  }
-  return [];
-}
-
-const tickets = (Array.isArray(spec.tickets) ? spec.tickets : [])
-  .slice()
-  .sort((a, b) => Number(a.number) - Number(b.number));
-const open = tickets.filter((ticket) => ticket.state === 'open');
+graph_node <<'NODE'
 const ticketNumbers = new Set(tickets.map((ticket) => Number(ticket.number)));
+const pendingNumbers = new Set(open.filter(isPending).map((ticket) => Number(ticket.number)));
+// The open Tickets that hold no landing back and are listed without their
+// blockers: human, shelved, the source ticket, and a Ticket under `# decision`.
+// Every other open Ticket is asked for its blockers, from the endpoint
+// frontier.sh reads.
 const deferred = new Set(open
-  .filter((ticket) => ticket.human === true || ticket.shelved === true || ticket.source === true)
+  .filter((ticket) => ticket.human === true || ticket.shelved === true || ticket.source === true ||
+    pendingNumbers.has(Number(ticket.number)))
   .map((ticket) => Number(ticket.number)));
-const humanNumbers = new Set(open
-  .filter((ticket) => ticket.human === true)
+// The Tickets that wait for a person: a human Ticket, or one under `# decision`
+// waiting for its triage. A Ticket blocked by one of them waits for that person.
+const personNumbers = new Set(open
+  .filter((ticket) => ticket.human === true || pendingNumbers.has(Number(ticket.number)))
   .map((ticket) => Number(ticket.number)));
 
-// The open blockers of every open Ticket that is neither human, shelved nor
-// the source ticket, from the endpoint frontier.sh reads. The deferred kinds
-// are listed without theirs.
 const blockers = new Map();
 for (const ticket of open) {
   const number = Number(ticket.number);
   if (deferred.has(number)) continue;
-  let text;
-  try {
-    text = cp.execFileSync('gh', [
-      'api', '--paginate', `repos/${repo}/issues/${number}/dependencies/blocked_by`,
-    ], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']});
-  } catch (error) {
-    const detail = error && error.stderr ? `: ${String(error.stderr).trim()}` : '';
-    fail(`gh api failed for issue #${number} dependencies/blocked_by${detail}`);
-  }
-  const list = parsePage(text, number);
-  blockers.set(number, (Array.isArray(list) ? list : [])
-    .filter((item) => item && item.state === 'open')
-    .map((item) => Number(item.number))
-    .filter((value) => Number.isFinite(value))
-    .sort((a, b) => a - b));
+  blockers.set(number, openBlockersOf(number));
 }
 
 // A Ticket waits when an open blocker of it lies outside this Spec, or when it
@@ -205,13 +115,14 @@ for (const ticket of open) {
 // #22, 等人工 #11, 等搁置 #11). `holds` reads a blocker's own reason off the
 // graph, and at most one kind holds: a blocker outside this Spec's Tickets is
 // another Spec or a standalone issue, read by its number; one of this Spec that
-// is deferred is `human` when it is a human Ticket, shelved as well or not,
-// and `shelved` otherwise. A Ticket of this Spec that no kind holds waits
-// itself, and the Ticket behind it waits for what that one waits for.
+// is deferred is `human` when it waits for a person — a human Ticket, or one
+// under `# decision` — shelved as well or not, and `shelved` otherwise. A
+// Ticket of this Spec that no kind holds waits itself, and the Ticket behind it
+// waits for what that one waits for.
 const KINDS = {
   number: {order: 0, head: ' ', holds: (blocker) => !ticketNumbers.has(blocker)},
-  human: {order: 1, head: '人工 ', holds: (blocker) => deferred.has(blocker) && humanNumbers.has(blocker)},
-  shelved: {order: 2, head: '搁置 ', holds: (blocker) => deferred.has(blocker) && !humanNumbers.has(blocker)},
+  human: {order: 1, head: '人工 ', holds: (blocker) => deferred.has(blocker) && personNumbers.has(blocker)},
+  shelved: {order: 2, head: '搁置 ', holds: (blocker) => deferred.has(blocker) && !personNumbers.has(blocker)},
 };
 const KIND_LIST = Object.entries(KINDS).sort((a, b) => a[1].order - b[1].order);
 
@@ -249,10 +160,6 @@ for (let changed = true; changed;) {
   }
 }
 
-function clean(value) {
-  return String(value || '').replace(/[\r\n\t]+/g, ' ').trim();
-}
-
 // The open blockers of a Ticket as the suffix of a line that names it,
 // `（阻塞：#a #b）` ascending, or nothing when it has none.
 function blockerSuffix(number) {
@@ -263,8 +170,7 @@ function blockerSuffix(number) {
 }
 
 function line(ticket) {
-  const number = Number(ticket.number);
-  return `#${number} ${clean(ticket.title)}${blockerSuffix(number)}`;
+  return `${titled(ticket)}${blockerSuffix(Number(ticket.number))}`;
 }
 
 // The landing report's line for an open execution Ticket, whichever section
@@ -291,13 +197,16 @@ function reportLine(number) {
 const blocking = [];
 const waitingLines = [];
 const human = [];
+const decision = [];
 const shelved = [];
 const source = [];
 for (const ticket of open) {
   const number = Number(ticket.number);
-  if (ticket.human === true) human.push(`#${number} ${clean(ticket.title)}（人工）`);
-  if (ticket.shelved === true) shelved.push(`#${number} ${clean(ticket.title)}（搁置）`);
-  if (ticket.source === true) source.push(`#${number} ${clean(ticket.title)}（源票）`);
+  const title = titled(ticket);
+  if (ticket.human === true) human.push(`${title}（人工）`);
+  if (pendingNumbers.has(number)) decision.push(`${title}（待定）`);
+  if (ticket.shelved === true) shelved.push(`${title}（搁置）`);
+  if (ticket.source === true) source.push(`${title}（源票）`);
   if (deferred.has(number)) continue;
   if (waiting.has(number)) waitingLines.push(line(ticket));
   else blocking.push(line(ticket));
@@ -308,17 +217,17 @@ for (const [title, lines] of [
   ['# open', blocking],
   ['# waiting', waitingLines],
   ['# human', human],
+  ['# decision', decision],
   ['# shelved', shelved],
   ['# source', source],
-  // Every open Ticket that is neither human, shelved nor the source ticket,
-  // under # open or # waiting alike: a report must never hide a Ticket the
-  // Spec still owes.
+  // Every open Ticket that is neither human, decision, shelved nor the source
+  // ticket, under # open or # waiting alike: a report must never hide a Ticket
+  // the Spec still owes.
   ['# report', open
     .filter((ticket) => !deferred.has(Number(ticket.number)))
     .map((ticket) => reportLine(Number(ticket.number)))],
 ]) {
-  out.push(title);
-  out.push(...(lines.length > 0 ? lines : ['（无）']));
+  out.push(...section(title, lines));
 }
 process.stdout.write(`${out.join('\n')}\n`);
 process.exit(blocking.length === 0 ? 0 : 2);

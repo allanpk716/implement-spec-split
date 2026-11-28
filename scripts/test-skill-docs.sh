@@ -130,6 +130,14 @@
 # carries both in its fixed clauses, with the cleanup handed to the clause
 # against a recursive deletion, and the Design session's Briefs were not given
 # them. Each is said again where it is pinned, and in MAINTAINING's 自测 entry.
+# So is 票 #86: the graph reads the `ready-for-agent` label, and an open Ticket
+# without it is listed under `# decision` by frontier.sh and landing-check.sh
+# alike — never dispatched, holding no landing back, under 要你做的 in the
+# report, and counted like a ready-for-human Ticket wherever a step keeps the
+# Spec open for a human; step 0 rule 3 releases a Spec whose Tickets all wait
+# for triage; and a Spec missing from the graph is exit 3, parked on at once
+# where exit 1 (a failed query) is retried once — in step 9's lines and in
+# step 1's failure rule.
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -367,7 +375,8 @@ has "Step 9's landing check refuses to land while such a Ticket is open." \
   'SKILL.md step 5 points the Tickets left open to the landing check' "$SKILL"
 
 # Step 9 runs the landing check before the lock and reads its sections: the
-# five it lists and the report lines it ends with. Exit 2 leads back to step 1,
+# six it lists (five until 票 #86 added `# decision`) and the report lines it
+# ends with. Exit 2 leads back to step 1,
 # and an empty frontier with no implementing role alive leads back to the check
 # and then to a parking with category error, never to a loop (the parking
 # report names every Ticket under # open). A Ticket that waits is reported with
@@ -375,8 +384,9 @@ has "Step 9's landing check refuses to land while such a Ticket is open." \
 # issue, a human Ticket or a shelved one, and the line says which.
 has '<skill dir>/scripts/landing-check.sh --repo <owner/name> --spec <n>' \
   'SKILL.md step 9 runs the landing check' "$SKILL"
-has "lists the Spec's open Tickets in five sections — \`# open\`, \`# waiting\`, \`# human\`, \`# shelved\`, \`# source\`" \
-  'SKILL.md step 9 names the five sections of the landing check' "$SKILL"
+has "lists the Spec's open Tickets in six sections — \`# open\`, \`# waiting\`, \`# human\`, \`# decision\`, \`# shelved\`, \`# source\`" \
+  'SKILL.md step 9 names the six sections of the landing check' "$SKILL"
+without 'open Tickets in five sections' 'SKILL.md step 9 no longer names five sections' "$SKILL"
 without 'open Tickets in four sections' 'SKILL.md step 9 no longer names four sections' "$SKILL"
 has "ends with \`# report\`, one \`剩余：\` line per open execution Ticket, ready for a report as it is" \
   'SKILL.md step 9 takes the report lines of the landing check as they are' "$SKILL"
@@ -440,6 +450,54 @@ has 'a Run that went on would land it with nothing done and close the source tic
   'SKILL.md step 0 rule 3 says why a source-only Spec is not landed' "$SKILL"
 has '`# source` lists the loose source ticket (step 0, rule 2b), which is never dispatched either' \
   'SKILL.md step 1 names the source section of the frontier' "$SKILL"
+
+# --- 票 #86: a Ticket without `ready-for-agent` waits for triage; a Spec missing from the graph parks at once ---
+
+# The graph reads the `ready-for-agent` label and both scripts act on it alike
+# (scripts/lib-graph.sh): an open Ticket without the label is listed under
+# `# decision`, is never dispatched and holds no landing back, while it is
+# neither `ready-for-human`, shelved nor the loose source. And the two scripts
+# tell a Spec the graph does not hold (exit 3) from a query that failed (exit
+# 1): the first is parked on at once, the second is retried once.
+#
+# Step 9, the landing check: its decision section is among those that block
+# nothing, its Tickets go under 要你做的 and count like a `ready-for-human`
+# Ticket wherever a step keeps the Spec open for a human.
+has 'a Ticket under `# decision` is no execution Ticket while it is there: it carries no `ready-for-agent` label, so nothing is dispatched for it and it is in no `# report` line' \
+  'SKILL.md step 9 passes the check without counting a Ticket under # decision' "$SKILL"
+has 'The other five sections block nothing: a Ticket under `# waiting` waits for another Spec, a standalone issue, or a human' \
+  'SKILL.md step 9 counts the decision section among those that block nothing' "$SKILL"
+without 'The other four sections block nothing' 'SKILL.md step 9 no longer names four sections that block nothing' "$SKILL"
+has "A Ticket blocked by one under \`# decision\` reports \`等人工\` as well — the same form, since it waits for that Ticket's triage" \
+  'SKILL.md step 9 reports a Ticket behind one under # decision as waiting for a human' "$SKILL"
+has 'the lines of `# decision` go in the report the same way, each under 要你做的' \
+  'SKILL.md step 9 sends a Ticket under # decision to 要你做的' "$SKILL"
+has 'it waits for a human the way a `ready-for-human` Ticket does, so every step that keeps the Spec open for a human Ticket (step 7, step 9.5, step 10) keeps it open for this one too' \
+  'SKILL.md step 9 keeps the Spec open for a Ticket under # decision as for a human Ticket' "$SKILL"
+# Exit 1 is retried, exit 3 is not: a Spec missing from the graph does not come
+# back by waiting, and a keeper that resumed the Run would only find it missing.
+has '- `1` (a query failed): step 1'"'"'s failure rule — wait 30 seconds and run it once more; if it fails again, park with category `transient`.' \
+  'SKILL.md step 9 keeps the retry for a failed query' "$SKILL"
+without '`1` (a query failed, or the graph has no such Spec)' \
+  'SKILL.md step 9 no longer folds a missing Spec into the retried exit' "$SKILL"
+has '- `3` (the graph has no such Spec: its issue is gone, or no longer carries the `## Problem Statement` heading)' \
+  'SKILL.md step 9 has a line of its own for a Spec missing from the graph' "$SKILL"
+has 'so run the check no second time and write no `transient`' \
+  'SKILL.md step 9 runs the check no second time on exit 3' "$SKILL"
+has 'Park with category `error` at once, the parking report' \
+  'SKILL.md step 9 parks on exit 3 at once, with category error' "$SKILL"
+# The frontier lists the same Tickets under the same heading; step 0 rule 3
+# releases a Spec whose Tickets all wait for triage instead of landing it with
+# nothing done; and the failure rule of step 1, where frontier.sh is run, keeps
+# the two exits apart the same way.
+has '`# decision` lists the tickets that carry no `ready-for-agent` label (never dispatch those either' \
+  'SKILL.md step 1 names the decision section of the frontier' "$SKILL"
+has 'a frontier that is empty while `# source` or `# decision` names a ticket is step 0'"'"'s rule 3' \
+  'SKILL.md step 1 sends an empty frontier with a Ticket under # decision to rule 3' "$SKILL"
+has 'The same for a Spec whose frontier is empty while `# decision` names a Ticket' \
+  'SKILL.md step 0 rule 3 releases a Spec whose Tickets all wait for triage' "$SKILL"
+has "Exit \`3\` alone is not retried: the graph has no such Spec, which waiting does not change — park with category \`error\` at once, as step 9's \`3\` line says" \
+  'SKILL.md step 1 does not retry a missing Spec either' "$SKILL"
 
 # The reports take the check's lines, in all four forms of what a Ticket waits
 # for (审查 r3, 判断项 2: the fourth, 等搁置, was in the script's header and in
