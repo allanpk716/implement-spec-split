@@ -198,6 +198,10 @@ done
 # Helpers of the gate that runs after every other check and before the merge.
 # Each one only reads; none touches a worktree or a ref.
 
+# An entry of a numbered directory is named <digits> followed by - or _. The
+# awk helpers below all match against this one pattern (their `re` variable).
+NUMBERED_RE='^[0-9]+[-_]'
+
 # The base: the first commit on <ticket_ref>'s first-parent chain that the
 # Integration branch already has. The last commit of that chain the Integration
 # branch lacks is followed by it (ancestors of ancestors, so everything below
@@ -218,7 +222,7 @@ numbered_entries() { # dir tip
   else
     list=$(git -C "$WORKTREE" ls-tree --name-only "$2" -- "$1/" 2>/dev/null) || return 1
   fi
-  printf '%s\n' "$list" | awk '{ n = split($0, c, "/"); if (c[n] ~ /^[0-9]+[-_]/) count++ } END { print count + 0 }'
+  printf '%s\n' "$list" | awk -v re="$NUMBERED_RE" '{ n = split($0, c, "/"); if (c[n] ~ re) count++ } END { print count + 0 }'
 }
 
 # Prints `<side>\t<dir>\t<digits>\t<path>` for every path added from..to that
@@ -226,8 +230,8 @@ numbered_entries() { # dir tip
 # directory per number, as migrations do).
 numbered_additions() { # side from to
   git -C "$WORKTREE" diff --name-only --diff-filter=A --no-renames "$2" "$3" 2>/dev/null |
-    awk -F/ -v side="$1" '
-      function digits(s) { sub(/[-_].*$/, "", s); return s }
+    awk -F/ -v side="$1" -v re="$NUMBERED_RE" '
+      function digits(s) { match(s, re); return substr(s, 1, RLENGTH - 1) }
       function emit(path, depth, entry, c, d, k) {
         split(path, c, "/")
         d = "."
@@ -235,8 +239,8 @@ numbered_additions() { # side from to
         printf "%s\t%s\t%s\t%s\n", side, d, digits(entry), path
       }
       {
-        if ($NF ~ /^[0-9]+[-_]/) { emit($0, NF - 1, $NF); next }
-        if (NF >= 2 && $(NF - 1) ~ /^[0-9]+[-_]/) emit($0, NF - 2, $(NF - 1))
+        if ($NF ~ re) { emit($0, NF - 1, $NF); next }
+        if (NF >= 2 && $(NF - 1) ~ re) emit($0, NF - 2, $(NF - 1))
       }'
 }
 
@@ -256,6 +260,19 @@ numbered_pairs() { # base integration_tip merge_base ticket_tip
     }' | sort
 }
 
+# The newest commit of <side> that touched <path>, `<hash> <subject>`, for the
+# lines of a collision: the Integration side from the base to its tip (merge
+# commits counted: a landed Ticket's change appears in its merge commit), the
+# Ticket side from the Integration tip to the Ticket tip (its own commits
+# only). Prints nothing when no commit of that side did.
+side_commit() { # side from to path
+  if [ "$1" = ticket ]; then
+    git -C "$WORKTREE" log --no-merges -1 --format='%h %s' "$2..$3" -- "$4" 2>/dev/null
+  else
+    git -C "$WORKTREE" log -1 --format='%h %s' "$2..$3" -- "$4" 2>/dev/null
+  fi
+}
+
 # The lines of a collision in numbered directories: every pair whose directory
 # is numbered at the Integration tip, each side with the newest commit that
 # touched one of its entries.
@@ -263,11 +280,9 @@ numbered_hits() { # base integration_tip merge_base ticket_tip
   numbered_pairs "$@" | while IFS=$'\t' read -r dir digits integration_paths ticket_paths; do
     [ "$(numbered_entries "$dir" "$2")" -ge 2 ] 2>/dev/null || continue
     printf 'numbered-dir %s %s\tintegration\t%s\t%s\n' "$dir" "$digits" \
-      "$(git -C "$WORKTREE" log -1 --format='%h %s' "$1..$2" -- "${integration_paths%%, *}" 2>/dev/null)" \
-      "$integration_paths"
+      "$(side_commit integration "$1" "$2" "${integration_paths%%, *}")" "$integration_paths"
     printf 'numbered-dir %s %s\tticket\t%s\t%s\n' "$dir" "$digits" \
-      "$(git -C "$WORKTREE" log --no-merges -1 --format='%h %s' "$2..$4" -- "${ticket_paths%%, *}" 2>/dev/null)" \
-      "$ticket_paths"
+      "$(side_commit ticket "$2" "$4" "${ticket_paths%%, *}")" "$ticket_paths"
   done
 }
 
@@ -285,14 +300,12 @@ version_hit() { # path base integration_tip ticket_tip
   [ "$integration_blob" = "$ticket_blob" ]
 }
 
-# The lines of a collision in version files, one path per line of <counters>.
-version_hits() { # base integration_tip ticket_tip counters
+# The lines of a collision in version files, one path per line of <version_files>.
+version_hits() { # base integration_tip ticket_tip version_files
   printf '%s\n' "$4" | while IFS= read -r path; do
     version_hit "$path" "$1" "$2" "$3" || continue
-    printf 'version %s\tintegration\t%s\t\n' "$path" \
-      "$(git -C "$WORKTREE" log -1 --format='%h %s' "$1..$2" -- "$path" 2>/dev/null)"
-    printf 'version %s\tticket\t%s\t\n' "$path" \
-      "$(git -C "$WORKTREE" log --no-merges -1 --format='%h %s' "$2..$3" -- "$path" 2>/dev/null)"
+    printf 'version %s\tintegration\t%s\t\n' "$path" "$(side_commit integration "$1" "$2" "$path")"
+    printf 'version %s\tticket\t%s\t\n' "$path" "$(side_commit ticket "$2" "$3" "$path")"
   done
 }
 
@@ -389,10 +402,10 @@ fi
 if [ -n "$counter_base" ]; then
   counter_merge_base=$(git -C "$WORKTREE" merge-base "$INTEGRATION_TIP" "$TICKET_TIP" 2>/dev/null) || counter_merge_base=
   if [ -n "$counter_merge_base" ]; then
-    COUNTERS=$(printf '%s\n' VERSION version.py version.go _version.py ${EXTRA_COUNTERS:+"$EXTRA_COUNTERS"} |
+    version_files=$(printf '%s\n' VERSION version.py version.go _version.py ${EXTRA_COUNTERS:+"$EXTRA_COUNTERS"} |
       awk 'NF && !seen[$0]++')
     counter_hits=$(numbered_hits "$counter_base" "$INTEGRATION_TIP" "$counter_merge_base" "$TICKET_TIP"
-      version_hits "$counter_base" "$INTEGRATION_TIP" "$TICKET_TIP" "$COUNTERS")
+      version_hits "$counter_base" "$INTEGRATION_TIP" "$TICKET_TIP" "$version_files")
     if [ -n "$counter_hits" ]; then
       warn "shared counters collide: re-bump them on the ticket side ($TICKET), then run again; nothing merged, tests not run"
       printf '%s\n' "$counter_hits" >&2
