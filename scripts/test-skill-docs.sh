@@ -20,16 +20,18 @@
 # trade-off is never parked on (a recommendation is applied, anything else takes
 # the reversibility rule), the category table is down to quota / transient /
 # auth / error, and the hooks README's rule B says the same.
-# The review fix of 规格 #58 adds two groups: the supervisor leaves an error
-# park alone (做错 4 — relayed to the user, never decided or resumed) and no
-# decision point of find-next picks an option that loosens a safety boundary
-# (做错 3 — step 6, the selecting Opus review of the flash mode and the
-# supervisor each carry the rule), and step 9's local install is for this
-# skill's own repository only (越界 2 — no other repository's install.sh is
-# run at landing). The Ticket Brief template carries the rules 规格 #58 wrote
-# for every Ticket (Spec 缺失 1: the local ops ticket and the agent-driven smoke
-# ticket in the ops section, the smoke exception of rule 3, a loosening recorded
-# instead of taken, the fifth item of the report).
+# The review fix of 规格 #58 pins what it changed, group by group: the supervisor
+# leaves an error park alone (做错 4 — relayed to the user, never decided or
+# resumed); no decision point of find-next picks an option that loosens a safety
+# boundary (做错 3 — step 6, the selecting Opus review of the flash mode and the
+# supervisor each carry the rule); step 9's local install is for this skill's own
+# repository only (越界 2 — no other repository's install.sh is run at landing);
+# the Ticket Brief template carries the rules 规格 #58 wrote for every Ticket
+# (Spec 缺失 1: the local ops ticket and the agent-driven smoke ticket in the ops
+# section, the smoke exception of rule 3, a loosening recorded instead of taken,
+# the fifth item of the report); and the user documents and the Brief templates
+# describe find-next's combined round as a decision round, never as a question
+# round (Standards 1).
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -393,6 +395,52 @@ has '「下次落地会补上」; omit for a Spec on any other repository)' \
   'SKILL.md: the landing report omits the install section for another repository' "$SKILL"
 has "Omit for a Spec on any other repository: step 9 installs this skill's own repository only." \
   'SKILL.md: the final report omits the install section for another repository' "$SKILL"
+
+# --- the user documents no longer describe the decision round as a question round
+# (规格 #58 审查 Standards 硬违规 1) ---
+
+# find-next's step 6 became a decision round (票 #69, MAINTAINING 第 54 条): the
+# combined message reports what was decided, gives the reversal recipe and waits
+# for nobody, and the three-round cap is gone. The user documents and the Brief
+# templates still described the old question round there — "reply 都同意", "you
+# confirm once, then they are published", a draft "to be confirmed by the user" —
+# and GLOSSARY's Advance mode lists question round under _Avoid_. Each old
+# sentence is gone and its replacement is pinned, document by document.
+without 'At most three rounds per run' 'README no longer caps the decision rounds' "$ROOT/README.md"
+without 'reply "都同意"' 'README no longer asks the user to answer the combined message' "$ROOT/README.md"
+has 'One combined decision round' 'README calls the combined round a decision round' "$ROOT/README.md"
+has 'It is a report, not a question: nothing waits for a reply' 'README says the combined message waits for nobody' "$ROOT/README.md"
+has '推翻 #<n> <条目> 改选 <X>' 'README gives the reversal recipe' "$ROOT/README.md"
+without '你确认一轮后统一发布' 'docs/setup.md no longer has the user confirm the drafts' "$ROOT/docs/setup.md"
+without '你确认后它在 Orca 里自动开 worktree' 'docs/setup.md no longer has the user confirm the launch' "$ROOT/docs/setup.md"
+has '审稿后每个待定条目按 worker 的推荐自动拍板（可推翻，不等回答）再统一发布' \
+  'docs/setup.md says the drafts are decided by recommendation and published' "$ROOT/docs/setup.md"
+has '要改某条拍板就回「推翻 #<n> <条目> 改选 <X>」' 'docs/setup.md gives the reversal recipe' "$ROOT/docs/setup.md"
+without 'you confirm once' 'docs/setup.en.md no longer has the user confirm the drafts' "$ROOT/docs/setup.en.md"
+has "each open item is decided by the worker's recommendation (auto-decided, 可推翻" \
+  'docs/setup.en.md says the drafts are decided by recommendation' "$ROOT/docs/setup.en.md"
+without 'ask the user once' 'docs/ai-agents.md no longer asks the user about the drafts' "$ROOT/docs/ai-agents.md"
+without 'only after their confirmation publish' 'docs/ai-agents.md no longer publishes after a confirmation' "$ROOT/docs/ai-agents.md"
+has "decide every open item by the worker's recommendation (auto-decided, 可推翻" \
+  'docs/ai-agents.md says the drafts are decided by recommendation' "$ROOT/docs/ai-agents.md"
+FOG=$ROOT/find-next/templates/brief-fog.md
+without '合成到一轮里问用户' 'brief-fog no longer has the fog proposal asked of the user' "$FOG"
+without '用户同意后才由主会话建票' 'brief-fog no longer waits for the user before the map changes' "$FOG"
+has '合成一轮按推荐自动拍板（可推翻）；拍板后才由主会话建票、接线、改地图' \
+  'brief-fog says the fog proposal is decided by recommendation' "$FOG"
+# The three drafting templates: the caller decides the open items after the
+# review instead of asking, and the seams field is review material, not
+# something put to the user.
+for template in brief-spec-batch brief-map-spec-batch brief-tickets-batch; do
+  file=$ROOT/find-next/templates/$template.md
+  [ -f "$file" ] || { bad "$template exists" "$file"; continue; }
+  without '由调用方审稿、问用户、再用脚本发布' "$template: the caller no longer asks the user" "$file"
+  has '由调用方审稿、按推荐自动拍板（可推翻）、再用脚本发布' "$template: the caller decides by recommendation" "$file"
+  without '由调用方统一问' "$template: the open items are no longer put to the user" "$file"
+  has '由调用方合成一轮按推荐自动拍板（可推翻）' "$template: the open items are decided in one round" "$file"
+  without '给用户确认用' "$template: seams are no longer for the user to confirm" "$file"
+  has '给调用方审稿用' "$template: seams are review material" "$file"
+done
 has "never for a Spec on another repository, whatever \`install.sh\` its root may hold" \
   "GLOSSARY: the Unattended landing entry keeps the install to this skill's own repository" "$GLOSSARY"
 

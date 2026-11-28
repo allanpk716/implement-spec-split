@@ -175,7 +175,7 @@ ln -s ~/.claude/skills/implement-spec-split/grill-map ~/.claude/skills/grill-map
 ln -s ~/.claude/skills/implement-spec-split/grill-router ~/.claude/skills/grill-router
 ```
 
-**Use**: `/find-next [--worker codex|self]`, or just ask "what's next". For the whole picture use `/find-next --list` (or ask "what is left"): it lists every to-do (in progress, needs tickets, needs a spec, open decisions, unfinished bookkeeping, loose issues) without a worker. To write every missing spec at once use `/find-next --batch`: codex workers draft a spec plus its tickets per group, you confirm once, then they are published and you get a start order for `/implement-spec-split`.
+**Use**: `/find-next [--worker codex|self]`, or just ask "what's next". For the whole picture use `/find-next --list` (or ask "what is left"): it lists every to-do (in progress, needs tickets, needs a spec, open decisions, unfinished bookkeeping, loose issues) without a worker. To write every missing spec at once use `/find-next --batch`: codex workers draft a spec plus its tickets per group, and after the review each open item is decided by the worker's recommendation (auto-decided, 可推翻 — the round is a report, not a question, and nothing waits for a reply) before the drafts are published; you get a start order for `/implement-spec-split`. To change a decision reply "推翻 #<n> <条目> 改选 <X>".
 
 - Default `codex`: a script does the mechanical scan (`find-next/scripts/scan.py` for local markdown trackers, `scripts/pipeline-status.sh` for GitHub), and a read-only codex worker does the judgment; the session reads only its conclusion of at most 15 lines. Needs Stage 2.
 - `self`: the session judges on its own, no codex needed.
