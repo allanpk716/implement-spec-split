@@ -159,7 +159,7 @@ The comment an unattended Run leaves on its Spec issue when a human must act bef
 _Avoid_: failure report, blocking question, 停车 for "waiting on another Spec"
 
 **Partial landing**:
-A Run landing every ticket it can while the rest wait for another Spec: the landed tickets close, the Spec stays open, the integration branch is deleted, and the Spec becomes free again, so `--next-wave` starts it afresh once its blockers land. Its landing report lists `剩余：#<t> 等 #<spec>`.
+A Run landing every ticket it can while the rest wait for another Spec or are `ready-for-human` tickets (never dispatched): the landed tickets close, the Spec stays open, the integration branch is deleted, and the Spec becomes free again, so `--next-wave` starts it afresh once its blockers land. Its landing report lists `剩余：#<t> 等 #<spec>`, and `等人工票 #<t>` for a ticket left to a human.
 _Avoid_: parked, interrupted
 
 **Supervisor**:

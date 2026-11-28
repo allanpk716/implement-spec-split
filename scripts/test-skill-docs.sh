@@ -9,7 +9,9 @@
 # going red. The cumulative review's settled points (MAINTAINING 第 51 条) are
 # pinned the same way: find-next's flash default, delegate-guard's flash
 # reason, the === TASK === form the guards read and the hooks README's
-# fail-open wording.
+# fail-open wording. Ticket #60 (规格 #58) adds the partial-landing wording
+# (tickets left to a human), the Brief-hygiene sentence and the 环境约束
+# section the three root Brief templates share verbatim with find-next's.
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -117,6 +119,38 @@ has '### 现状' 'the parking report keeps its status section' "$SKILL"
 # A mismatch is a warning that holds nothing back.
 has 'never held back' 'SKILL.md says a model mismatch never holds back the landing' "$SKILL"
 
+# --- a partial landing also covers tickets left to a human (票 #60, 规格 #58) ----
+
+# A ready-for-human ticket is never dispatched (MAINTAINING 第 36 条), so a Spec
+# whose open tickets are only those lands as a partial landing: the Spec stays
+# open, nothing parks, and the report names them. The exception is stated once
+# and echoed at each step that decides on it; each site is pinned so none can
+# fall back to the Spec-only wording on its own.
+has 'or may be `ready-for-human` tickets, which are never dispatched' \
+  'SKILL.md: a partial landing also covers ready-for-human tickets' "$SKILL"
+has 'which wait for a human (`等人工票 #<t>`)' 'SKILL.md: the final report names the tickets left to a human' "$SKILL"
+has '(except those waiting for another Spec or a `ready-for-human` ticket, see "Tickets blocked by another Spec")' \
+  'SKILL.md step 7 excepts the tickets left to a human' "$SKILL"
+has 'When tickets still wait for another Spec or for a human, land what is done but keep the Spec' \
+  'SKILL.md step 9 keeps the Spec open for the tickets left to a human' "$SKILL"
+has 'unless tickets still wait for another Spec or for a human (a partial landing also runs this substep)' \
+  'SKILL.md step 9.5 excepts the tickets left to a human' "$SKILL"
+has '`waiting` when the Spec stays open with tickets waiting for another Spec or for a human' \
+  'SKILL.md step 10 marks waiting for the tickets left to a human' "$SKILL"
+has '**Partial landing** (the Spec stays open only because tickets wait for another Spec or for a human)' \
+  'SKILL.md step 10 defines a partial landing for the tickets left to a human' "$SKILL"
+has 'while the rest wait for another Spec or are `ready-for-human` tickets' \
+  'GLOSSARY: partial landing covers ready-for-human tickets' "$GLOSSARY"
+has '等人工票 #<t>' 'GLOSSARY: the landing report names the tickets left to a human' "$GLOSSARY"
+
+# --- Brief hygiene (票 #60, 规格 #58; MAINTAINING 第 22 条) -----------------------
+
+# The sentence find-next/SKILL.md's 推进模式导言 carries, now in the rule that
+# writes a Brief: no vague path to a file outside the repo, and the templates'
+# 环境约束 section is the worker-side half of it.
+has '**Brief 卫生**：往 Brief 里引用仓库外的文件' 'SKILL.md: Brief hygiene before naming a file outside the repo' "$SKILL"
+has '「环境约束（找文件与子进程）」一节是 worker 侧的对应约束' 'SKILL.md: the templates 环境约束 section is the worker-side rule' "$SKILL"
+
 # --- the Ticket Brief template --------------------------------------------------
 
 for text in 'worker_done' '--task-id' '## 护栏' '探索笔记' '规格内容' '票内容' \
@@ -126,6 +160,27 @@ for text in 'worker_done' '--task-id' '## 护栏' '探索笔记' '规格内容' 
   has "$text" "Brief template has [$text]" "$BRIEF"
 done
 without '不要 `git commit`' 'Brief template requires the worker to commit' "$BRIEF"
+
+# --- the three root Brief templates carry the 环境约束 section verbatim (票 #60, 规格 #58)
+
+# find-next/scripts/test-make-batch-briefs.sh checks that section over
+# find-next/templates/*.md only, so nothing caught a root template (the Design
+# session's Briefs) drifting from it. The section runs from its heading up to
+# the next `## ` and is compared byte for byte, the blank lines included.
+env_section() { # file
+  awk '/^## 环境约束（找文件与子进程）$/ { section = 1; next }
+       section && /^## / { section = 0 }
+       section' "$1"
+}
+for template in templates/brief-implement.md templates/brief-investigate.md templates/brief-mock.md; do
+  if ! grep -Fq -- '## 环境约束（找文件与子进程）' "$ROOT/$template"; then
+    bad "$template has the 环境约束 section verbatim" "missing [## 环境约束（找文件与子进程）] in $template"
+  elif cmp -s <(env_section "$ROOT/$template") <(env_section "$BRIEF"); then
+    ok "$template has the 环境约束 section verbatim"
+  else
+    bad "$template has the 环境约束 section verbatim" "differs from find-next/templates/brief-implement.md in $template"
+  fi
+done
 
 # --- hooks README ----------------------------------------------------------------
 
