@@ -4,14 +4,19 @@
 # release would unfreeze, and interrupted grill sessions. When --spec belongs
 # to no grill topic, the first line is that Spec's own landing conclusion and
 # repository-wide status comes from pipeline-status.sh --graph (open Specs and
-# the ready tickets that belong to no Spec or map). Read-only: it never tags
-# and never pushes.
+# the ready tickets that belong to no Spec or map); whether anyone is working
+# on such a Spec comes from claim.sh status: an active or interrupted claim
+# overrides the graph's status, a free claim leaves it as the graph has it.
+# Read-only: it never tags and never pushes. claim.sh status creates an empty
+# .git/implement-spec-split/claims/ when that directory does not exist yet;
+# nothing else is written.
 
 set -u
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 GRILL_STATUS=$HERE/grill-status.sh
 PIPELINE_STATUS=$HERE/pipeline-status.sh
+CLAIM_SH=$HERE/claim.sh
 
 usage() {
   cat <<'USAGE'
@@ -417,6 +422,20 @@ spec_claimed() {
   [ -n "$assignees" ] && [ "$assignees" != FAILED ]
 }
 
+# What claim.sh status says about a Spec: active (its claim record is alive,
+# i.e. the holder pid still has its recorded start time or the handoff
+# reservation has not expired), interrupted (its exact (spec-N) or old-style
+# (spec-N-<role>, excluding -t<n>/-fix*) branch exists but the record is dead)
+# or free. Empty when the state could not be read.
+spec_claim_state() {
+  local n=$1 state
+  [ -x "$CLAIM_SH" ] || return 0
+  state=$( (
+    cd "$REPO_ROOT" && bash "$CLAIM_SH" status "$n"
+  ) 2>/dev/null) || return 0
+  printf '%s' "${state%% *}"
+}
+
 # -------------------------------------------------------------- formatting
 
 join_lines() {
@@ -664,11 +683,13 @@ spec_conclusion() {
   return 0
 }
 
-# graph spec row → "#19 规格②…（实现中，票 4/5）" / "#20 规格③…（等 #19）"
+# graph spec row [status] → "#19 规格②…（实现中，票 4/5）" / "#20 规格③…（等 #19）".
+# The optional status replaces the graph's: an active or interrupted claim
+# overrides the graph, a free claim keeps the graph's status.
 open_spec_text() {
   local row=$1 n status total closed deps extras partial title progress= wait_text= text=
   n=$(line_field "$row" 1)
-  status=$(line_field "$row" 3)
+  status=${2:-$(line_field "$row" 3)}
   total=$(line_field "$row" 4)
   closed=$(line_field "$row" 5)
   deps=$(line_field "$row" 6)
@@ -781,6 +802,7 @@ fi
 
 ONGOING_PARTS=()
 CLAIMED=false
+ACTIVE_SPECS=() # the Specs someone is working on, for the release advice
 HAS_OPEN_SPECS=false
 OPEN_SPEC_COUNT=0
 OPEN_SPEC_LINES=()
@@ -797,6 +819,7 @@ if [ "$SHOW_REPO_BLOCK" = true ]; then
         open_parts+=("$(spec_progress_text "$n")")
         if spec_claimed "$n"; then
           CLAIMED=true
+          ACTIVE_SPECS+=("$n")
         fi
       done
       ONGOING_PARTS+=("   ⏳ $(topic_display "${RUN_TITLES[$index]}")：$(printf '%s\n' "${open_parts[@]}" | join_lines '、')")
@@ -805,6 +828,9 @@ if [ "$SHOW_REPO_BLOCK" = true ]; then
   done
 
   # Open Specs that belong to no grill topic: one line each, at most ten.
+  # claim.sh status applies to every one of them: an active or interrupted
+  # claim overrides whatever the graph says (human-only, shelved, needs_tickets
+  # and ready alike), a free claim keeps the graph's status.
   if [ "$GRAPH_FAILED" = false ]; then
     for row in ${GRAPH_SPEC_ROWS[@]+"${GRAPH_SPEC_ROWS[@]}"}; do
       n=$(line_field "$row" 1)
@@ -812,9 +838,17 @@ if [ "$SHOW_REPO_BLOCK" = true ]; then
       has_spec "$n" && continue
       [ "$n" = "$SPEC_ARG" ] && continue
       OPEN_SPEC_COUNT=$((OPEN_SPEC_COUNT + 1))
-      [ "$(line_field "$row" 3)" = running ] && CLAIMED=true
+      status=$(line_field "$row" 3)
+      case "$(spec_claim_state "$n")" in
+        active) status=running ;;
+        interrupted) status=interrupted ;;
+      esac
+      if [ "$status" = running ]; then
+        CLAIMED=true
+        ACTIVE_SPECS+=("$n")
+      fi
       [ "$OPEN_SPEC_COUNT" -gt 10 ] && continue
-      OPEN_SPEC_LINES+=("$(open_spec_text "$row")")
+      OPEN_SPEC_LINES+=("$(open_spec_text "$row" "$status")")
     done
   fi
   [ "$OPEN_SPEC_COUNT" -gt 0 ] && HAS_OPEN_SPECS=true
@@ -938,7 +972,11 @@ if [ "$SHOW_RELEASE" = true ] && [ -n "$TAG" ]; then
         OUT+=('   B. 等所有在做的工作完成一起发')
       fi
       if [ "$CLAIMED" = true ]; then
-        OUT+=('   推荐：B（它正在实现，等它）')
+        active_list=
+        for n in ${ACTIVE_SPECS[@]+"${ACTIVE_SPECS[@]}"}; do
+          active_list="${active_list:+${active_list},}${n}"
+        done
+        OUT+=("   推荐：B（$(format_numbers "$active_list") 正在实现，做完再发）")
       else
         OUT+=('   推荐：A（没人在做，不该被它挡住）')
       fi
