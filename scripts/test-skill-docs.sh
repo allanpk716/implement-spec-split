@@ -281,15 +281,39 @@ without '其他三类仍按第 6 步问用户后处理' 'find-next step 4 no lon
 
 # The wrap-up lists every auto-decision of the round with its reversal recipe and
 # the items left to the human; the supervisor decides a parked Spec's recommended
-# items itself (a 拍板 comment marked 总控自动拍板, then --only), asks only for
-# auth, and ALL_DONE lists every auto-decision of the supervision. The error
-# handling no longer asks the user to choose between waiting and stopping, and
-# no longer names the three-round cap.
+# items itself (a 拍板 comment marked 总控自动拍板, then --only) for every park but
+# one kind, asks only for auth, and ALL_DONE lists every auto-decision of the
+# supervision. The error handling no longer asks the user to choose between
+# waiting and stopping, and no longer names the three-round cap.
 has '完成度结论之下列「**本轮自动拍板**」' 'find-next step 11 lists the round auto-decisions' "$FIND_NEXT"
 has '逐条带推翻回法「推翻 #<票号> <条目> 改选 <X>」' 'find-next step 11 gives each auto-decision its reversal recipe' "$FIND_NEXT"
 has '再列「**要你做**」：没拍板的本人事项' 'find-next step 11 lists the undecided human items' "$FIND_NEXT"
 has '「<条目>：选 <X>（总控自动拍板 <日期>，可推翻）」' 'the supervisor writes its own 拍板 comment for recommended items' "$FIND_NEXT"
-has '只有条目需要本人身份或凭据（停车类别 `auth`）才问用户' 'the supervisor asks only for auth' "$FIND_NEXT"
+
+# --- the supervisor leaves an error park alone (规格 #58 审查做错 4，取舍 1 选 A) ---
+
+# The category table says a human must act first on auth and error; the
+# supervisor's rule did not limit itself by category, so an error park that
+# carried recommendations (three review rounds, a guardrail violation) was
+# decided and resumed, and the three-round cap became park → decide → resume →
+# re-review → park again. An error park is now relayed item by item and never
+# resumed by the supervisor; the quota / transient parks and the legacy reports
+# (a retired category, or no category line) keep the rule; auth stays the only
+# category asked of the user. The old sentence read as if auth were the only
+# park that reached the user at all.
+has '停车类别是 `error` 的不由总控拍板，带推荐也不拍' 'the supervisor never decides an error park' "$FIND_NEXT"
+has '只汇报，不写 `## 拍板`、不运行 `--only`' 'the supervisor relays an error park without a 拍板 comment or a resume' "$FIND_NEXT"
+has '`quota` / `transient` 和旧格式报告（类别行写的是已退役的 `decision` / `other`，或没有类别行）' \
+  'the supervisor still decides quota, transient and legacy parks' "$FIND_NEXT"
+has '问用户的只有停车类别 `auth`' 'the supervisor asks the user only for auth' "$FIND_NEXT"
+without '只有条目需要本人身份或凭据（停车类别 `auth`）才问用户' \
+  'the supervisor rule no longer reads as if auth were the only park left to the user' "$FIND_NEXT"
+has '`error` 停车的待决条目' 'the SUMMARY line counts an error park among the human to-dos' "$FIND_NEXT"
+has '`auth` 停车和 `error` 停车的规格' 'ALL_DONE still lists the error-parked Specs' "$FIND_NEXT"
+has 'An `error` park is never decided or restarted by the supervisor' \
+  'SKILL.md: parking hands an error park to the user, not to the supervisor' "$SKILL"
+has 'it never decides or resumes an `error` park' 'GLOSSARY: the Parking report entry keeps the supervisor off error parks' "$GLOSSARY"
+has 'never for a parking category of `error`' 'GLOSSARY: the Supervisor entry keeps off error parks' "$GLOSSARY"
 has '已自动拍板 w · 要你做 v' 'the SUMMARY line counts auto-decisions and human to-dos' "$FIND_NEXT"
 has '集中列出本次总控期间的全部自动拍板' 'ALL_DONE lists every auto-decision of the supervision' "$FIND_NEXT"
 has '或拍的是决策票、地图条目（迷雾毕业、散票建地图）和散票分流时' 'the reversal recipe reaches decision tickets, map entries and loose tickets' "$FIND_NEXT"
