@@ -8,7 +8,9 @@
 # script exits 6 and merges nothing, so the second half of the file builds a
 # branch group with docs/adr, VERSION, CHANGELOG.md and pyproject.toml; its
 # last part runs the step 9.1 shape too, --ticket origin/main with
-# --no-ticket-worktree.
+# --no-ticket-worktree. Its last section covers --close-ticket: the merger
+# closes the Tickets it was given on its exit 0 and calls gh on no other exit,
+# and the fake gh records every call it makes.
 
 set -u
 
@@ -23,6 +25,7 @@ INTEGRATION=$WORK/integration
 TICKET=$WORK/ticket
 TEST_LOG=$WORK/test.log
 TEST_FAIL=$WORK/test-fail
+GH_LOG=$WORK/gh.log
 PASSED=0
 FAILED=0
 RUN_EXIT=
@@ -118,8 +121,8 @@ expect_test_not_run() { # name
 run_merge() { # OUT [arguments]
   out=$1
   shift
-  env TEST_LOG="$TEST_LOG" TEST_FAIL="$TEST_FAIL" PATH="$BIN:$PATH" \
-      bash "$SCRIPT" "$@" > "$out" 2> "$out.err"
+  env TEST_LOG="$TEST_LOG" TEST_FAIL="$TEST_FAIL" GH_LOG="$GH_LOG" GH_FAIL_CLOSE="${GH_FAIL_CLOSE:-}" \
+      PATH="$BIN:$PATH" bash "$SCRIPT" "$@" > "$out" 2> "$out.err"
   RUN_EXIT=$?
 }
 
@@ -138,6 +141,28 @@ fi
 printf '%s\n' 'ok sample-test'
 EOF
 chmod +x "$BIN/fake-test"
+
+# The fake gh. The merger calls it only on its exit 0 path, and then always as
+# `gh issue close <n> --comment <body> --reason completed`; the fake records
+# each call on one line of GH_LOG and fails for the numbers GH_FAIL_CLOSE names.
+: > "$GH_LOG"
+cat > "$BIN/gh" <<'EOF'
+#!/usr/bin/env bash
+set -u
+printf '%s\n' "$*" >> "$GH_LOG"
+case "$*" in
+  'issue close '*' --reason completed') number=$3 ;;
+  *) printf 'fake gh: unexpected arguments: %s\n' "$*" >&2; exit 2 ;;
+esac
+for failed in ${GH_FAIL_CLOSE:-}; do
+  if [ "$number" = "$failed" ]; then
+    printf 'fake gh: could not close #%s\n' "$number" >&2
+    exit 1
+  fi
+done
+exit 0
+EOF
+chmod +x "$BIN/gh"
 
 # A repository with a bare origin (the test-close-self.sh layout), then the
 # Integration branch spec-101 in its own worktree and the Ticket branch
@@ -1187,6 +1212,194 @@ expect_without 'numbered-dir' "a modified entry is not listed as a numbered-dir 
 expect_head "$HEAD_AFTER_EDIT" "a modified entry leaves the Integration branch where it was"
 expect_clean "a modified entry leaves no half-merged state"
 expect_test_not_run "a modified entry runs no tests"
+
+# --- --close-ticket: only the exit 0 path touches an issue ------------------------
+# The fake gh records every call on a line of GH_LOG. No run above passed
+# --close-ticket, so the log is still empty; from here each case empties the log
+# before its run and reads it back.
+expect_gh_none() { # name — the fake gh recorded no call since the log was last emptied
+  if [ -s "$GH_LOG" ]; then
+    bad "$1" "gh was called: $(cat "$GH_LOG")"
+  else
+    ok "$1"
+  fi
+}
+
+expect_gh_call() { # text name — a recorded gh call holds <text>
+  if grep -Fq -- "$1" "$GH_LOG" 2>/dev/null; then
+    ok "$2"
+  else
+    bad "$2" "no gh call holds [$1]; $(cat "$GH_LOG" 2>/dev/null)"
+  fi
+}
+
+expect_gh_calls() { # count name — exactly <count> gh calls since the log was last emptied
+  got=$(wc -l < "$GH_LOG" 2>/dev/null | tr -d ' ')
+  if [ "${got:-0}" = "$1" ]; then
+    ok "$2"
+  else
+    bad "$2" "calls=${got:-0}, expected $1; $(cat "$GH_LOG" 2>/dev/null)"
+  fi
+}
+
+expect_gh_none "no run without --close-ticket calls gh"
+HEAD_BEFORE_CLOSE=$(git -C "$INTEGRATION" rev-parse HEAD)
+
+# The option takes an issue number, and a usage error is over before the gate:
+# nothing merged, nothing closed.
+run_merge "$WORK/close-lone.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t21 --test 'fake-test' --close-ticket
+expect_exit 64 "a --close-ticket without a number exits 64"
+expect_has '--close-ticket requires an issue number' "a --close-ticket without a number says so" "$WORK/close-lone.out.err"
+run_merge "$WORK/close-empty.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t21 --test 'fake-test' --close-ticket ''
+expect_exit 64 "an empty --close-ticket exits 64"
+run_merge "$WORK/close-zero.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t21 --test 'fake-test' --close-ticket 0
+expect_exit 64 "a --close-ticket of zero exits 64"
+run_merge "$WORK/close-text.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t21 --test 'fake-test' --close-ticket t21
+expect_exit 64 "a --close-ticket that is not an issue number exits 64"
+expect_has '--close-ticket requires an issue number' "a --close-ticket that is not an issue number names the option" "$WORK/close-text.out.err"
+expect_without 'integer expression expected' "a --close-ticket that is not an issue number is rejected before any numeric test" "$WORK/close-text.out.err"
+run_merge "$WORK/close-hash.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t21 --test 'fake-test' --close-ticket '#31'
+expect_exit 64 "a --close-ticket written as #31 exits 64"
+expect_gh_none "usage errors of --close-ticket call gh"
+expect_head "$HEAD_BEFORE_CLOSE" "usage errors of --close-ticket change nothing"
+
+# Exit 0: the Ticket is closed with one comment that names the merger, the
+# Ticket branch, the integration branch and the merge commit.
+new_ticket 31 "$HEAD_BEFORE_CLOSE"
+T31=$T
+printf '%s\n' 'feature thirty-one' > "$T31/feature31.txt"
+commit_in "$T31" 'ticket thirty-one adds a feature'
+TIP31=$(git -C "$T31" rev-parse HEAD)
+: > "$GH_LOG"
+run_merge "$WORK/close-ok.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t31 --test 'fake-test' --close-ticket 31
+expect_exit 0 "a merge with --close-ticket exits 0"
+expect_merged "$TIP31" "a merge with --close-ticket lands the ticket"
+expect_test_ran "a merge with --close-ticket runs the tests"
+expect_gh_calls 1 "a passing merge makes one gh call"
+expect_gh_call 'issue close 31 --comment ' "a passing merge closes the Ticket it was given"
+expect_gh_call '--reason completed' "the Ticket is closed as completed"
+expect_gh_call 'scripts/merge-ticket.sh' "the closing comment names the merger"
+expect_gh_call 'spec-102-t31' "the closing comment names the ticket branch"
+expect_gh_call 'spec-102' "the closing comment names the integration branch"
+MERGE31=$(git -C "$INTEGRATION" rev-parse --short=7 HEAD)
+expect_gh_call "（${MERGE31}）" "the closing comment names the merge commit"
+expect_has 'merge-ticket: closed #31' "the merger reports the Ticket it closed" "$WORK/close-ok.out"
+if awk '/^merge-ticket: tests passed$/ { t = NR } /^merge-ticket: closed #31$/ { c = NR } END { exit !(t && c && t < c) }' "$WORK/close-ok.out"; then
+  ok "the Ticket is closed after the tests passed"
+else
+  bad "the Ticket is closed after the tests passed" "$(cat "$WORK/close-ok.out")"
+fi
+
+# The option repeats: one merge, two Tickets, one call each, in the order
+# given; a number given twice, with or without leading zeros, is one Ticket.
+new_ticket 32 "$(git -C "$INTEGRATION" rev-parse HEAD)"
+T32=$T
+printf '%s\n' 'feature thirty-two' > "$T32/feature32.txt"
+commit_in "$T32" 'ticket thirty-two adds a feature'
+TIP32=$(git -C "$T32" rev-parse HEAD)
+: > "$GH_LOG"
+run_merge "$WORK/close-twice.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t32 --test 'fake-test' --close-ticket 32 --close-ticket 032 --close-ticket 31
+expect_exit 0 "a merge closing two Tickets exits 0"
+expect_merged "$TIP32" "a merge closing two Tickets lands the ticket"
+expect_gh_calls 2 "each Ticket named is one gh call, a number given twice is one Ticket"
+if head -n 1 "$GH_LOG" | grep -q '^issue close 32 --comment '; then
+  ok "the Tickets are closed in the order given"
+else
+  bad "the Tickets are closed in the order given" "$(cat "$GH_LOG")"
+fi
+expect_gh_call 'issue close 31 --comment ' "the second Ticket named is closed" "$GH_LOG"
+expect_without 'issue close 032' "a number with leading zeros is closed by its number" "$GH_LOG"
+expect_has 'merge-ticket: closed #32' "the merger reports the first Ticket" "$WORK/close-twice.out"
+expect_has 'merge-ticket: closed #31' "the merger reports the second Ticket" "$WORK/close-twice.out"
+
+# gh fails for one Ticket: the merge and the test run did pass, so the exit
+# stays 0, the Ticket is named on stderr with the hand action, and the merger
+# does not report it as closed.
+new_ticket 33 "$(git -C "$INTEGRATION" rev-parse HEAD)"
+T33=$T
+printf '%s\n' 'feature thirty-three' > "$T33/feature33.txt"
+commit_in "$T33" 'ticket thirty-three adds a feature'
+TIP33=$(git -C "$T33" rev-parse HEAD)
+: > "$GH_LOG"
+GH_FAIL_CLOSE=33 run_merge "$WORK/close-fails.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t33 --test 'fake-test' --close-ticket 33
+expect_exit 0 "a Ticket gh could not close does not fail the merge"
+expect_merged "$TIP33" "a Ticket gh could not close keeps the merge"
+expect_has 'fake gh: could not close #33' "gh's own message is passed through" "$WORK/close-fails.out.err"
+expect_has 'could not close #33: close it by hand (gh issue close 33)' "a Ticket gh could not close is named on stderr" "$WORK/close-fails.out.err"
+expect_has 'the merge' "a Ticket gh could not close names the merge that stands" "$WORK/close-fails.out.err"
+expect_without 'merge-ticket: closed #33' "a Ticket gh could not close is not reported as closed" "$WORK/close-fails.out"
+expect_gh_calls 1 "a Ticket gh could not close is tried once"
+
+# Every other exit leaves the issue alone and does not call gh: a gate miss
+# (2), a conflict (3), failing tests (4), a Ticket already landed (5) and a
+# shared counter collision (6).
+new_ticket 34 "$(git -C "$INTEGRATION" rev-parse HEAD)"
+: > "$GH_LOG"
+run_merge "$WORK/close-gate.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t34 --test 'fake-test' --close-ticket 34
+expect_exit 2 "a gate miss with --close-ticket exits 2"
+expect_gh_none "a gate miss closes nothing"
+
+new_ticket 35 "$(git -C "$INTEGRATION" rev-parse HEAD)"
+T35=$T
+printf '%s\n' 'ticket readme' > "$T35/README.md"
+commit_in "$T35" 'ticket thirty-five edits the readme'
+printf '%s\n' 'integration readme' > "$INTEGRATION/README.md"
+commit_in "$INTEGRATION" 'spec 102 edits the readme'
+: > "$GH_LOG"
+run_merge "$WORK/close-conflict.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t35 --test 'fake-test' --close-ticket 35
+expect_exit 3 "a conflict with --close-ticket exits 3"
+expect_gh_none "a conflict closes nothing"
+
+new_ticket 36 "$(git -C "$INTEGRATION" rev-parse HEAD)"
+T36=$T
+printf '%s\n' 'feature thirty-six' > "$T36/feature36.txt"
+commit_in "$T36" 'ticket thirty-six adds a feature'
+TIP36=$(git -C "$T36" rev-parse HEAD)
+: > "$TEST_FAIL"
+: > "$GH_LOG"
+run_merge "$WORK/close-tests-fail.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t36 --test 'fake-test' --close-ticket 36
+expect_exit 4 "failing tests with --close-ticket exit 4"
+expect_merged "$TIP36" "failing tests with --close-ticket keep the merge"
+expect_gh_none "failing tests close nothing"
+rm -f "$TEST_FAIL"
+
+: > "$GH_LOG"
+run_merge "$WORK/close-landed.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t31 --test 'fake-test' --close-ticket 31
+expect_exit 5 "a Ticket already landed with --close-ticket exits 5"
+expect_gh_none "a Ticket already landed is not closed again"
+
+HEAD_BEFORE_T37=$(git -C "$INTEGRATION" rev-parse HEAD)
+new_ticket 37 "$HEAD_BEFORE_T37"
+T37=$T
+printf '%s\n' 'adr forty a' > "$T37/docs/adr/0040-a.md"
+commit_in "$T37" 'ticket thirty-seven adds ADR 0040-a'
+: > "$GH_LOG"
+run_merge "$WORK/close-t37.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t37 --test 'fake-test'
+expect_exit 0 "the thirty-seventh ticket lands"
+expect_gh_none "a landing without --close-ticket closes nothing"
+new_ticket 38 "$HEAD_BEFORE_T37"
+T38=$T
+printf '%s\n' 'adr forty b' > "$T38/docs/adr/0040-b.md"
+commit_in "$T38" 'ticket thirty-eight adds ADR 0040-b'
+: > "$GH_LOG"
+run_merge "$WORK/close-collision.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t38 --test 'fake-test' --close-ticket 38
+expect_exit 6 "a counter collision with --close-ticket exits 6"
+expect_gh_none "a counter collision closes nothing"
+expect_clean "the --close-ticket cases leave a clean worktree"
 
 printf '\n%d passed, %d failed\n' "$PASSED" "$FAILED"
 [ "$FAILED" -eq 0 ]

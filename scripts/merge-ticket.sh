@@ -9,7 +9,7 @@
 # Usage:
 #   merge-ticket.sh --worktree <integration worktree> --integration <branch>
 #                   --ticket <branch> --test '<command>'
-#                   [--counter <path>]... [--no-ticket-worktree]
+#                   [--counter <path>]... [--close-ticket <n>]... [--no-ticket-worktree]
 #   merge-ticket.sh --worktree <integration worktree> --integration spec-<n>
 #                   --ticket origin/<main branch> --test '<command>'
 #                   --no-ticket-worktree
@@ -29,6 +29,17 @@
 # worktree skips the two checks about the Ticket branch's own worktree (that
 # some worktree has it checked out, and that that worktree is clean): step 9.1
 # merges a ref nobody has checked out. It is never inferred from --ticket.
+#
+# --close-ticket <n> (repeatable) names an issue to close once the merge and
+# the test command have both passed: exit 0, and only exit 0, closes each with
+# `gh issue close <n> --comment`, the comment naming the merger, the Ticket
+# branch and the merge commit. On every other exit nothing touches an issue,
+# so a merge or a test run that failed leaves the Ticket open and the work
+# still to do stays visible (票 #78: four Tickets merged and left open emptied
+# a Spec's frontier, and it nearly landed with 4 of its 9 Tickets). The script
+# needs gh on PATH for it; a Ticket it could not close is named on stderr and
+# the exit code stays 0, since the merge and the test run did pass: close that
+# one by hand.
 #
 # Gate (all checked before anything is merged; any miss exits 2 and merges
 # nothing): the worktree is the top level of a git worktree and has
@@ -81,7 +92,8 @@
 # stays (a fix role builds on it) and the exit code is 4.
 #
 # Exit codes:
-#   0  merged, and the test command passed
+#   0  merged, the test command passed, and every --close-ticket issue closed
+#      (one the script could not close is named on stderr: close it by hand)
 #   1  a git command failed for none of the reasons below (stderr says which;
 #      the worktree is clean unless stderr says the abort failed)
 #   2  gate not met: nothing merged, tests not run, stderr says which check
@@ -111,7 +123,7 @@ usage() {
   cat <<EOF
 usage: $SCRIPT_NAME --worktree <integration worktree> --integration <branch>
                    --ticket <branch> --test '<command>'
-                   [--counter <path>]... [--no-ticket-worktree]
+                   [--counter <path>]... [--close-ticket <n>]... [--no-ticket-worktree]
 
 Merge the Ticket branch into the Integration branch in its worktree (a merge
 commit, --no-ff), then run the test command there through bash -c. Nothing is
@@ -122,7 +134,9 @@ lists them. A Ticket branch already part of the
 Integration branch exits 5 (nothing to merge); a conflict aborts the merge and
 leaves the worktree as it was. --no-ticket-worktree lets --ticket be a ref
 nobody has checked out (step 9.1: origin/<main branch>) and skips the Ticket
-worktree checks; --counter adds a version-like file to the built-ins.
+worktree checks; --counter adds a version-like file to the built-ins;
+--close-ticket closes an issue once the merge and the test command have both
+passed (exit 0 only; repeatable).
 EOF
 }
 
@@ -147,6 +161,7 @@ INTEGRATION=
 TICKET=
 TEST_CMD=
 EXTRA_COUNTERS=
+CLOSE_TICKETS=
 NO_TICKET_WORKTREE=
 NL=$'\n'
 
@@ -181,6 +196,17 @@ while [ $# -gt 0 ]; do
       [ -n "$2" ] || usage_error '--counter requires a path'
       # Repeatable: newline-separated, read back one path per line.
       EXTRA_COUNTERS=${EXTRA_COUNTERS:+$EXTRA_COUNTERS$NL}$2
+      shift 2
+      ;;
+    --close-ticket)
+      [ $# -ge 2 ] || usage_error '--close-ticket requires an issue number'
+      case $2 in
+        '' | *[!0-9]*) usage_error '--close-ticket requires an issue number' ;;
+      esac
+      [ "$2" -gt 0 ] || usage_error '--close-ticket requires an issue number'
+      # Repeatable: newline-separated, read back one number per line. Without
+      # leading zeros, so 07 and 7 are one Ticket.
+      CLOSE_TICKETS=${CLOSE_TICKETS:+$CLOSE_TICKETS$NL}$((10#$2))
       shift 2
       ;;
     --no-ticket-worktree)
@@ -476,9 +502,26 @@ printf 'merge-ticket: merged %s into %s (%s)\n' "$TICKET" "$INTEGRATION" "$AFTER
 printf 'merge-ticket: running tests in %s: %s\n' "$WORKTREE" "$TEST_CMD"
 ( cd -P -- "$WORKTREE" && bash -c "$TEST_CMD" ) < /dev/null
 test_rc=$?
-if [ "$test_rc" -eq 0 ]; then
-  printf 'merge-ticket: tests passed\n'
-  exit 0
+if [ "$test_rc" -ne 0 ]; then
+  warn "tests failed (exit $test_rc) after merging $TICKET into $INTEGRATION; the merge commit $AFTER stays"
+  exit 4
 fi
-warn "tests failed (exit $test_rc) after merging $TICKET into $INTEGRATION; the merge commit $AFTER stays"
-exit 4
+printf 'merge-ticket: tests passed\n'
+
+# --- tickets -------------------------------------------------------------------
+# Only on this path: on every other exit nothing touches an issue (the header
+# says why). gh runs in the integration worktree, so it resolves the repository
+# from the same remote the session does. A Ticket gh could not close is named
+# on stderr and the exit stays 0: the merge and the test run did pass, and
+# closing it by hand is all that is left.
+[ -z "$CLOSE_TICKETS" ] || printf '%s\n' "$CLOSE_TICKETS" |
+  awk 'NF && !seen[$0]++' |
+  while IFS= read -r n; do
+    body="由 scripts/merge-ticket.sh 关闭：票分支 \`${TICKET}\` 已合入 \`${INTEGRATION}\`（${AFTER:0:7}），测试命令通过。"
+    if ( cd -P -- "$WORKTREE" && gh issue close "$n" --comment "$body" --reason completed ); then
+      printf 'merge-ticket: closed #%s\n' "$n"
+    else
+      warn "could not close #$n: close it by hand (gh issue close $n); the merge $AFTER stands"
+    fi
+  done
+exit 0
