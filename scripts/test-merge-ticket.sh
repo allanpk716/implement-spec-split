@@ -438,7 +438,7 @@ expect_head "$HEAD_AFTER_T13" "a fresh branch off an older Integration commit ch
 # VERSION file, a CHANGELOG and a pyproject.toml. From here on the expect_*
 # helpers read INTEGRATION, so it points at the new group.
 
-expect_quiet() { # stderr file name — the run printed nothing on stderr
+expect_quiet() { # file name — the file is empty (a run's stdout or stderr)
   if [ -s "$1" ]; then
     bad "$2" "$(cat "$1")"
   else
@@ -561,11 +561,7 @@ expect_clean "a counter collision leaves no half-merged state"
 expect_test_not_run "a counter collision runs no tests"
 expect_untouched "$T2" "$TIP2" "a counter collision leaves the ticket branch and worktree alone"
 expect_without 'gate not met' "a counter collision is not a gate failure" "$WORK/counter-both.out.err"
-if [ -s "$WORK/counter-both.out" ]; then
-  bad "a counter collision prints nothing on stdout" "$(cat "$WORK/counter-both.out")"
-else
-  ok "a counter collision prints nothing on stdout"
-fi
+expect_quiet "$WORK/counter-both.out" "a counter collision prints nothing on stdout"
 
 # Re-bump on the ticket side only: 0005-b renamed to 0006-b, VERSION 1.1.1, no
 # merge-back. The ticket side's net additions no longer collide and its VERSION
