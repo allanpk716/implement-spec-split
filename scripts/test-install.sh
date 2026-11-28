@@ -169,11 +169,11 @@ json_brief() {
     } catch { console.log("unparseable stdout: " + raw.slice(0, 300)); }'
 }
 
-# expect_json <name> <js predicate over the parsed stdout `out`>; CASE_SKILLS
-# and REPO are passed in the environment.
+# expect_json <name> <js predicate over the parsed stdout `out`>; CASE_DIR,
+# CASE_SKILLS and REPO are passed in the environment.
 expect_json() {
   local name=$1 js=$2
-  if OUT_FILE=$CASE_DIR/install.out JS="$js" CASE_SKILLS="$CASE_SKILLS" REPO="${REPO:-}" node -e '
+  if OUT_FILE=$CASE_DIR/install.out JS="$js" CASE_DIR="$CASE_DIR" CASE_SKILLS="$CASE_SKILLS" REPO="${REPO:-}" node -e '
     const out = JSON.parse(require("fs").readFileSync(process.env.OUT_FILE, "utf8"));
     process.exit(new Function("out", "return (" + process.env.JS + ")")(out) ? 0 : 1);
   ' 2>/dev/null; then
@@ -526,6 +526,7 @@ if [ "$(cat "$CASE_DIR/install.out")" = "$FIRST" ]; then
 else
   record FAIL "two --check --json runs print the same object"
 fi
+run_install "$REPO" --json
 run_install "$REPO" --json
 INSTALLED=$(cat "$CASE_DIR/install.out")
 run_install "$REPO" --json
