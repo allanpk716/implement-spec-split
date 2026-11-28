@@ -172,14 +172,14 @@ flash 模式下，本节所有原本由主会话审读或复核的结论都按�
 
    flash 模式下，本段审读和后续写票动作按「flash 模式」一节并入当轮 Opus review。
 
-3. **决策、迷雾、task 与 prototype 票（worker 准备，一轮问用户）**：research 票全部处置完后重新运行 `pipeline-status.sh --all`，看最新前沿、`fogMaps`、`emptyMaps`、`staleClaims`（「认领后不动（>3 天）」）和 `orphanClaims`（「认领但没有活会话」：认领不到 3 天，但 Orca 里本仓库各 worktree 没有标题或屏幕内容提到 `#N` 的活 agent 会话，多半是认领它的会话被意外关闭了）。
-   - **决策票**：open、阻塞全关、无 Assignee、标签为 `wayfinder:grilling` 的票每张派一个只读 worker，子目录 `decision-<票号>/`，用 [templates/brief-decision.md](templates/brief-decision.md)。worker 读票、地图、相关 ADR、规格和代码，产出问题陈述、2–4 个选项及代价、推荐答案和理由，写在 `decision.md`；不写票、不关票、不改地图。命令同上（含 `--mcp all`）；`--worker agent` 时同样按本节开头的同构做法开子代理，prompt 指向 `<运行目录>/decision-<票号>/brief.md` 与 `result.md`。worker 判断「无需用户决策」（已有 ADR/地图决定）时，我复核依据，仍把它作为一条「建议直接关：<依据>」放进第 6 步那一轮，用户同意后再写 Resolution、关票：grilling 是 HITL，wayfinder 规定代理不能替人回答。
-   - **地图迷雾**：扫描到 `fogMaps` 时，每张地图派一个只读 worker，子目录 `fog-<地图号>/`，用 [templates/brief-fog.md](templates/brief-fog.md)。worker 读地图、`Decisions so far` 和相关 Resolution，写 `fog.md`：建议新建的票（问题、`wayfinder:` 类型、阻塞对象）、应从 `Not yet specified` 移除的段落、建议判出范围或作废的票（附理由）、毕业后仍剩下的迷雾。这些变成第 6 步的「建议新建 / 建议判出范围」条目；未获用户同意前，主会话不改地图边界。
+3. **决策、迷雾、task 与 prototype 票（worker 准备，一轮拍板）**：research 票全部处置完后重新运行 `pipeline-status.sh --all`，看最新前沿、`fogMaps`、`emptyMaps`、`staleClaims`（「认领后不动（>3 天）」）和 `orphanClaims`（「认领但没有活会话」：认领不到 3 天，但 Orca 里本仓库各 worktree 没有标题或屏幕内容提到 `#N` 的活 agent 会话，多半是认领它的会话被意外关闭了）。
+   - **决策票**：open、阻塞全关、无 Assignee、标签为 `wayfinder:grilling` 的票每张派一个只读 worker，子目录 `decision-<票号>/`，用 [templates/brief-decision.md](templates/brief-decision.md)。worker 读票、地图、相关 ADR、规格和代码，产出问题陈述、2–4 个选项及代价、推荐答案和理由，写在 `decision.md`；不写票、不关票、不改地图。命令同上（含 `--mcp all`）；`--worker agent` 时同样按本节开头的同构做法开子代理，prompt 指向 `<运行目录>/decision-<票号>/brief.md` 与 `result.md`。决策题带推荐就进第 6 步拍板轮：按推荐写 Resolution 评论、关票、更新地图，标「自动拍板（可推翻）」。worker 判断「无需用户决策」（已有 ADR/地图决定）时，我复核依据，同样作为一条「建议直接关：<依据>」进拍板轮，按建议收票；只有需要本人身份、凭据或物理动作的才不拍板、列入「要你做」。
+   - **地图迷雾**：扫描到 `fogMaps` 时，每张地图派一个只读 worker，子目录 `fog-<地图号>/`，用 [templates/brief-fog.md](templates/brief-fog.md)。worker 读地图、`Decisions so far` 和相关 Resolution，写 `fog.md`：建议新建的票（问题、`wayfinder:` 类型、阻塞对象）、应从 `Not yet specified` 移除的段落、建议判出范围或作废的票（附理由）、毕业后仍剩下的迷雾。这些变成第 6 步拍板轮的「建议新建 / 建议判出范围」条目，按建议拍板后主会话才改地图边界（标「自动拍板（可推翻）」）；拍板前不动。
      地图迷雾的 codex 命令同决策票（含 `--mcp all`）。
-   - **task 票**：前沿里 open、阻塞全关、无 Assignee、标签为 `wayfinder:task` 的票每张派一个 worker，子目录 `task-<票号>/`，用 [templates/brief-task.md](templates/brief-task.md)。这个 worker **不是只读**，但只能改 Brief 明确写出的范围。能独自完成（AFK）的做掉并写 Resolution 草稿；需要人做的写精确清单。我复核结果同 research：事实有出处、没有越界，清晰 AFK 结果直接写 Resolution、关票、更新地图；人工清单放进第 6 步那一轮。
-   - **prototype 票**：前沿里 open、阻塞全关、无 Assignee、标签为 `wayfinder:prototype` 的票，单次运行最多处理 2 张；每张一个 worker，子目录 `prototype-<票号>/`，用 [templates/brief-prototype.md](templates/brief-prototype.md)。UI 原型按 mockit 技能做独立页面，由我复核后提交 mockit；非 UI 原型放在 `prototype/<票号>` 临时分支上，worker 本地提交但不得 push，我复核后 push 该分支，不开 PR、永不合并，推进模式下不单独确认。随后把可访问链接 / 分支链接和一句要反应的问题放进第 6 步那一轮，用户表态后再写 Resolution。第 3 张及以后的 prototype 票留到第 11 步收尾列出。
+   - **task 票**：前沿里 open、阻塞全关、无 Assignee、标签为 `wayfinder:task` 的票每张派一个 worker，子目录 `task-<票号>/`，用 [templates/brief-task.md](templates/brief-task.md)。这个 worker **不是只读**，但只能改 Brief 明确写出的范围。能独自完成（AFK）的做掉并写 Resolution 草稿；其余写进 `human-checklist.md`，我按它的固定两节读：`## 需要本人做的`（需要本人身份、凭据或物理动作；每条含动作、入口/命令、要回传的结果、预计影响）和 `## 运维步骤（带护栏，主会话派实现者执行）`（每步含执行方式——在本机执行 / 经 ssh-manager 执行 / Orca 操作序列、具体动作、预期证据、护栏、放宽项）。我复核结果同 research：事实有出处、没有越界，清晰 AFK 结果直接写 Resolution、关票、更新地图；`## 需要本人做的` 不拍板，列入收尾「要你做」；`## 运维步骤…` 按下面的非只读派发执行。
+   - **prototype 票**：前沿里 open、阻塞全关、无 Assignee、标签为 `wayfinder:prototype` 的票，单次运行最多处理 2 张；每张一个 worker，子目录 `prototype-<票号>/`，用 [templates/brief-prototype.md](templates/brief-prototype.md)。UI 原型按 mockit 技能做独立页面，由我复核后提交 mockit；非 UI 原型放在 `prototype/<票号>` 临时分支上，worker 本地提交但不得 push，我复核后 push 该分支，不开 PR、永不合并，推进模式下不单独确认。prototype 的反应题要的是用户的主观反应，agent 替不了：不拍板，把可访问链接 / 分支链接和一句要反应的问题列入收尾的「要你做」，用户表态后再写 Resolution。第 3 张及以后的 prototype 票留到第 11 步收尾列出。
 
-   flash 模式下，本步骤决策选项、迷雾/task/prototype 建议和「我复核」依据都按「flash 模式」一节并入当轮 Opus review。
+   flash 模式下，本步骤决策选项、迷雾/task/prototype 建议、运维步骤的结果和「我复核」依据都按「flash 模式」一节并入当轮 Opus review。
 
    writable worker 的命令去掉 `--read-only`：
 
@@ -189,7 +189,16 @@ flash 模式下，本节所有原本由主会话审读或复核的结论都按�
    ```
 
    task / prototype 需要操作远程服务器时，给上面的 codex 命令传 `--mcp ssh-manager`。
-   `--worker agent` 时所有新 worker 都按本节开头的同构做法开子代理；task / prototype 子代理同样只能执行 Brief 写明的范围。
+
+   **运维步骤的非只读派发**（find-next 的第一种非只读派发，task 票自己的 worker 按 Brief 允许范围改文件不算）：`human-checklist.md` 的 `## 运维步骤…` 一节不为空时，沿用 implement-spec-split Ops tickets 的 codex 后端写法——每张 task 票各派一个实现者 worker 执行它的整节步骤，子目录 `task-<票号>/ops/`（嵌在票的子目录下，`run-state.sh` 才不会把它当成该票的重试目录）：
+
+   ```bash
+   ~/.claude/skills/implement-spec-split/scripts/codex-worker.sh --cwd <仓库> --brief <运行目录>/task-<票号>/ops/brief.md \
+     --run-dir <运行目录>/task-<票号>/ops --time-limit 2400 --idle-timeout 600
+   ```
+
+   Brief 由我按该节写：允许改的文件/对象、可执行的操作、每步的动作与预期证据，以及**原文照抄**的护栏，只允许改 Brief 写明的范围。执行方式写「经 ssh-manager 执行」的步骤必传 `--mcp ssh-manager`（实现者先 `mcp__ssh-manager__list_servers` 拿真实 `server_id`，不凭记忆猜 host）。实现者要越出护栏或验收达不到时只报告、不硬推；结果（预期证据、远端改了什么、怎么回滚）写回该 task 票的 Resolution。该步标了放宽项的不执行、只记录，不替用户决定放宽。
+   `--worker agent` 时所有新 worker 都按本节开头的同构做法开子代理；task / prototype / 运维步骤的子代理同样只能执行 Brief 写明的范围。
 
 4. **散票分流（worker 只读给建议；等待时机直接写回票面）**：处理「散票」段里 open、未搁置且不带 `wontfix` 的票；bug、needs-triage 等都进入。带地图号/实现票号/规格号参数时，只有参数直接指向某张散票才处理它；来源地图或相关规格的编号不自动带入散票。
    - **正文带 `timing` 的票**：默认「等待时机」，不派 worker、不提问、不自行判断条件是否满足。汇报单列「等待时机」段（#号、标题、条件），并提示「要现在开就回『开 #N』」。
@@ -201,7 +210,7 @@ flash 模式下，本节所有原本由主会话审读或复核的结论都按�
      ```
 
      `--worker agent` 时同样按本节开头的同构做法开只读 Agent 子代理，prompt 指向 `<运行目录>/loose-<票号>/brief.md` 与 `result.md`。
-   - 我复核 `triage.md` 及分类附件：依据必须指向真实 issue/评论/提交/文件；地图草案符合 wayfinder 格式且不扩大原票边界；决策题仍是 HITL。worker 判定的「等待时机」不提问，但复核通过后由主会话直接写回票面（这是记录已得出的结论，不需要用户同意）：正文首行插入 `时机：<条件>`（保留原正文其余部分；已有时机行则替换它），去掉 `needs-triage` 标签，并评论一条「分流记录（<日期> find-next 推进器）」：分类、依据、条件、「要提前开工回『开 #N』」。这样下次扫描会识别时机行，不再重复派 worker 分流。其他三类仍按第 6 步问用户后处理。
+   - 我复核 `triage.md` 及分类附件：依据必须指向真实 issue/评论/提交/文件；地图草案符合 wayfinder 格式且不扩大原票边界；决策题带推荐就进拍板轮，没有推荐或推荐不明确的按第 6 步的可逆性规则自选。worker 判定的「等待时机」不提问，但复核通过后由主会话直接写回票面（这是记录已得出的结论，不需要用户同意）：正文首行插入 `时机：<条件>`（保留原正文其余部分；已有时机行则替换它），去掉 `needs-triage` 标签，并评论一条「分流记录（<日期> find-next 推进器）」：分类、依据、条件、「要提前开工回『开 #N』」。这样下次扫描会识别时机行，不再重复派 worker 分流。其他三类进第 6 步拍板轮，按建议自动处理。落地流程为放宽项开出的散票（正文是决策票格式、推荐「改写方案避免放宽」、写明 agent 不得直接放宽）同样分流为「单个决策」进拍板轮，结论不得是直接放宽，最多是「改写方案避免放宽」。
 
    flash 模式下，本段复核和分类建议按「flash 模式」一节并入当轮 Opus review，「等待时机」的写回动作也照该节执行。
 

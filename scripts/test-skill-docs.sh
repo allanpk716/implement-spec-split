@@ -200,6 +200,37 @@ without '（owner <日期> 推进器确认）' 'find-next step 7 no longer cites
 without '再想想' 'find-next no longer has the 再想想 branch' "$FIND_NEXT"
 without '并继续遵守单次 3 轮上限' 'find-next step 8 no longer names the three-round cap' "$FIND_NEXT"
 
+# Steps 3 and 4: a decision ticket with a recommendation goes to the round instead
+# of waiting for the human. A task ticket's human-checklist.md is read by its two
+# #68 sections: 需要本人做的 is left to the human, 运维步骤 is find-next's first
+# writable dispatch and follows the Ops tickets codex backend — no --read-only,
+# --mcp ssh-manager for a remote server, the guardrails copied verbatim, only the
+# Brief's scope, the result written back to the task ticket's Resolution. A
+# prototype's reaction is not decided. A loosening ticket is triaged as a single
+# decision whose outcome is never the loosening itself.
+has '3. **决策、迷雾、task 与 prototype 票（worker 准备，一轮拍板）**' 'find-next step 3 feeds the decision round' "$FIND_NEXT"
+has '决策题带推荐就进第 6 步拍板轮：按推荐写 Resolution 评论、关票、更新地图，标「自动拍板（可推翻）」' \
+  'find-next step 3 sends a decision ticket with a recommendation to the round' "$FIND_NEXT"
+has '我按它的固定两节读：`## 需要本人做的`' 'find-next step 3 reads the human-only section by name' "$FIND_NEXT"
+has '`## 运维步骤（带护栏，主会话派实现者执行）`（每步含执行方式' 'find-next step 3 reads the ops-steps section by name' "$FIND_NEXT"
+has '**运维步骤的非只读派发**（find-next 的第一种非只读派发' 'find-next step 3 names the ops dispatch as its first writable one' "$FIND_NEXT"
+has '沿用 implement-spec-split Ops tickets 的 codex 后端写法' 'find-next step 3 follows the Ops tickets codex backend' "$FIND_NEXT"
+has '--run-dir <运行目录>/task-<票号>/ops --time-limit 2400 --idle-timeout 600' 'find-next step 3 dispatches the ops worker without --read-only' "$FIND_NEXT"
+has '的步骤必传 `--mcp ssh-manager`' 'find-next step 3 passes ssh-manager MCP for remote steps' "$FIND_NEXT"
+has '以及**原文照抄**的护栏，只允许改 Brief 写明的范围' 'find-next step 3 copies the guardrails verbatim into the Brief' "$FIND_NEXT"
+has '实现者要越出护栏或验收达不到时只报告、不硬推' 'find-next step 3 keeps the ops worker inside the guardrails' "$FIND_NEXT"
+has '该步标了放宽项的不执行、只记录，不替用户决定放宽' 'find-next step 3 records a loosening item instead of loosening' "$FIND_NEXT"
+has 'prototype 的反应题要的是用户的主观反应，agent 替不了：不拍板' 'find-next step 3 does not decide a prototype reaction' "$FIND_NEXT"
+has '决策题带推荐就进拍板轮，没有推荐或推荐不明确的按第 6 步的可逆性规则自选' \
+  'find-next step 4 sends a loose ticket decision to the round' "$FIND_NEXT"
+has '同样分流为「单个决策」进拍板轮，结论不得是直接放宽，最多是「改写方案避免放宽」' \
+  'find-next step 4 routes a loosening ticket as a single decision' "$FIND_NEXT"
+without 'worker 准备，一轮问用户' 'find-next step 3 no longer names a question round' "$FIND_NEXT"
+without '决策题仍是 HITL' 'find-next step 4 no longer holds a decision for the user' "$FIND_NEXT"
+without 'grilling 是 HITL' 'find-next step 3 no longer holds grilling for the user' "$FIND_NEXT"
+without '人工清单放进第 6 步那一轮' 'find-next step 3 no longer puts the human list in a question round' "$FIND_NEXT"
+without '其他三类仍按第 6 步问用户后处理' 'find-next step 4 no longer asks about the other three classes' "$FIND_NEXT"
+
 # --- the Ticket Brief template --------------------------------------------------
 
 for text in 'worker_done' '--task-id' '## 护栏' '探索笔记' '规格内容' '票内容' \
