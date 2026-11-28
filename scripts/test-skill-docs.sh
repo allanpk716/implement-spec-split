@@ -13,7 +13,11 @@
 # review fixes after it): the step 5 / 9.1 re-bump dispatch forms, the one
 # review of the re-bump and the conflict resolution, every 9.1 round taking
 # the next free --attempt, a failed-gate re-dispatch counting as a 9.1 round,
-# and the re-bump Brief named after its dispatch.
+# the re-bump Brief named after its dispatch, the step 5 rerun reading exits 4
+# and 1 from their own lines (one positive and one negative check), where a
+# 9.1 rerun's 3 / 4 / 5 go, the 9.1 review trigger stated once and pointed to
+# from Unattended landing and Flash mode, and the --attempt of a step 5
+# re-dispatch and of 9.1's fix roles taken as the next free one.
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -164,6 +168,37 @@ has 'the re-bump commits and the conflict resolution together' \
 has 'shared counters collide (merger exit `6`) — dispatch a re-bump role' \
   'unattended landing dispatches a re-bump role on exit 6' "$SKILL"
 has '**Step 9 conflicts and re-bumps**' 'flash mode covers the step 9 re-bump' "$SKILL"
+# A rerun of the 9.1 merger has a destination for every exit, as step 5's rerun
+# has: 3 / 4 go to their own lines, a 4 the fix role turned green is reviewed
+# like a committed conflict resolution, and a 5 means the re-bump role merged
+# main itself -- that role's failed gate, and never step 2 without tests and
+# review (规格 #61 review r3, 取舍 2A). The review trigger is written once, in
+# 9.1's `6` line, and Unattended landing and Flash mode point back to it (r3,
+# Standards 6). A step 5 re-dispatch and 9.1's fix roles take the next free
+# --attempt, never a bare `--attempt 2` a re-bump round may already hold (r3,
+# 主审补充 2).
+has "a rerun's \`3\` / \`4\` go to their own lines below" \
+  'SKILL.md step 9.1 rerun sends exits 3 and 4 to their own lines' "$SKILL"
+has 'or the fix role has turned the tests green after a `4`' \
+  'SKILL.md step 9.1 reviews the re-bump once a 4 is turned green' "$SKILL"
+has "a rerun \`5\` means the re-bump role merged main itself" \
+  'SKILL.md step 9.1 reads a rerun 5 as the re-bump role having merged main' "$SKILL"
+has 'never to step 2 without tests and review' \
+  'SKILL.md step 9.1 does not go on after a rerun 5 without tests and review' "$SKILL"
+has "Once step 9.1's merge has landed (step 9.1's \`6\` line says when: after a re-bump, a committed conflict resolution, or a \`4\` turned green)" \
+  'unattended landing points the 9.1 review trigger back to step 9.1' "$SKILL"
+has "then once step 9.1's merge has landed (step 9.1's \`6\` line says when) run" \
+  'flash mode points the 9.1 review trigger back to step 9.1' "$SKILL"
+without 'has landed after either' \
+  'SKILL.md no longer repeats the two-case 9.1 review trigger verbatim' "$SKILL"
+has 're-dispatch it once with the next free `--attempt <n>`, within the 2-round cap' \
+  'SKILL.md step 5 re-dispatches a failed re-bump gate with the next free attempt' "$SKILL"
+has "step 8's form, with the next free \`--attempt <n>\` since step 8's fix role and the re-bump rounds already hold names" \
+  'SKILL.md step 9.1 conflict fix role takes the next free attempt' "$SKILL"
+has "step 8's form, each round with the next free \`--attempt <n>\`" \
+  'SKILL.md step 9.1 test-fix rounds take the next free attempt' "$SKILL"
+without 're-dispatch it once with `--attempt 2`' \
+  'SKILL.md step 5 no longer names a fixed attempt for a re-bump re-dispatch' "$SKILL"
 
 # --- SKILL.md: the three reports carry the route table and the check lines (票 #47)
 
