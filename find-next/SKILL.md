@@ -362,9 +362,9 @@ flash 模式下，Opus review 与 Design session 的失败处理见「flash 模�
 
 ## flash 模式（`FLASH_ORCHESTRATOR=1`）
 
-本节只在 `FLASH_ORCHESTRATOR=1` 时生效；未设置或值不是 `1` 时，上文行为不变。flash 主会话只调度 worker、运行脚本、转述已备好的问题和机械执行明确指令；所有审读结论交给 Opus review，需要展开讨论的问题交给 Design session。
+本节只在 `FLASH_ORCHESTRATOR=1` 时生效；未设置或值不是 `1` 时，上文行为不变。flash 主会话只调度 worker、运行脚本、转述已备好的拍板汇报和机械执行明确指令；所有审读结论交给 Opus review，需要展开讨论的问题交给 Design session。
 
-- **按轮合成 Opus review**：一个推进轮次里出现多类材料时，等本轮 worker 全部结束，把所有原本由主会话「我审读 / 我复核」的材料合成一个输入文件，再进入会写跟踪器或发布答案的步骤。输入文件开头写明仓库、运行目录、轮次、每份材料的票号或组号，以及它在原有流程中对应的步骤；然后按材料分节原样附上 research 的 `result.md` 与 `resolution.md`、决策选项及「无需用户决策」依据、迷雾/task/prototype/散票分流建议与 Resolution 草稿、规格草稿、执行票草稿和 `manifest.json`。本轮没有可审材料时不调用。只要调用，就只调用一次：
+- **按轮合成 Opus review**：一个推进轮次里出现多类材料时，等本轮 worker 全部结束，把所有原本由主会话「我审读 / 我复核」的材料合成一个输入文件，再进入会写跟踪器或发布答案的步骤。输入文件开头写明仓库、运行目录、轮次、每份材料的票号或组号，以及它在原有流程中对应的步骤；然后按材料分节原样附上 research 的 `result.md` 与 `resolution.md`、决策选项及「无需用户决策」依据、迷雾/task/prototype/散票分流建议与 Resolution 草稿、规格草稿、执行票草稿和 `manifest.json`。本轮没有可审材料时不调用。每轮的这次审读只调用一次（第 6 步要自选的条目另有一次单独调用，见下，那是本轮唯一允许的第二次）：
 
   ```bash
   ~/.claude/skills/implement-spec-split/scripts/opus-review.sh --kind draft \
@@ -372,10 +372,10 @@ flash 模式下，Opus review 与 Design session 的失败处理见「flash 模�
     --out <运行目录>/opus-draft-review-<轮次>.md --cwd <仓库>
   ```
 
-  Flash 只照 findings 执行：通过或给出可照抄修改时，才写 Resolution、关票、更新地图、改草稿或发布；findings 要求重派时，把其指出的缺陷补进新 Brief 并重派对应 worker；findings 标为「需要人取舍」的条目原样进入第 6 步问题轮，每条的「推荐：」行照抄为该条的「建议」行（Opus 写「推荐：无」时如实写「无建议：<原因>」）。不得在 findings 之外自行判断「小问题」、补充推荐理由或放宽审读标准。向用户汇报结论时注明对应 findings 文件路径。
+  Flash 只照 findings 执行：通过或给出可照抄修改时，才写 Resolution、关票、更新地图、改草稿或发布；findings 要求重派时，把其指出的缺陷补进新 Brief 并重派对应 worker；findings 标为「需要人取舍」的条目进第 6 步拍板轮，口径同第 6 步：`可自动采纳：是` 且有推荐的按推荐，每条的「推荐：」行照抄为该条的理由；`可自动采纳：否` 或 `推荐：无` 的条目，以及 worker 产出里没有推荐或推荐不明确的条目，flash 不自己选——把它们原样（含选项和代价）再交给**一次** Opus review（输入文件开头写明「按可逆性高 > 改动面小 > 与现有 ADR 一致替每条各选一个可逆选项并写理由；审查者已有推荐且可逆、不对外的优先用它；要本人身份或凭据的不选；列出的选项里没有可逆的写『推荐：无』」，写法同上面的合成输入，文件名加 `-select` 后缀），flash 照该 findings 的「推荐：」行填进拍板轮；仍写「推荐：无」的如实写「无建议：<原因>」，那条不拍板（草稿组不发布），列入「要你做」；理由是要本人身份或凭据的不拍板，列入「要你做」。不得在 findings 之外自行判断「小问题」、补充推荐理由或放宽审读标准。向用户汇报结论时注明对应 findings 文件路径。
 - **散票分流沿用 owner 结论**：散票分流结论为「等待时机」、且票下已有 owner（`authorAssociation=OWNER`）的分流评论、结论一致时，不需要再走 Opus review：直接按第 4 步写回票面，并在汇报里注明「沿用 owner <时间> 的分流评论」。结论不一致或没有 owner 评论时，仍按当轮 Opus review 处理。
 - **地图起草门槛**：`S<k>=map:<地图号>` 组只有在地图已收口、Map fog 为空、且它依赖的每张 Decision ticket 都能在该票 Resolution 中读到完整决定时，才派 worker 起草；地图摘要不能替代票 Resolution。无法机械确认、仍有开着的 Decision ticket、或起草/审稿结果出现未决条目时，这一组不发布、不改成选择题，改推荐 `/grill-map <地图号或话题>`，等 Design session 交接后再进入后续轮次。
-- **问题轮与「展开」**：本轮全部问题都是已备好选项的选择题时，flash 直接按原有格式合并和转述，不新增判断、不改写选项和推荐。用户对某条回「展开」时，不在当前会话讨论，直接开对应的 Design session（等价于 `/grill-map` 或 `/grill-feature`）：
+- **拍板轮与「展开」**：第 6 步的拍板汇报直接按原有格式合并和转述，不新增判断、不改写选项和推荐（自选条目的结论来自上面那次 Opus review，照抄）。用户对某条回「展开」时，不在当前会话讨论，直接开对应的 Design session（等价于 `/grill-map` 或 `/grill-feature`）：
 
   ```bash
   bash ~/.claude/skills/implement-spec-split/scripts/design-session.sh map|feature "<条目上下文>"

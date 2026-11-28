@@ -251,6 +251,15 @@ without '因 3 轮问询上限' 'the wrap-up no longer names the three-round cap
 without '已问满 3 轮' 'the error handling no longer names the three-round cap' "$FIND_NEXT"
 without '问是等还是停止' 'the error handling no longer asks the user to choose' "$FIND_NEXT"
 
+# In a flash session the reversibility choice is a judgement, so the items without
+# a recommendation go to one more Opus review and flash copies the result; a
+# 推荐 stays 推荐无 as written. The exit-code sentence and the three worker
+# backend sentences above are unchanged (test-opus-review.sh pins the former).
+has 'flash 不自己选' 'flash mode does not choose itself' "$FIND_NEXT"
+has '再交给**一次** Opus review' 'flash mode hands the reversibility choice to one more Opus review' "$FIND_NEXT"
+has '拍板轮与「展开」' 'flash mode names the decision round' "$FIND_NEXT"
+without '本步只直接转述选择题' 'flash mode no longer describes step 6 as relaying questions' "$FIND_NEXT"
+
 # --- the Ticket Brief template --------------------------------------------------
 
 for text in 'worker_done' '--task-id' '## 护栏' '探索笔记' '规格内容' '票内容' \
