@@ -2,7 +2,10 @@
 # Isolated fake-dependency tests for scripts/keeper.sh.
 # No network, no Orca, no launchd: gh, claim.sh, launch-wave.sh and lock.sh are
 # fakes injected through PATH and KEEPER_* environment variables; orca is a fake
-# outside PATH, named by ISS_ORCA (the one Orca replacement variable).
+# outside PATH, named by ISS_ORCA (the one Orca replacement variable). It answers
+# the liveness queries keeper makes of Orca (worker-list, worker-show) from
+# fixture files and records them apart from the one action it logs (terminal
+# close), and refuses every other call.
 
 set -u
 
@@ -66,6 +69,14 @@ expect_count() { # pattern expected name file
     record PASS "$3"
   else
     record FAIL "$3" "count=$actual, expected=$2"
+  fi
+}
+
+expect_same() { # expected actual name
+  if [ "$1" = "$2" ]; then
+    record PASS "$3"
+  else
+    record FAIL "$3" "got [$2], expected [$1]"
   fi
 }
 
@@ -138,19 +149,49 @@ case "${1:-} ${2:-}" in
     cat "$FIXTURE_DIR/orca-repos.json" 2>/dev/null || printf '{"ok":true,"result":{"repos":[]}}'
     exit 0
     ;;
-  "terminal list")
-    if [ -f "$FIXTURE_DIR/orca-list-fail" ]; then
+  "orchestration worker-list")
+    # A query, not an action: recorded apart from ORCA_LOG so that the
+    # "dry-run writes no orca action" assertions stay about actions alone.
+    printf '%s\n' "$*" >>"$ORCA_QUERY_LOG"
+    if [ -f "$FIXTURE_DIR/orca-worker-list-fail" ]; then
       printf 'orca offline\n' >&2
       exit 1
     fi
-    if [ -f "$FIXTURE_DIR/terminals.json" ]; then
-      cat "$FIXTURE_DIR/terminals.json"
+    cursor=
+    while [ $# -gt 0 ]; do
+      [ "$1" = --cursor ] && cursor=${2:-}
+      shift
+    done
+    if [ -z "$cursor" ]; then
+      cat "$FIXTURE_DIR/workers.json" 2>/dev/null || printf '{"ok":true,"result":{"workers":[]}}'
+    elif [ -f "$FIXTURE_DIR/workers-$cursor.json" ]; then
+      cat "$FIXTURE_DIR/workers-$cursor.json"
     else
-      printf '{"ok":true,"result":{"terminals":[]}}'
+      printf 'fake orca: no workers-%s.json fixture\n' "$cursor" >&2
+      exit 1
     fi
     exit 0
     ;;
-  "terminal send"|"terminal close")
+  "orchestration worker-show")
+    printf '%s\n' "$*" >>"$ORCA_QUERY_LOG"
+    if [ -f "$FIXTURE_DIR/orca-worker-show-fail" ]; then
+      printf 'orca offline\n' >&2
+      exit 1
+    fi
+    dispatch=
+    while [ $# -gt 0 ]; do
+      [ "$1" = --dispatch ] && dispatch=${2:-}
+      shift
+    done
+    if [ -n "$dispatch" ] && [ -f "$FIXTURE_DIR/worker-show-$dispatch.json" ]; then
+      cat "$FIXTURE_DIR/worker-show-$dispatch.json"
+    else
+      printf 'fake orca: no worker-show fixture for %s\n' "${dispatch:-<none>}" >&2
+      exit 1
+    fi
+    exit 0
+    ;;
+  "terminal close")
     printf '%s\n' "$*" >>"$ORCA_LOG"
     exit 0
     ;;
@@ -210,7 +251,30 @@ printf 'fake lock: unexpected arguments: %s\n' "$*" >&2
 exit 2
 EOF
 
-chmod +x "$BIN/gh" "$ORCA_BIN/orca" "$BIN/claim.sh" "$BIN/launch-wave.sh" "$BIN/lock.sh"
+# The sweep keeper calls once a round (规格 #26): records its arguments and
+# answers with the lines sweep-worktrees.sh prints -- a kept worktree and a
+# summary, plus a removal when the fixture has sweep-remove and a would-be
+# removal when it has sweep-would -- or fails when asked to (sweep-fail).
+cat >"$BIN/sweep-worktrees.sh" <<'EOF'
+#!/usr/bin/env bash
+set -u
+printf '%s\n' "$*" >> "$SWEEP_LOG"
+if [ -f "$FIXTURE_DIR/sweep-fail" ]; then
+  printf 'fake sweep: orca offline\n' >&2
+  exit 1
+fi
+printf 'test/repo\tkeep\t/w/repo\t主工作区，绝不删\n'
+if [ -f "$FIXTURE_DIR/sweep-remove" ]; then
+  printf 'test/repo\tremoved\t/w/wt-spec-22\t遗弃工作区：无 worker、无认领、未停车、干净且已并入 origin/main\n'
+fi
+if [ -f "$FIXTURE_DIR/sweep-would" ]; then
+  printf 'test/repo\twould-remove\t/w/wt-spec-22\t遗弃工作区：无 worker、无认领、未停车、干净且已并入 origin/main\n'
+fi
+printf 'test/repo\tsummary\t-\tremoved=1 would-remove=0 keep=1 skip=0 failed=0\n'
+exit 0
+EOF
+
+chmod +x "$BIN/gh" "$ORCA_BIN/orca" "$BIN/claim.sh" "$BIN/launch-wave.sh" "$BIN/lock.sh" "$BIN/sweep-worktrees.sh"
 
 # Guard rail: this machine has a real `orca` on PATH. The one on the tests' PATH
 # refuses every call, so a keeper.sh that stops going through ISS_ORCA fails
@@ -228,6 +292,8 @@ chmod +x "$BIN/orca"
 FIXTURE=$WORK/fixture
 STATE=$WORK/state.json
 NOTIFY_LOG=$WORK/notify.log
+SWEEP_LOG=$WORK/sweep.log
+SWEEP_SCRIPT=$BIN/sweep-worktrees.sh
 
 new_fixture() {
   FIXTURE=$WORK/fx-$1
@@ -235,10 +301,13 @@ new_fixture() {
   mkdir -p "$FIXTURE"
   : >"$WORK/gh.log"
   : >"$WORK/orca.log"
+  : >"$WORK/orca-query.log"
   : >"$WORK/claim.log"
   : >"$WORK/launch.log"
   : >"$NOTIFY_LOG"
-  rm -f "$STATE"
+  : >"$SWEEP_LOG"
+  SWEEP_SCRIPT=$BIN/sweep-worktrees.sh
+  rm -f "$STATE" "$(dirname -- "$STATE")/paused"
   rm -rf "$WORK/projects" "$WORK/runs" "$WORK/codex-runs" "$WORK/launch-state"
   mkdir -p "$WORK/projects" "$WORK/runs" "$WORK/codex-runs" "$WORK/launch-state"
   cat >"$WORK/launch-state/test__repo.json" <<'JSON'
@@ -265,8 +334,10 @@ run_keeper() { # out [keeper arguments]
   shift
   env HOME="$WORK/home" \
       FIXTURE_DIR="$FIXTURE" GH_LOG="$WORK/gh.log" ORCA_LOG="$WORK/orca.log" \
+      ORCA_QUERY_LOG="$WORK/orca-query.log" \
       CLAIM_LOG="$WORK/claim.log" LAUNCH_LOG="$WORK/launch.log" \
-      NOTIFY_LOG="$NOTIFY_LOG" \
+      NOTIFY_LOG="$NOTIFY_LOG" SWEEP_LOG="$SWEEP_LOG" \
+      KEEPER_SWEEP="$SWEEP_SCRIPT" \
       KEEPER_CLAUDE_PROJECTS="$WORK/projects" \
       KEEPER_RUNS_DIR="$WORK/runs" \
       KEEPER_CODEX_RUNS="$WORK/codex-runs" \
@@ -278,6 +349,7 @@ run_keeper() { # out [keeper arguments]
       KEEPER_GH="$BIN/gh" \
       KEEPER_NOTIFY_CMD='printf "%s\n" "$KEEPER_NOTIFY_MESSAGE" >>"$NOTIFY_LOG"' \
       KEEPER_STALL_MIN="${STALL_MIN:-45}" \
+      KEEPER_WORKER_PAGES="${WORKER_PAGES:-10}" \
       PATH="$BIN:$PATH" \
       bash "$SCRIPT" --once --state "$STATE" "$@" >"$out" 2>&1
   RUN_EXIT=$?
@@ -309,18 +381,42 @@ stall_spec_19() { # an active claim whose transcript and Run directory went sile
   write_transcript "$(epoch_at -7200)"
 }
 
-session_terminal() { # [handle] -> the Spec 19 session terminal, pane tab1/leaf1
-  printf '{"handle": "%s", "title": "Claude Code", "worktreePath": "%s",\n   "tabId": "tab1", "leafId": "leaf1", "agentIdentity": "claude", "lastOutputAt": 1}' \
-    "${1:-term_19}" "$WT"
+# --- Orca worker fixtures: what the fake orca answers about the Spec 19 worker --
+# A worker-list page holds worker_record objects and names the page after it in
+# nextCursor (workers-<cursor>.json; empty for the last page). worker_show is the
+# worker-show receipt of one dispatch; keeper acts on its liveness, terminal and
+# terminalState. The workspace is <repo-id>::<path>, the path as Orca writes it.
+
+worker_record() { # dispatchId liveness [terminal] [terminalState] [workspace]
+  printf '{"dispatchId": "%s", "taskId": "task_x", "state": "running", "liveness": "%s", "terminal": "%s", "terminalState": "%s", "workspace": "%s"}' \
+    "$1" "$2" "${3:-term_$1}" "${4:-active}" "${5:-repo_test::$WT}"
 }
 
-write_terminals() { # terminal records... -> what the fake orca lists
-  local sep=
+worker_show() { # dispatchId liveness [terminal] [terminalState] -> a worker-show receipt
+  # A terminal left out is given a name; an empty one ('') stays empty, as Orca
+  # reports a terminal it has already released.
+  printf '{"ok": true, "result": {"dispatchId": "%s", "taskId": "task_x", "runId": "run_x", "state": "running", "stage": "running", "liveness": "%s", "terminal": "%s", "terminalState": "%s", "workspace": "repo_test::%s", "waitingOnHuman": "unknown"}}\n' \
+    "$1" "$2" "${3-term_$1}" "${4-active}" "$WT"
+}
+
+write_worker_show() { # dispatchId liveness [terminal] [terminalState]
+  worker_show "$@" >"$FIXTURE/worker-show-$1.json"
+}
+
+write_workers_page() { # file nextCursor worker records... (nextCursor empty: last page)
+  local file=$1 next=$2 sep=
+  shift 2
   {
-    printf '{"ok": true, "result": {"terminals": ['
+    printf '{"ok": true, "result": {"workers": ['
     for record in "$@"; do printf '%s%s' "$sep" "$record"; sep=,; done
-    printf ']}}\n'
-  } >"$FIXTURE/terminals.json"
+    printf '], "scope": {"source": "all"}, "nextCursor": '
+    if [ -n "$next" ]; then printf '"%s"' "$next"; else printf 'null'; fi
+    printf '}}\n'
+  } >"$file"
+}
+
+write_workers() { # nextCursor worker records... -> the first page worker-list answers
+  write_workers_page "$FIXTURE/workers.json" "$@"
 }
 
 # --- quota parking, not yet recoverable --------------------------------------
@@ -393,7 +489,7 @@ node -e '
   fs.writeFileSync(process.argv[1], JSON.stringify({
     version: 1,
     resumes: {"test/repo#19": [now - 3600, now - 3600, now - 3600]},
-    notified: {}, nudges: {}
+    notified: {}
   }, null, 2));
 ' "$STATE"
 run_keeper "$WORK/limit.out"
@@ -403,155 +499,570 @@ expect_without "launched" "limit: does not launch" "$WORK/launch.log"
 run_keeper "$WORK/limit-2.out"
 expect_count "" 1 "limit: notifies only once" "$NOTIFY_LOG"
 
-# --- interrupted claim -------------------------------------------------------
+# --- interrupted claim: Orca's liveness is asked first (规格 #26, 取舍 2) -------
+# An interrupted claim only says the claiming pid is gone: a Spec parked with
+# its reservation kept is found so once the reservation lapses, while its
+# session still works in the worktree. Before any resume -- into that same
+# worktree -- Orca is asked, by the rule of stall_check: a live worker is left
+# alone and reported once per Spec; every worker exited, or none at all for
+# the worktree, confirms the death and the Spec is resumed (its claim record
+# kept: launch-wave resumes through it); anything else is reported once per
+# Spec and evidence and left alone.
 
+interrupt_spec_19() { # an interrupted claim whose record names the Spec worktree
+  printf '[]' >"$FIXTURE/comments-19.json"
+  printf '19\tinterrupted\t{"spec":19,"branch":"spec-19","worktree":"%s"}\n' "$WT" >>"$FIXTURE/claims.txt"
+}
+
+# No worker for the worktree at all: nothing is alive there, resumed as before.
 new_fixture interrupted
-printf '[]' >"$FIXTURE/comments-19.json"
-printf '19\tinterrupted\t{"spec":19,"branch":"spec-19","worktree":"%s"}\n' "$WT" >>"$FIXTURE/claims.txt"
+interrupt_spec_19
 run_keeper "$WORK/interrupted.out"
-expect_exit 0 "interrupted: exits 0"
-expect_has $'\tRESUME\t' "interrupted: resumes" "$WORK/interrupted.out"
-expect_has "--only 19 --apply" "interrupted: launch-wave resumes spec 19" "$WORK/launch.log"
-expect_count "" 0 "interrupted: no notification" "$NOTIFY_LOG"
+expect_exit 0 "interrupted, no worker: exits 0"
+expect_has $'\tEXITED\t' "interrupted, no worker: logs the conclusion" "$WORK/interrupted.out"
+expect_has "没有 workspace 为 $WT 的 worker" "interrupted, no worker: the log line carries the evidence" "$WORK/interrupted.out"
+expect_has $'\tRESUME\t' "interrupted, no worker: resumes" "$WORK/interrupted.out"
+expect_has "--only 19 --apply" "interrupted, no worker: launch-wave resumes spec 19" "$WORK/launch.log"
+expect_count "release 19 --force" 0 "interrupted, no worker: keeps the claim record launch-wave resumes through" "$WORK/claim.log"
+expect_count "" 0 "interrupted, no worker: closes nothing" "$WORK/orca.log"
+expect_count "" 0 "interrupted, no worker: no notification" "$NOTIFY_LOG"
+expect_has "orchestration worker-list --json" "interrupted, no worker: asks Orca first" "$WORK/orca-query.log"
 
-# --- stalled session: nudge, then close, release and resume ------------------
+# A session still working in the worktree: not resumed (launch-wave would start
+# a second one in the same worktree), reported once per Spec.
+new_fixture interrupted-live
+interrupt_spec_19
+write_workers '' "$(worker_record ctx_19 live)"
+write_worker_show ctx_19 live
+run_keeper "$WORK/interrupted-live-1.out"
+expect_exit 0 "interrupted, live: exits 0"
+expect_has $'\tLIVE\t' "interrupted, live: logs the conclusion" "$WORK/interrupted-live-1.out"
+expect_has "claim interrupted，Orca 报告会话仍在运行（liveness=live dispatch=ctx_19），不自动恢复" "interrupted, live: the log line carries the evidence" "$WORK/interrupted-live-1.out"
+expect_has "认领已断（claim interrupted）：Orca 报告会话仍在运行（liveness=live dispatch=ctx_19），未自动恢复" "interrupted, live: notifies with the evidence" "$NOTIFY_LOG"
+expect_count "" 1 "interrupted, live: notifies once" "$NOTIFY_LOG"
+expect_without "launched" "interrupted, live: launches nothing" "$WORK/launch.log"
+expect_count "release 19 --force" 0 "interrupted, live: releases nothing" "$WORK/claim.log"
+expect_count "" 0 "interrupted, live: closes nothing" "$WORK/orca.log"
+expect_file "$STATE" "interrupted, live: records the notification"
+expect_has '"interrupted-live:test/repo#19"' "interrupted, live: the record is keyed on the Spec" "$STATE"
+run_keeper "$WORK/interrupted-live-2.out"
+expect_exit 0 "interrupted, live second round: exits 0"
+expect_count "" 1 "interrupted, live: notifies only once" "$NOTIFY_LOG"
+expect_has $'\tSKIP\tclaim interrupted，' "interrupted, live second round: says it already told" "$WORK/interrupted-live-2.out"
+expect_without "launched" "interrupted, live second round: still launches nothing" "$WORK/launch.log"
+expect_count "" 0 "interrupted, live second round: still closes nothing" "$WORK/orca.log"
 
-new_fixture stalled
-printf '19\tactive\t{"spec":19,"branch":"spec-19","worktree":"%s","pid":1}\n' "$WT" >>"$FIXTURE/claims.txt"
-write_run implement "$(epoch_at -7200)"
-write_transcript "$(epoch_at -7200)"
-cat >"$FIXTURE/terminals.json" <<JSON
-{"ok": true, "result": {"terminals": [
-  {"handle": "term_19", "title": "Claude Code", "worktreePath": "$WT",
-   "tabId": "tab1", "leafId": "leaf1", "agentIdentity": "claude", "lastOutputAt": 1},
-  {"handle": "term_progress", "title": "spec-19 t28", "worktreePath": "$WT",
-   "tabId": "tab2", "leafId": "leaf2", "agentIdentity": "claude", "lastOutputAt": 2},
-  {"handle": "term_other", "title": "Claude Code", "worktreePath": "$WORK/elsewhere",
-   "tabId": "tab3", "leafId": "leaf3", "agentIdentity": "claude", "lastOutputAt": 3}
-]}}
-JSON
-STALL_MIN=0 run_keeper "$WORK/stall-1.out" --dry-run
-expect_exit 0 "stalled dry-run: exits 0"
-expect_has $'\tWOULD_NUDGE\t' "stalled dry-run: would nudge" "$WORK/stall-1.out"
-expect_has "term_19" "stalled dry-run: picks the agent terminal, not the progress tab" "$WORK/stall-1.out"
-expect_without "term_progress" "stalled dry-run: skips the progress tab" "$WORK/stall-1.out"
-expect_without $'\tWOULD_CLOSE_TERMINAL\t' "stalled dry-run: does not escalate on the first round" "$WORK/stall-1.out"
-expect_count "" 0 "stalled dry-run: orca send not called" "$WORK/orca.log"
+# exited is the one conclusion keeper acts on: the terminal Orca has not
+# released is closed and the Spec resumed, the claim record left for
+# launch-wave's `reserve --resume` (a released claim reads free, and a resume
+# of a free claim is refused).
+new_fixture interrupted-exited
+interrupt_spec_19
+write_workers '' "$(worker_record ctx_19 exited term_19 active)"
+write_worker_show ctx_19 exited term_19 active
+run_keeper "$WORK/interrupted-exited.out"
+expect_exit 0 "interrupted, exited: exits 0"
+expect_has $'\tEXITED\tclaim interrupted，会话已死（liveness=exited dispatch=ctx_19）' "interrupted, exited: logs the conclusion with the evidence" "$WORK/interrupted-exited.out"
+expect_has "terminal close --terminal term_19 --tab" "interrupted, exited: closes the terminal Orca still lists" "$WORK/orca.log"
+expect_count "terminal close" 1 "interrupted, exited: closes it once" "$WORK/orca.log"
+expect_count "release 19 --force" 0 "interrupted, exited: keeps the claim record launch-wave resumes through" "$WORK/claim.log"
+expect_has "--repo test/repo --only 19 --apply" "interrupted, exited: launch-wave resumes the spec" "$WORK/launch.log"
+expect_has $'\tRESUME\t会话已死（claim interrupted，liveness=exited dispatch=ctx_19），没有新的报告' "interrupted, exited: the resume says why, with the evidence" "$WORK/interrupted-exited.out"
+expect_file "$STATE" "interrupted, exited: records the resume"
+expect_count "" 0 "interrupted, exited: no notification" "$NOTIFY_LOG"
 
-STALL_MIN=0 run_keeper "$WORK/stall-2.out"
-expect_exit 0 "stalled round 1: exits 0"
-expect_has "terminal send --terminal term_19" "stalled round 1: sends 继续 to the agent terminal" "$WORK/orca.log"
-expect_has "继续。你是无人值守 Run" "stalled round 1: sends the required text" "$WORK/orca.log"
-expect_has $'\tNUDGE\t' "stalled round 1: logs the nudge" "$WORK/stall-2.out"
-expect_without "terminal close" "stalled round 1: closes nothing" "$WORK/orca.log"
-expect_without "launched" "stalled round 1: launches nothing" "$WORK/launch.log"
+new_fixture interrupted-exited-released
+interrupt_spec_19
+write_workers '' "$(worker_record ctx_19 exited term_19 released)"
+write_worker_show ctx_19 exited term_19 released
+run_keeper "$WORK/interrupted-exited-released.out"
+expect_exit 0 "interrupted, exited, terminal released: exits 0"
+expect_has $'\tEXITED\t' "interrupted, exited, terminal released: logs the conclusion" "$WORK/interrupted-exited-released.out"
+expect_count "" 0 "interrupted, exited, terminal released: closes nothing" "$WORK/orca.log"
+expect_has "--only 19 --apply" "interrupted, exited, terminal released: resumes the spec" "$WORK/launch.log"
 
-STALL_MIN=0 run_keeper "$WORK/stall-3.out"
-expect_exit 0 "stalled round 2: exits 0"
-expect_has "terminal close --terminal term_19 --tab" "stalled round 2: closes the terminal" "$WORK/orca.log"
-expect_has "release 19 --force" "stalled round 2: releases the claim" "$WORK/claim.log"
-expect_has "--only 19 --apply" "stalled round 2: resumes the spec" "$WORK/launch.log"
-expect_has $'\tRESUME\t' "stalled round 2: logs the resume" "$WORK/stall-3.out"
-expect_count "release 19 --force" 1 "stalled round 2: releases once" "$WORK/claim.log"
+# unverifiable: Orca's own rule is that nothing is stopped, retried or released
+# on it. The human is told once, with the evidence, and keeper stays out.
+new_fixture interrupted-unverifiable
+interrupt_spec_19
+write_workers '' "$(worker_record ctx_19 unverifiable)"
+write_worker_show ctx_19 unverifiable term_19 active
+run_keeper "$WORK/interrupted-unverifiable-1.out"
+expect_exit 0 "interrupted, unverifiable: exits 0"
+expect_has $'\tUNVERIFIABLE\t' "interrupted, unverifiable: logs the conclusion" "$WORK/interrupted-unverifiable-1.out"
+expect_has "claim interrupted，Orca 无法确认会话是否已退出（liveness=unverifiable dispatch=ctx_19），不自动恢复" "interrupted, unverifiable: the log line carries the evidence" "$WORK/interrupted-unverifiable-1.out"
+expect_has "认领已断（claim interrupted）：Orca 无法确认会话是否已退出（liveness=unverifiable dispatch=ctx_19），未自动恢复" "interrupted, unverifiable: notifies with the evidence" "$NOTIFY_LOG"
+expect_count "" 1 "interrupted, unverifiable: notifies once" "$NOTIFY_LOG"
+expect_count "release 19 --force" 0 "interrupted, unverifiable: releases nothing" "$WORK/claim.log"
+expect_without "launched" "interrupted, unverifiable: launches nothing" "$WORK/launch.log"
+expect_count "" 0 "interrupted, unverifiable: closes nothing" "$WORK/orca.log"
+expect_file "$STATE" "interrupted, unverifiable: records the notification"
+expect_has '"interrupted-unverifiable:test/repo#19:ctx_19"' "interrupted, unverifiable: the record is keyed on the Spec and the evidence" "$STATE"
+run_keeper "$WORK/interrupted-unverifiable-2.out"
+expect_exit 0 "interrupted, unverifiable second round: exits 0"
+expect_count "" 1 "interrupted, unverifiable: notifies only once" "$NOTIFY_LOG"
+expect_has $'\tSKIP\tclaim interrupted，' "interrupted, unverifiable second round: says it already told" "$WORK/interrupted-unverifiable-2.out"
+expect_count "release 19 --force" 0 "interrupted, unverifiable second round: still releases nothing" "$WORK/claim.log"
+expect_without "launched" "interrupted, unverifiable second round: still launches nothing" "$WORK/launch.log"
 
-# --- stalled session, round 2: the handle is asked of Orca again --------------
-# The handle the nudge round resolved is never reused across rounds (rule 3 of
-# lib-orca.sh): the close asks Orca for the nudged pane's current handle.
+# An Orca that cannot answer is not a confirmed death: reported once, not resumed.
+new_fixture interrupted-orca-down
+interrupt_spec_19
+touch "$FIXTURE/orca-worker-list-fail"
+run_keeper "$WORK/interrupted-orca-down.out"
+expect_exit 0 "interrupted, Orca down: exits 0"
+expect_has $'\tUNVERIFIABLE\t' "interrupted, Orca down: is unverifiable, not resumed" "$WORK/interrupted-orca-down.out"
+expect_has "orca worker-list 失败：orca offline" "interrupted, Orca down: carries Orca's message" "$WORK/interrupted-orca-down.out"
+expect_has "orca worker-list 失败：orca offline" "interrupted, Orca down: the notification carries Orca's message" "$NOTIFY_LOG"
+expect_count "" 1 "interrupted, Orca down: notifies once" "$NOTIFY_LOG"
+expect_without "launched" "interrupted, Orca down: resumes nothing" "$WORK/launch.log"
 
-new_fixture handle-drift
+# "No worker" out of a list cut short before its end is not "no worker": the
+# Spec's may sit behind the pages walked. Reported, not resumed.
+new_fixture interrupted-truncated-list
+interrupt_spec_19
+write_workers c2 "$(worker_record ctx_new live '' active "repo_test::$WORK/elsewhere")"
+WORKER_PAGES=1 run_keeper "$WORK/interrupted-truncated.out"
+expect_exit 0 "interrupted, list cut short: exits 0"
+expect_has $'\tUNVERIFIABLE\t' "interrupted, list cut short: is unverifiable, not resumed" "$WORK/interrupted-truncated.out"
+expect_has "只查了前 1 页" "interrupted, list cut short: the evidence says how far it looked" "$WORK/interrupted-truncated.out"
+expect_count "" 1 "interrupted, list cut short: notifies once" "$NOTIFY_LOG"
+expect_without "launched" "interrupted, list cut short: resumes nothing" "$WORK/launch.log"
+
+# The Spec worktree holds more than the session: a live fix worker in it means
+# the worktree is in use, whatever became of the session's own dispatch.
+new_fixture interrupted-mixed-live
+interrupt_spec_19
+write_workers '' "$(worker_record ctx_19 exited term_19 released)" "$(worker_record ctx_fix live term_fix retained)"
+write_worker_show ctx_19 exited term_19 released
+write_worker_show ctx_fix live term_fix retained
+run_keeper "$WORK/interrupted-mixed-live.out"
+expect_has $'\tLIVE\t' "interrupted, exited session with a live fix worker: the worktree is live" "$WORK/interrupted-mixed-live.out"
+expect_has "liveness=exited dispatch=ctx_19; liveness=live dispatch=ctx_fix" "interrupted, exited session with a live fix worker: the evidence names both" "$WORK/interrupted-mixed-live.out"
+expect_without "launched" "interrupted, exited session with a live fix worker: launches nothing" "$WORK/launch.log"
+expect_count "" 0 "interrupted, exited session with a live fix worker: closes nothing" "$WORK/orca.log"
+
+# No worktree to ask about: nothing can be live in it, resumed without a query.
+new_fixture interrupted-no-worktree
+printf '[]' >"$FIXTURE/comments-19.json"
+printf '19\tinterrupted\t{"spec":19,"branch":"spec-19"}\n' >>"$FIXTURE/claims.txt"
+run_keeper "$WORK/interrupted-no-worktree.out"
+expect_exit 0 "interrupted, no worktree: exits 0"
+expect_has $'\tRESUME\t会话已死（claim interrupted，找不到 spec-19 的 worktree），没有新的报告' "interrupted, no worktree: resumes, and says why" "$WORK/interrupted-no-worktree.out"
+expect_has "--only 19 --apply" "interrupted, no worktree: launch-wave is called" "$WORK/launch.log"
+expect_count "" 0 "interrupted, no worktree: asks Orca about nothing" "$WORK/orca-query.log"
+
+# --dry-run reaches the same conclusions from the same queries and only prints
+# what it would do.
+new_fixture interrupted-live-dry-run
+interrupt_spec_19
+write_workers '' "$(worker_record ctx_19 live)"
+write_worker_show ctx_19 live
+run_keeper "$WORK/interrupted-live-dry.out" --dry-run
+expect_exit 0 "interrupted, live dry-run: exits 0"
+expect_has $'\tLIVE\t' "interrupted, live dry-run: reaches the conclusion" "$WORK/interrupted-live-dry.out"
+expect_has $'\tWOULD_NOTIFY\t' "interrupted, live dry-run: would notify" "$WORK/interrupted-live-dry.out"
+expect_has "liveness=live dispatch=ctx_19" "interrupted, live dry-run: the notification it would send carries the evidence" "$WORK/interrupted-live-dry.out"
+expect_count "" 0 "interrupted, live dry-run: sends no notification" "$NOTIFY_LOG"
+expect_without "launched" "interrupted, live dry-run: launches nothing" "$WORK/launch.log"
+expect_no_file "$STATE" "interrupted, live dry-run: writes no state"
+
+new_fixture interrupted-exited-dry-run
+interrupt_spec_19
+write_workers '' "$(worker_record ctx_19 exited term_19)"
+write_worker_show ctx_19 exited term_19
+run_keeper "$WORK/interrupted-exited-dry.out" --dry-run
+expect_exit 0 "interrupted, exited dry-run: exits 0"
+expect_has $'\tEXITED\t' "interrupted, exited dry-run: reaches the conclusion" "$WORK/interrupted-exited-dry.out"
+expect_has $'\tWOULD_CLOSE_TERMINAL\tterm_19' "interrupted, exited dry-run: would close the terminal" "$WORK/interrupted-exited-dry.out"
+expect_has $'\tWOULD_RESUME\t会话已死（claim interrupted，liveness=exited dispatch=ctx_19），没有新的报告' "interrupted, exited dry-run: would resume, and says why" "$WORK/interrupted-exited-dry.out"
+expect_count "" 0 "interrupted, exited dry-run: closes nothing" "$WORK/orca.log"
+expect_count "release 19 --force" 0 "interrupted, exited dry-run: releases nothing" "$WORK/claim.log"
+expect_without "launched" "interrupted, exited dry-run: launches nothing" "$WORK/launch.log"
+expect_no_file "$STATE" "interrupted, exited dry-run: writes no state"
+
+new_fixture interrupted-unverifiable-dry-run
+interrupt_spec_19
+write_workers '' "$(worker_record ctx_19 unverifiable)"
+write_worker_show ctx_19 unverifiable
+run_keeper "$WORK/interrupted-unverifiable-dry.out" --dry-run
+expect_exit 0 "interrupted, unverifiable dry-run: exits 0"
+expect_has $'\tUNVERIFIABLE\t' "interrupted, unverifiable dry-run: reaches the conclusion" "$WORK/interrupted-unverifiable-dry.out"
+expect_has $'\tWOULD_NOTIFY\t' "interrupted, unverifiable dry-run: would notify" "$WORK/interrupted-unverifiable-dry.out"
+expect_has "liveness=unverifiable dispatch=ctx_19" "interrupted, unverifiable dry-run: the notification it would send carries the evidence" "$WORK/interrupted-unverifiable-dry.out"
+expect_count "" 0 "interrupted, unverifiable dry-run: sends no notification" "$NOTIFY_LOG"
+expect_without "launched" "interrupted, unverifiable dry-run: launches nothing" "$WORK/launch.log"
+expect_no_file "$STATE" "interrupted, unverifiable dry-run: writes no state"
+
+# Over the resume limit, an exited worker is still not touched: there is no
+# point closing a terminal for a resume that will not happen.
+new_fixture interrupted-exited-over-limit
+interrupt_spec_19
+write_workers '' "$(worker_record ctx_19 exited)"
+write_worker_show ctx_19 exited
+node -e '
+  const fs = require("fs");
+  const now = Math.floor(Date.now() / 1000);
+  fs.writeFileSync(process.argv[1], JSON.stringify({
+    version: 1,
+    resumes: {"test/repo#19": [now - 3600, now - 3600, now - 3600]},
+    notified: {}
+  }, null, 2));
+' "$STATE"
+run_keeper "$WORK/interrupted-exited-over-limit.out"
+expect_exit 0 "interrupted, exited over the limit: exits 0"
+expect_has $'\tEXITED\t' "interrupted, exited over the limit: still reaches the conclusion" "$WORK/interrupted-exited-over-limit.out"
+expect_has "今日自动恢复已达 3 次" "interrupted, exited over the limit: notifies instead" "$NOTIFY_LOG"
+expect_count "" 0 "interrupted, exited over the limit: closes nothing" "$WORK/orca.log"
+expect_without "launched" "interrupted, exited over the limit: launches nothing" "$WORK/launch.log"
+
+# --- stalled session: Orca's liveness decides (ticket #43) ---------------------
+# The second evidence (no write for KEEPER_STALL_MIN) only starts the question;
+# the first evidence, the liveness Orca reports for the worker in the Spec
+# worktree, decides: live is left alone, exited is a confirmed failure and
+# unverifiable (or no worker at all) is reported once and left alone too.
+
+new_fixture stalled-live
 stall_spec_19
-write_terminals "$(session_terminal)"
-STALL_MIN=0 run_keeper "$WORK/drift-1.out"
-expect_has "terminal send --terminal term_19" "handle drift round 1: nudges the session terminal" "$WORK/orca.log"
-# Orca re-issued the handle of that same pane between the rounds
-write_terminals "$(session_terminal term_19_moved)"
-STALL_MIN=0 run_keeper "$WORK/drift-2.out"
-expect_has "terminal close --terminal term_19_moved --tab" "handle drift round 2: closes the handle Orca gives now" "$WORK/orca.log"
-expect_without "terminal close --terminal term_19 --tab" "handle drift round 2: does not reuse the handle the nudge round kept" "$WORK/orca.log"
+write_workers '' "$(worker_record ctx_19 live)"
+write_worker_show ctx_19 live
+STALL_MIN=0 run_keeper "$WORK/live.out"
+expect_exit 0 "live: exits 0"
+expect_has $'\tLIVE\t' "live: logs the conclusion" "$WORK/live.out"
+expect_has "liveness=live dispatch=ctx_19" "live: the log line carries the evidence" "$WORK/live.out"
+expect_count "" 0 "live: sends 继续 to nothing" "$WORK/orca.log"
+expect_count "" 0 "live: closes nothing" "$WORK/orca.log"
+expect_count "release 19 --force" 0 "live: releases nothing" "$WORK/claim.log"
+expect_without "launched" "live: launches nothing" "$WORK/launch.log"
+expect_count "" 0 "live: no notification" "$NOTIFY_LOG"
+expect_no_file "$STATE" "live: writes no state"
+expect_has "orchestration worker-list --json" "live: asks Orca for the worker list" "$WORK/orca-query.log"
+expect_has "orchestration worker-show --dispatch ctx_19 --json" "live: asks Orca about that dispatch" "$WORK/orca-query.log"
 
-# The session terminal was closed by hand and Orca gave its old handle to a
-# terminal of another worktree: that one must not be closed in its place.
-new_fixture terminal-closed
+# exited is the one conclusion keeper acts on: the terminal Orca has not
+# released is closed, the claim released, the Spec resumed — at once, with no
+# 「继续」 first, since there is nothing left to read it.
+new_fixture stalled-exited
 stall_spec_19
-write_terminals "$(session_terminal)"
-STALL_MIN=0 run_keeper "$WORK/closed-1.out"
-expect_has "terminal send --terminal term_19" "terminal closed round 1: nudges the session terminal" "$WORK/orca.log"
-write_terminals '{"handle": "term_19", "title": "Claude Code", "worktreePath": "'"$WORK"'/elsewhere",
-   "tabId": "tab9", "leafId": "leaf9", "agentIdentity": "claude", "lastOutputAt": 3}'
-STALL_MIN=0 run_keeper "$WORK/closed-2.out"
-expect_exit 0 "terminal closed round 2: exits 0"
-expect_without "terminal close" "terminal closed round 2: closes nothing, not the terminal that took the old handle" "$WORK/orca.log"
-expect_has $'\tSKIP\t会话终端（pane tab1/leaf1）已不在 Orca 的终端列表里，不关终端' "terminal closed round 2: says the session terminal is gone" "$WORK/closed-2.out"
-expect_has "release 19 --force" "terminal closed round 2: releases the claim" "$WORK/claim.log"
-expect_has "--only 19 --apply" "terminal closed round 2: resumes the spec" "$WORK/launch.log"
+write_workers '' "$(worker_record ctx_19 exited)"
+write_worker_show ctx_19 exited term_19 active
+STALL_MIN=0 run_keeper "$WORK/exited.out"
+expect_exit 0 "exited: exits 0"
+expect_has $'\tEXITED\t' "exited: logs the conclusion" "$WORK/exited.out"
+expect_has "liveness=exited dispatch=ctx_19" "exited: the log line carries the evidence" "$WORK/exited.out"
+expect_has "terminal close --terminal term_19 --tab" "exited: closes the terminal Orca still lists" "$WORK/orca.log"
+expect_count "terminal close" 1 "exited: closes it once" "$WORK/orca.log"
+expect_count "terminal send" 0 "exited: sends 继续 to nothing" "$WORK/orca.log"
+expect_count "release 19 --force" 1 "exited: releases the claim once" "$WORK/claim.log"
+expect_has "--repo test/repo --only 19 --apply" "exited: launch-wave resumes the spec" "$WORK/launch.log"
+expect_has $'\tRESUME\tOrca 报告会话已退出（liveness=exited dispatch=ctx_19）' "exited: the resume says why, with the evidence" "$WORK/exited.out"
+expect_file "$STATE" "exited: records the resume"
+expect_count "" 0 "exited: no notification" "$NOTIFY_LOG"
 
-# Orca cannot answer at all: nothing is closed under a name nobody gave, the
-# failure is logged as such (not as a closed terminal), and the round goes on
-# the way it always did when a close failed.
-new_fixture orca-down
+# A terminal Orca released itself is gone: nothing is closed, the rest is the same.
+new_fixture stalled-exited-released
 stall_spec_19
-write_terminals "$(session_terminal)"
-STALL_MIN=0 run_keeper "$WORK/orca-down-1.out"
-expect_has "terminal send --terminal term_19" "orca down round 1: nudges the session terminal" "$WORK/orca.log"
-touch "$FIXTURE/orca-list-fail"
-STALL_MIN=0 run_keeper "$WORK/orca-down-2.out"
-expect_exit 0 "orca down round 2: exits 0"
-expect_without "terminal close" "orca down round 2: closes nothing" "$WORK/orca.log"
-expect_has $'\tERROR\t' "orca down round 2: logs the failure" "$WORK/orca-down-2.out"
-expect_has "orca offline" "orca down round 2: carries Orca's message" "$WORK/orca-down-2.out"
-expect_without "已不在 Orca 的终端列表里" "orca down round 2: does not mistake a failing Orca for a closed terminal" "$WORK/orca-down-2.out"
-expect_has "release 19 --force" "orca down round 2: still releases the claim" "$WORK/claim.log"
-expect_has "--only 19 --apply" "orca down round 2: still resumes the spec" "$WORK/launch.log"
+write_workers '' "$(worker_record ctx_19 exited term_19 released)"
+write_worker_show ctx_19 exited term_19 released
+STALL_MIN=0 run_keeper "$WORK/exited-released.out"
+expect_exit 0 "exited, terminal released: exits 0"
+expect_has $'\tEXITED\t' "exited, terminal released: logs the conclusion" "$WORK/exited-released.out"
+expect_count "" 0 "exited, terminal released: closes nothing" "$WORK/orca.log"
+expect_count "release 19 --force" 1 "exited, terminal released: releases the claim" "$WORK/claim.log"
+expect_has "--only 19 --apply" "exited, terminal released: resumes the spec" "$WORK/launch.log"
 
-# --dry-run resolves the handle the same way and only prints what it would close
-new_fixture handle-drift-dry-run
+# The same receipt with no terminal at all: Orca leaves the field empty for a
+# terminal it released. The empty column must stay where it is (the receipt's
+# columns are split on the unit separator; a tab would let read fold it into
+# its neighbour and hand `released` around as a handle): nothing is closed,
+# so nothing fails, and the rest is as above.
+new_fixture stalled-exited-terminal-empty
 stall_spec_19
-write_terminals "$(session_terminal)"
-STALL_MIN=0 run_keeper "$WORK/drift-dry-1.out"
-expect_has "terminal send --terminal term_19" "handle drift dry-run round 1: nudges the session terminal" "$WORK/orca.log"
-write_terminals "$(session_terminal term_19_moved)"
-STALL_MIN=0 run_keeper "$WORK/drift-dry-2.out" --dry-run
-expect_exit 0 "handle drift dry-run round 2: exits 0"
-expect_has $'\tWOULD_CLOSE_TERMINAL\tterm_19_moved' "handle drift dry-run round 2: would close the handle Orca gives now" "$WORK/drift-dry-2.out"
-expect_count $'\tWOULD_CLOSE_TERMINAL\t' 1 "handle drift dry-run round 2: names that one terminal only, not the handle the nudge round kept" "$WORK/drift-dry-2.out"
-expect_without "terminal close" "handle drift dry-run round 2: closes nothing" "$WORK/orca.log"
-expect_count "release 19 --force" 0 "handle drift dry-run round 2: releases nothing" "$WORK/claim.log"
-expect_without "launched" "handle drift dry-run round 2: launches nothing" "$WORK/launch.log"
+write_workers '' "$(worker_record ctx_19 exited '' released)"
+write_worker_show ctx_19 exited '' released
+STALL_MIN=0 run_keeper "$WORK/exited-terminal-empty.out"
+expect_exit 0 "exited, terminal empty: exits 0"
+expect_has $'\tEXITED\t' "exited, terminal empty: logs the conclusion" "$WORK/exited-terminal-empty.out"
+expect_has 'liveness=exited dispatch=ctx_19' "exited, terminal empty: the log line carries the evidence" "$WORK/exited-terminal-empty.out"
+expect_count "" 0 "exited, terminal empty: closes nothing, released being a state and not a handle" "$WORK/orca.log"
+expect_without $'\tCLOSE_TERMINAL\t' "exited, terminal empty: no close is logged" "$WORK/exited-terminal-empty.out"
+expect_without $'\tERROR\t' "exited, terminal empty: no failed close, so no error" "$WORK/exited-terminal-empty.out"
+expect_count "release 19 --force" 1 "exited, terminal empty: releases the claim" "$WORK/claim.log"
+expect_has "--only 19 --apply" "exited, terminal empty: resumes the spec" "$WORK/launch.log"
+new_fixture stalled-exited-terminal-empty-dry-run
+stall_spec_19
+write_workers '' "$(worker_record ctx_19 exited '' released)"
+write_worker_show ctx_19 exited '' released
+STALL_MIN=0 run_keeper "$WORK/exited-terminal-empty-dry.out" --dry-run
+expect_exit 0 "exited, terminal empty, dry-run: exits 0"
+expect_has $'\tEXITED\t' "exited, terminal empty, dry-run: reaches the conclusion" "$WORK/exited-terminal-empty-dry.out"
+expect_without 'WOULD_CLOSE_TERMINAL' "exited, terminal empty, dry-run: would close nothing, not even on a handle called released" "$WORK/exited-terminal-empty-dry.out"
 
-# A nudge record from the keeper version before the pane was kept names only a
-# handle. That handle is not used either: such a record closes nothing on its
-# way out, and says so.
-new_fixture legacy-nudge-record
+# unverifiable: Orca's own rule is that nothing is stopped, retried or released
+# on it. The human is told once, with the evidence, and keeper stays out.
+new_fixture stalled-unverifiable
 stall_spec_19
-write_terminals "$(session_terminal)"
+write_workers '' "$(worker_record ctx_19 unverifiable)"
+write_worker_show ctx_19 unverifiable term_19 active
+STALL_MIN=0 run_keeper "$WORK/unverifiable-1.out"
+expect_exit 0 "unverifiable: exits 0"
+expect_has $'\tUNVERIFIABLE\t' "unverifiable: logs the conclusion" "$WORK/unverifiable-1.out"
+expect_has "liveness=unverifiable dispatch=ctx_19" "unverifiable: the log line carries the evidence" "$WORK/unverifiable-1.out"
+expect_has "无法确认会话是否已退出，未自动恢复" "unverifiable: notifies" "$NOTIFY_LOG"
+expect_has "liveness=unverifiable dispatch=ctx_19" "unverifiable: the notification carries the evidence" "$NOTIFY_LOG"
+expect_count "release 19 --force" 0 "unverifiable: releases nothing" "$WORK/claim.log"
+expect_without "launched" "unverifiable: launches nothing" "$WORK/launch.log"
+expect_count "" 0 "unverifiable: closes nothing" "$WORK/orca.log"
+expect_file "$STATE" "unverifiable: records the notification"
+STALL_MIN=0 run_keeper "$WORK/unverifiable-2.out"
+expect_exit 0 "unverifiable second round: exits 0"
+expect_count "" 1 "unverifiable: notifies only once" "$NOTIFY_LOG"
+expect_has $'\tSKIP\t无法确认会话状态，已通知过' "unverifiable second round: says it already told" "$WORK/unverifiable-2.out"
+expect_count "release 19 --force" 0 "unverifiable second round: still releases nothing" "$WORK/claim.log"
+expect_without "launched" "unverifiable second round: still launches nothing" "$WORK/launch.log"
+
+# A liveness keeper has never heard of is not a confirmation of anything.
+new_fixture stalled-unknown-liveness
+stall_spec_19
+write_workers '' "$(worker_record ctx_19 starting)"
+write_worker_show ctx_19 starting
+STALL_MIN=0 run_keeper "$WORK/unknown-liveness.out"
+expect_exit 0 "unknown liveness: exits 0"
+expect_has $'\tUNVERIFIABLE\t' "unknown liveness: is unverifiable" "$WORK/unknown-liveness.out"
+expect_has "liveness=starting dispatch=ctx_19" "unknown liveness: the evidence names the value Orca gave" "$WORK/unknown-liveness.out"
+expect_count "release 19 --force" 0 "unknown liveness: releases nothing" "$WORK/claim.log"
+expect_without "launched" "unknown liveness: launches nothing" "$WORK/launch.log"
+expect_count "" 1 "unknown liveness: notifies once" "$NOTIFY_LOG"
+
+# No worker for the Spec worktree at all (a session Orca does not manage, or
+# one whose dispatch is gone): the same restraint, said in so many words.
+new_fixture stalled-no-worker
+stall_spec_19
+write_workers '' "$(worker_record ctx_other live '' active "repo_test::$WORK/elsewhere")"
+STALL_MIN=0 run_keeper "$WORK/no-worker-1.out"
+expect_exit 0 "no worker: exits 0"
+expect_has $'\tUNVERIFIABLE\t' "no worker: logs the conclusion" "$WORK/no-worker-1.out"
+expect_has "没有 workspace 为 $WT 的 worker" "no worker: the evidence names the worktree it looked for" "$WORK/no-worker-1.out"
+expect_has "没有 workspace 为 $WT 的 worker" "no worker: the notification carries the evidence" "$NOTIFY_LOG"
+expect_without "（）" "no worker: no empty note where the page count would go" "$WORK/no-worker-1.out"
+expect_without "worker-show" "no worker: asks Orca about no dispatch" "$WORK/orca-query.log"
+expect_count "release 19 --force" 0 "no worker: releases nothing" "$WORK/claim.log"
+expect_without "launched" "no worker: launches nothing" "$WORK/launch.log"
+STALL_MIN=0 run_keeper "$WORK/no-worker-2.out"
+expect_count "" 1 "no worker: notifies only once" "$NOTIFY_LOG"
+
+new_fixture stalled-empty-list
+stall_spec_19
+write_workers ''
+STALL_MIN=0 run_keeper "$WORK/empty-list.out"
+expect_has $'\tUNVERIFIABLE\t' "empty worker list: is unverifiable" "$WORK/empty-list.out"
+expect_count "release 19 --force" 0 "empty worker list: releases nothing" "$WORK/claim.log"
+expect_without "launched" "empty worker list: launches nothing" "$WORK/launch.log"
+
+# Orca writes the canonical path in workspace (macOS /var is /private/var);
+# git may have given keeper the other one. Both name the same worktree.
+new_fixture stalled-canonical-path
+stall_spec_19
+write_workers '' "$(worker_record ctx_19 live '' active "repo_test::$(cd "$WT" && pwd -P)")"
+write_worker_show ctx_19 live
+STALL_MIN=0 run_keeper "$WORK/canonical.out"
+expect_has $'\tLIVE\t' "canonical workspace path: matches the worktree git named" "$WORK/canonical.out"
+expect_has "liveness=live dispatch=ctx_19" "canonical workspace path: asks Orca about that dispatch" "$WORK/canonical.out"
+
+# An Orca that cannot answer is not a closed terminal (the #55 rule, kept):
+# it is one more thing keeper cannot conclude from, reported once like the rest.
+new_fixture orca-worker-list-down
+stall_spec_19
+touch "$FIXTURE/orca-worker-list-fail"
+STALL_MIN=0 run_keeper "$WORK/list-down-1.out"
+expect_exit 0 "orca worker-list down: exits 0"
+expect_has $'\tUNVERIFIABLE\t' "orca worker-list down: is unverifiable, not exited" "$WORK/list-down-1.out"
+expect_has "orca worker-list 失败：orca offline" "orca worker-list down: carries Orca's message" "$WORK/list-down-1.out"
+expect_has "orca worker-list 失败：orca offline" "orca worker-list down: the notification carries Orca's message" "$NOTIFY_LOG"
+expect_count "release 19 --force" 0 "orca worker-list down: releases nothing" "$WORK/claim.log"
+expect_without "launched" "orca worker-list down: resumes nothing" "$WORK/launch.log"
+expect_count "" 0 "orca worker-list down: closes nothing" "$WORK/orca.log"
+STALL_MIN=0 run_keeper "$WORK/list-down-2.out"
+expect_count "" 1 "orca worker-list down: notifies only once" "$NOTIFY_LOG"
+
+new_fixture orca-worker-show-down
+stall_spec_19
+write_workers '' "$(worker_record ctx_19 live)"
+touch "$FIXTURE/orca-worker-show-fail"
+STALL_MIN=0 run_keeper "$WORK/show-down.out"
+expect_exit 0 "orca worker-show down: exits 0"
+expect_has $'\tUNVERIFIABLE\t' "orca worker-show down: is unverifiable, not live and not exited" "$WORK/show-down.out"
+expect_has "worker-show 失败：orca offline" "orca worker-show down: carries Orca's message" "$WORK/show-down.out"
+expect_count "release 19 --force" 0 "orca worker-show down: releases nothing" "$WORK/claim.log"
+expect_without "launched" "orca worker-show down: resumes nothing" "$WORK/launch.log"
+expect_count "" 1 "orca worker-show down: notifies once" "$NOTIFY_LOG"
+
+new_fixture orca-worker-list-garbage
+stall_spec_19
+printf 'not json\n' >"$FIXTURE/workers.json"
+STALL_MIN=0 run_keeper "$WORK/list-garbage.out"
+expect_has $'\tUNVERIFIABLE\t' "worker-list not JSON: is unverifiable" "$WORK/list-garbage.out"
+expect_has "无法解析" "worker-list not JSON: says the page could not be read" "$WORK/list-garbage.out"
+expect_count "release 19 --force" 0 "worker-list not JSON: releases nothing" "$WORK/claim.log"
+
+# The Spec worktree holds more than the session: fix and merge roles open their
+# terminals in it too (stage-dispatch.sh). Any live worker there means the
+# worktree is in use; only when every one exited is the failure confirmed; one
+# Orca cannot vouch for keeps it from being confirmed.
+new_fixture stalled-mixed-live
+stall_spec_19
+write_workers '' "$(worker_record ctx_19 exited term_19 released)" "$(worker_record ctx_fix live term_fix retained)"
+write_worker_show ctx_19 exited term_19 released
+write_worker_show ctx_fix live term_fix retained
+STALL_MIN=0 run_keeper "$WORK/mixed-live.out"
+expect_has $'\tLIVE\t' "exited session, live fix worker: the worktree is live" "$WORK/mixed-live.out"
+expect_has "liveness=exited dispatch=ctx_19; liveness=live dispatch=ctx_fix" "exited session, live fix worker: the evidence names both" "$WORK/mixed-live.out"
+expect_count "release 19 --force" 0 "exited session, live fix worker: releases nothing" "$WORK/claim.log"
+expect_without "launched" "exited session, live fix worker: launches nothing" "$WORK/launch.log"
+expect_count "" 0 "exited session, live fix worker: closes nothing" "$WORK/orca.log"
+
+new_fixture stalled-all-exited
+stall_spec_19
+write_workers '' "$(worker_record ctx_19 exited term_19 released)" "$(worker_record ctx_fix exited term_fix retained)"
+write_worker_show ctx_19 exited term_19 released
+write_worker_show ctx_fix exited term_fix retained
+STALL_MIN=0 run_keeper "$WORK/all-exited.out"
+expect_has $'\tEXITED\t' "all exited: the failure is confirmed" "$WORK/all-exited.out"
+expect_has "liveness=exited dispatch=ctx_19; liveness=exited dispatch=ctx_fix" "all exited: the evidence names both" "$WORK/all-exited.out"
+expect_has "terminal close --terminal term_fix --tab" "all exited: closes the terminal Orca kept" "$WORK/orca.log"
+expect_without "terminal close --terminal term_19 --tab" "all exited: does not close the terminal Orca already released" "$WORK/orca.log"
+expect_count "release 19 --force" 1 "all exited: releases once" "$WORK/claim.log"
+expect_count "only 19 --apply" 1 "all exited: resumes once" "$WORK/launch.log"
+
+new_fixture stalled-mixed-unsure
+stall_spec_19
+write_workers '' "$(worker_record ctx_19 exited)" "$(worker_record ctx_fix unverifiable)"
+write_worker_show ctx_19 exited
+write_worker_show ctx_fix unverifiable
+STALL_MIN=0 run_keeper "$WORK/mixed-unsure.out"
+expect_has $'\tUNVERIFIABLE\t' "exited and unverifiable: not confirmed" "$WORK/mixed-unsure.out"
+expect_count "release 19 --force" 0 "exited and unverifiable: releases nothing" "$WORK/claim.log"
+expect_without "launched" "exited and unverifiable: launches nothing" "$WORK/launch.log"
+
+# worker-list has no worktree filter and pages of 100: the Spec's worker may
+# sit behind newer dispatches. The list is walked until it turns up.
+new_fixture stalled-second-page
+stall_spec_19
+write_workers c2 "$(worker_record ctx_new live '' active "repo_test::$WORK/elsewhere")"
+write_workers_page "$FIXTURE/workers-c2.json" '' "$(worker_record ctx_19 live)"
+write_worker_show ctx_19 live
+STALL_MIN=0 run_keeper "$WORK/second-page.out"
+expect_has $'\tLIVE\t' "worker on the second page: found" "$WORK/second-page.out"
+expect_has "liveness=live dispatch=ctx_19" "worker on the second page: asked about that dispatch" "$WORK/second-page.out"
+expect_same "orchestration worker-list --json
+orchestration worker-list --json --cursor c2
+orchestration worker-show --dispatch ctx_19 --json" "$(cat "$WORK/orca-query.log")" \
+  "worker on the second page: the walk is list, list --cursor, then the one worker-show"
+
+# A list that never ends (Orca keeps a nextCursor) cannot loop the round: the
+# walk stops after KEEPER_WORKER_PAGES pages and says so.
+new_fixture stalled-endless-list
+stall_spec_19
+write_workers c2 "$(worker_record ctx_new live '' active "repo_test::$WORK/elsewhere")"
+write_workers_page "$FIXTURE/workers-c2.json" c2 "$(worker_record ctx_new live '' active "repo_test::$WORK/elsewhere")"
+WORKER_PAGES=2 STALL_MIN=0 run_keeper "$WORK/endless-list.out"
+expect_has $'\tUNVERIFIABLE\t' "endless list: is unverifiable" "$WORK/endless-list.out"
+expect_has "（只查了前 2 页）" "endless list: the evidence says how far it looked" "$WORK/endless-list.out"
+expect_count "orchestration worker-list" 2 "endless list: two pages, no more" "$WORK/orca-query.log"
+expect_count "release 19 --force" 0 "endless list: releases nothing" "$WORK/claim.log"
+
+# "Every worker exited" is a claim about the whole worktree: a list cut short
+# before its end cannot support it, even when the worker seen did exit.
+new_fixture stalled-exited-but-truncated
+stall_spec_19
+write_workers c2 "$(worker_record ctx_19 exited)"
+write_worker_show ctx_19 exited
+WORKER_PAGES=1 STALL_MIN=0 run_keeper "$WORK/exited-truncated.out"
+expect_has $'\tUNVERIFIABLE\t' "exited on a truncated list: is unverifiable" "$WORK/exited-truncated.out"
+expect_has "liveness=exited dispatch=ctx_19; 只查了前 1 页" "exited on a truncated list: the evidence says both" "$WORK/exited-truncated.out"
+expect_count "release 19 --force" 0 "exited on a truncated list: releases nothing" "$WORK/claim.log"
+expect_without "launched" "exited on a truncated list: launches nothing" "$WORK/launch.log"
+
+# --dry-run reaches the same conclusion from the same queries and only prints
+# what it would do; whatever the conclusion, nothing is written.
+new_fixture stalled-live-dry-run
+stall_spec_19
+write_workers '' "$(worker_record ctx_19 live)"
+write_worker_show ctx_19 live
+STALL_MIN=0 run_keeper "$WORK/live-dry.out" --dry-run
+expect_exit 0 "live dry-run: exits 0"
+expect_has $'\tLIVE\t' "live dry-run: reaches the conclusion" "$WORK/live-dry.out"
+expect_without "WOULD_" "live dry-run: would do nothing" "$WORK/live-dry.out"
+expect_count "orchestration" 2 "live dry-run: Orca is still asked (list, then show)" "$WORK/orca-query.log"
+expect_no_file "$STATE" "live dry-run: writes no state"
+
+new_fixture stalled-exited-dry-run
+stall_spec_19
+write_workers '' "$(worker_record ctx_19 exited)"
+write_worker_show ctx_19 exited term_19
+STALL_MIN=0 run_keeper "$WORK/exited-dry.out" --dry-run
+expect_exit 0 "exited dry-run: exits 0"
+expect_has $'\tEXITED\t' "exited dry-run: reaches the conclusion" "$WORK/exited-dry.out"
+expect_has $'\tWOULD_CLOSE_TERMINAL\tterm_19' "exited dry-run: would close the terminal" "$WORK/exited-dry.out"
+expect_has $'\tWOULD_RELEASE_CLAIM\t' "exited dry-run: would release the claim" "$WORK/exited-dry.out"
+expect_has $'\tWOULD_RESUME\tOrca 报告会话已退出（liveness=exited dispatch=ctx_19）' "exited dry-run: would resume, and says why" "$WORK/exited-dry.out"
+expect_count "" 0 "exited dry-run: closes nothing" "$WORK/orca.log"
+expect_count "release 19 --force" 0 "exited dry-run: releases nothing" "$WORK/claim.log"
+expect_without "launched" "exited dry-run: launches nothing" "$WORK/launch.log"
+expect_no_file "$STATE" "exited dry-run: writes no state"
+
+new_fixture stalled-unverifiable-dry-run
+stall_spec_19
+write_workers '' "$(worker_record ctx_19 unverifiable)"
+write_worker_show ctx_19 unverifiable
+STALL_MIN=0 run_keeper "$WORK/unverifiable-dry.out" --dry-run
+expect_exit 0 "unverifiable dry-run: exits 0"
+expect_has $'\tUNVERIFIABLE\t' "unverifiable dry-run: reaches the conclusion" "$WORK/unverifiable-dry.out"
+expect_has $'\tWOULD_NOTIFY\t' "unverifiable dry-run: would notify" "$WORK/unverifiable-dry.out"
+expect_has "liveness=unverifiable dispatch=ctx_19" "unverifiable dry-run: the notification it would send carries the evidence" "$WORK/unverifiable-dry.out"
+expect_count "" 0 "unverifiable dry-run: sends no notification" "$NOTIFY_LOG"
+expect_no_file "$STATE" "unverifiable dry-run: writes no state"
+
+# Over the resume limit, an exited worker is still not touched: there is no
+# point closing a terminal for a resume that will not happen.
+new_fixture stalled-exited-over-limit
+stall_spec_19
+write_workers '' "$(worker_record ctx_19 exited)"
+write_worker_show ctx_19 exited
+node -e '
+  const fs = require("fs");
+  const now = Math.floor(Date.now() / 1000);
+  fs.writeFileSync(process.argv[1], JSON.stringify({
+    version: 1,
+    resumes: {"test/repo#19": [now - 3600, now - 3600, now - 3600]},
+    notified: {}
+  }, null, 2));
+' "$STATE"
+STALL_MIN=0 run_keeper "$WORK/exited-over-limit.out"
+expect_exit 0 "exited over the limit: exits 0"
+expect_has $'\tEXITED\t' "exited over the limit: still reaches the conclusion" "$WORK/exited-over-limit.out"
+expect_has "今日自动恢复已达 3 次" "exited over the limit: notifies instead" "$NOTIFY_LOG"
+expect_count "" 0 "exited over the limit: closes nothing" "$WORK/orca.log"
+expect_count "release 19 --force" 0 "exited over the limit: releases nothing" "$WORK/claim.log"
+expect_without "launched" "exited over the limit: launches nothing" "$WORK/launch.log"
+
+# A state file written by the keeper that still nudged carries a nudges map
+# and no harm: it is read like any other, and nothing is nudged.
+new_fixture legacy-nudge-state
+stall_spec_19
+write_workers '' "$(worker_record ctx_19 live)"
+write_worker_show ctx_19 live
 node -e '
   const fs = require("fs");
   fs.writeFileSync(process.argv[1], JSON.stringify({
     version: 1, resumes: {}, notified: {},
-    nudges: {"test/repo#19": {at: Math.floor(Date.now() / 1000) - 3600, terminal: "term_19"}}
+    nudges: {"test/repo#19": {at: Math.floor(Date.now() / 1000) - 3600, tabId: "tab1", leafId: "leaf1"}}
   }, null, 2));
 ' "$STATE"
 STALL_MIN=0 run_keeper "$WORK/legacy-nudge.out"
-expect_exit 0 "legacy nudge record: exits 0"
-expect_without "terminal close" "legacy nudge record: its handle closes nothing" "$WORK/orca.log"
-expect_has $'\tSKIP\t上一轮的 nudge 记录没有 pane' "legacy nudge record: says why nothing is closed" "$WORK/legacy-nudge.out"
-expect_has "release 19 --force" "legacy nudge record: releases the claim" "$WORK/claim.log"
-expect_has "--only 19 --apply" "legacy nudge record: resumes the spec" "$WORK/launch.log"
-
-# Before the second STALL_MIN has passed the round only waits, whatever the
-# handle is now: nothing is resolved for a close, nothing is closed.
-new_fixture still-waiting
-stall_spec_19
-write_terminals "$(session_terminal)"
-STALL_MIN=45 run_keeper "$WORK/wait-1.out"
-expect_has $'\tNUDGE\t' "still waiting round 1: nudges" "$WORK/wait-1.out"
-write_terminals "$(session_terminal term_19_moved)"
-STALL_MIN=45 run_keeper "$WORK/wait-2.out"
-expect_exit 0 "still waiting round 2: exits 0"
-expect_has $'\tWAIT\t' "still waiting round 2: waits" "$WORK/wait-2.out"
-expect_without "terminal close" "still waiting round 2: closes nothing" "$WORK/orca.log"
-expect_count "release 19 --force" 0 "still waiting round 2: releases nothing" "$WORK/claim.log"
-expect_without "launched" "still waiting round 2: launches nothing" "$WORK/launch.log"
+expect_exit 0 "legacy nudge state: exits 0"
+expect_has $'\tLIVE\t' "legacy nudge state: judged on Orca alone" "$WORK/legacy-nudge.out"
+expect_without $'\tERROR\t' "legacy nudge state: nothing is sent to the old pane (the fake orca refuses a send)" "$WORK/legacy-nudge.out"
 
 # --- fresh writes: no action -------------------------------------------------
 
@@ -564,6 +1075,7 @@ expect_exit 0 "fresh: exits 0"
 expect_without $'\tNUDGE\t' "fresh: no nudge" "$WORK/fresh.out"
 expect_without "WOULD_" "fresh: no action" "$WORK/fresh.out"
 expect_count "" 0 "fresh: orca send not called" "$WORK/orca.log"
+expect_count "" 0 "fresh: Orca is not asked about any worker (the file times already say all is well)" "$WORK/orca-query.log"
 expect_without "launched" "fresh: launch-wave not called" "$WORK/launch.log"
 
 # --- legacy reports: keyword fallback ----------------------------------------
@@ -658,6 +1170,55 @@ run_keeper "$WORK/paused.out"
 expect_exit 0 "paused: exits 0"
 expect_has "PAUSED" "paused: logs the pause" "$WORK/paused.out"
 expect_count "" 0 "paused: gh is not called" "$WORK/gh.log"
+expect_count "" 0 "paused: the sweep is not called" "$SWEEP_LOG"
+
+# --- the sweep of abandoned worktrees (规格 #26) ------------------------------
+# Once a round, after the repositories, in keeper's own mode: a real round
+# logs every removal, --dry-run passes --dry-run on and logs what would go,
+# --repo is passed through, and a sweep that fails is reported, never fatal.
+
+new_fixture sweep
+touch "$FIXTURE/sweep-remove"
+run_keeper "$WORK/sweep.out"
+expect_exit 0 "sweep: exits 0"
+expect_count "" 1 "sweep: called once, with no argument" "$SWEEP_LOG"
+expect_same "" "$(cat "$SWEEP_LOG")" "sweep: a plain round passes no argument"
+expect_has $'\tSWEEP\t' "sweep: the summary is logged" "$WORK/sweep.out"
+expect_has "removed=1" "sweep: the summary carries the counts" "$WORK/sweep.out"
+expect_has $'\tREMOVE_WORKTREE\t' "sweep: a removal is logged" "$WORK/sweep.out"
+expect_has "/w/wt-spec-22" "sweep: the removal names the worktree" "$WORK/sweep.out"
+expect_without "/w/repo" "sweep: a kept worktree is not logged one by one" "$WORK/sweep.out"
+expect_count "" 0 "sweep: the round asks no orca action for it" "$WORK/orca.log"
+
+new_fixture sweep-dry
+touch "$FIXTURE/sweep-would"
+run_keeper "$WORK/sweep-dry.out" --dry-run
+expect_exit 0 "sweep --dry-run: exits 0"
+expect_same "--dry-run" "$(cat "$SWEEP_LOG")" "sweep --dry-run: --dry-run is passed on"
+expect_has $'\tWOULD_REMOVE_WORKTREE\t' "sweep --dry-run: logs what would go" "$WORK/sweep-dry.out"
+expect_without $'\tREMOVE_WORKTREE\t' "sweep --dry-run: logs no removal" "$WORK/sweep-dry.out"
+
+new_fixture sweep-repo
+run_keeper "$WORK/sweep-repo.out" --repo test/repo
+expect_exit 0 "sweep --repo: exits 0"
+expect_has "--repo test/repo" "sweep --repo: --repo is passed on" "$SWEEP_LOG"
+
+new_fixture sweep-fail
+touch "$FIXTURE/sweep-fail"
+run_keeper "$WORK/sweep-fail.out"
+expect_exit 0 "sweep failure: exits 0"
+expect_has "sweep-worktrees.sh" "sweep failure: is reported with the script's name" "$WORK/sweep-fail.out"
+expect_has "orca offline" "sweep failure: carries the sweep's message" "$WORK/sweep-fail.out"
+expect_has $'\tERROR\t' "sweep failure: is logged as an error" "$WORK/sweep-fail.out"
+expect_has $'\tROUND\tend' "sweep failure: the round still ends" "$WORK/sweep-fail.out"
+
+new_fixture sweep-missing
+SWEEP_SCRIPT=$BIN/no-such-sweep.sh
+run_keeper "$WORK/sweep-missing.out"
+SWEEP_SCRIPT=$BIN/sweep-worktrees.sh
+expect_exit 0 "sweep missing: exits 0"
+expect_has "sweep-worktrees.sh" "sweep missing: is reported" "$WORK/sweep-missing.out"
+expect_has $'\tSKIP\t' "sweep missing: is a skip" "$WORK/sweep-missing.out"
 
 printf '\n%s\n' "passed=$PASSED failed=$FAILED"
 [ "$FAILED" -eq 0 ]

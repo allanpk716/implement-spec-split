@@ -101,6 +101,12 @@ expect_not_has() {
 
 mkdir -p "$BIN"
 
+# The Stage route table of this test alone: completion-report.sh's --run-dir
+# block prints it through stage-dispatch.sh verify, which reads the real
+# stage-route.sh; an empty table is every stage on its default route.
+STAGE_ROUTE_FILE=$WORK/stage-route
+: > "$STAGE_ROUTE_FILE"
+
 cat > "$BIN/gh" <<'FAKE_GH'
 #!/usr/bin/env bash
 set -u
@@ -373,9 +379,24 @@ run_report() { # out stderr -- args...
     CR_GH_DATA="$GH_DATA" \
     COMPLETION_NOTIFY_CMD="$NOTIFY_CMD" \
     COMPLETION_NOTIFY_LOG="$NOTIFY_LOG" \
+    ISS_STAGE_ROUTE_FILE="$STAGE_ROUTE_FILE" \
       bash "$SCRIPT" "$@"
   ) > "$out" 2> "$err"
   RUN_EXIT=$?
+}
+
+# make_sidecar <file> <form> <role> <ticket> <route model> [actual model]
+#   A dispatch sidecar as stage-dispatch.sh leaves it: released, with the
+#   model read off the worker's terminal recorded (the real one's route is
+#   written by the module; here only what completion-report.sh reads). Each
+#   call starts a minute after the previous one, so check lines come in the
+#   order the dispatches were made.
+SIDECAR_N=0
+make_sidecar() {
+  local file=$1 form=$2 role=$3 ticket=$4 route=$5 actual=${6:-} actual_json=null
+  SIDECAR_N=$((SIDECAR_N + 1))
+  [ -z "$actual" ] || actual_json="{\"model\":\"$actual\",\"source\":\"status-line\",\"checked_at\":\"2026-11-25T10:00:00+0800\"}"
+  printf '%s\n' "{\"form\":\"$form\",\"role\":\"$role\",\"ticket\":$ticket,\"attempt\":1,\"started_at\":\"2026-11-25T10:0$SIDECAR_N:00+0800\",\"dispatch_id\":\"ctx_$role\",\"route\":{\"profile\":\"claude-glm\",\"model\":\"$route\",\"effort\":\"high\"},\"actual_model\":$actual_json,\"released_at\":\"2026-11-25T10:00:00+0800\"}" > "$file"
 }
 
 NOTIFY_CMD=$BIN/notify-ok
@@ -804,6 +825,53 @@ expect_same_file "$WORK/s12.expected" 'no-topic report lists specs, dependencies
 expect_has_count '#22' 1 'landed spec appears only in its conclusion' "$WORK/s12.out"
 expect_has_count '散票' 1 'exactly one loose-ticket line' "$WORK/s12.out"
 
+# Scenario 16: --run-dir names the Spec's run directory, and the report ends
+# with what stage-dispatch.sh verify prints for it: the Stage route table (six
+# stages, as the table's display command shows it) and one check line per
+# Orca worker — route model against the model read off its terminal — a
+# mismatch as a warning, never a failed report. Headless dispatches have no
+# line. Without --run-dir the report is as before (every scenario above).
+RUN_DIR_22=$WORK/runs/implement-spec-split-22-20261125-0900
+mkdir -p "$RUN_DIR_22"
+make_sidecar "$RUN_DIR_22/dispatch-implement-36.json" interactive implement 36 glm-5.4 'glm-5.4[1m]'
+make_sidecar "$RUN_DIR_22/dispatch-implement-37.json" interactive implement 37 glm-5.4 opus
+make_sidecar "$RUN_DIR_22/dispatch-fix.json" interactive fix null glm-5.4 glm-5.4
+make_sidecar "$RUN_DIR_22/dispatch-merge-38.json" interactive merge 38 glm-5.4
+make_sidecar "$RUN_DIR_22/dispatch-research.json" headless research 55 glm-5.4
+make_sidecar "$RUN_DIR_22/dispatch-review-36.json" headless review 36 opus
+run_report "$WORK/s16.out" "$WORK/s16.err" "$REPO" --spec 22 --run-dir "$RUN_DIR_22"
+expect_exit 0 'report with a run directory exits zero'
+{
+  cat "$WORK/s12.expected"
+  cat <<'EOF'
+   路由表（当前值）：
+   编排（orchestration）：claude-flash / glm-5.3-flash / 启动器默认（锁定，不可改）
+   讨论（design）：claude / opus / high（默认）
+   调研起草（research）：codex-glm / glm-5.4 / high（默认）
+   实现（implementation）：claude-glm / glm-5.4 / high（默认）
+   审查（review）：claude / opus / high（默认）
+   诊断（diagnosis）：claude / opus / high（默认）
+   核对（派发 → 路由模型 / 实际模型 / 结论）：
+   实现 #36 → glm-5.4 / glm-5.4[1m] / 一致
+   实现 #37 → glm-5.4 / opus / 警告：实际模型 opus 与路由 glm-5.4 不符
+   修复 → glm-5.4 / glm-5.4 / 一致
+   解冲突 #38 → glm-5.4 / ? / 无法核对：释放前没读到
+EOF
+} > "$WORK/s16.expected"
+expect_same_file "$WORK/s16.expected" 'report with a run directory ends with the route table and the check lines' "$WORK/s16.out"
+expect_file_has '实现 #37 的实际模型 opus 与路由 glm-5.4 不符' 'a mismatch in the check lines is warned on stderr too' "$WORK/s16.err"
+expect_has_count '#55' 0 'a headless dispatch gets no check line' "$WORK/s16.out"
+expect_has_count ' → ' 5 'exactly the four check lines and their heading carry the arrow' "$WORK/s16.out"
+expect_has_count 'dispatch-' 0 'no sidecar file name appears in the report' "$WORK/s16.out"
+run_report "$WORK/s17.out" "$WORK/s17.err" "$REPO" --spec 22 --run-dir "$WORK/no-such-run-dir"
+expect_exit 0 'report with a run directory that is not there still exits zero'
+{
+  cat "$WORK/s12.expected"
+  printf '%s\n' '   ⚠️ 路由表与模型核对（查询失败）'
+} > "$WORK/s17.expected"
+expect_same_file "$WORK/s17.expected" 'a run directory that is not there is one failed line, the report intact' "$WORK/s17.out"
+run_report "$WORK/s18.out" "$WORK/s18.err" "$REPO" --spec 22 --run-dir
+expect_exit 64 '--run-dir without a value exits 64'
 # Scenario 13: the landing ran before the Spec issue was closed; every ticket
 # is closed, so it still reads as landed and stays out of every other list.
 GH_I2=$WORK/gh-i2
@@ -894,13 +962,16 @@ write_claim() { # spec, pid_start of the recorded holder
     "$1" "$1" "$$" "$2" > "$CLAIMS_J/spec-$1.json"
 }
 
-# Scenario 16: the human-only Spec has its integration branch and a live claim
+# Scenario 21: the human-only Spec has its integration branch and a live claim
 # record: it reads as 实现中, and the release advice names it instead of A.
+# (Numbered from 21: 16–18 are --run-dir's, 票 #47, ahead in this file. On
+# main these five were 16–20; the merge moved them up by 5 as a block, so
+# 19–20 are unused.)
 git -C "$REPO" branch spec-26
 write_claim 26 "$HOLDER_START"
-run_report "$WORK/s16.out" "$WORK/s16.err" "$REPO"
+run_report "$WORK/s21.out" "$WORK/s21.err" "$REPO"
 expect_exit 0 'active claim on a human-only spec exits zero'
-cat > "$WORK/s16.expected" <<'EOF'
+cat > "$WORK/s21.expected" <<'EOF'
 （本仓库没有 grill 题目记录）
    仓库里还在进行的规格（2 个）：
       ⏳ #26 规格：执行层换底座（实现中，票 1/2）
@@ -911,15 +982,15 @@ cat > "$WORK/s16.expected" <<'EOF'
    推荐：B（#26 正在实现，做完再发）
    回复「发版」我来打 tag 并推送（打之前会先跟你确认版本号）。
 EOF
-expect_same_file "$WORK/s16.expected" 'active claim on a human-only spec reads as 实现中 and is named in the advice' "$WORK/s16.out"
-expect_not_has '推荐：A' 'active claim on a human-only spec does not recommend A' "$WORK/s16.out"
+expect_same_file "$WORK/s21.expected" 'active claim on a human-only spec reads as 实现中 and is named in the advice' "$WORK/s21.out"
+expect_not_has '推荐：A' 'active claim on a human-only spec does not recommend A' "$WORK/s21.out"
 
-# Scenario 17: the recorded holder is gone (its pid no longer has the recorded
+# Scenario 22: the recorded holder is gone (its pid no longer has the recorded
 # start time): 中断待恢复, and since nobody is working the advice is A again.
 write_claim 26 dead-for-test
-run_report "$WORK/s17.out" "$WORK/s17.err" "$REPO"
+run_report "$WORK/s22.out" "$WORK/s22.err" "$REPO"
 expect_exit 0 'stale claim on a human-only spec exits zero'
-cat > "$WORK/s17.expected" <<'EOF'
+cat > "$WORK/s22.expected" <<'EOF'
 （本仓库没有 grill 题目记录）
    仓库里还在进行的规格（2 个）：
       ⏳ #26 规格：执行层换底座（中断待恢复，票 1/2）
@@ -930,16 +1001,16 @@ cat > "$WORK/s17.expected" <<'EOF'
    推荐：A（没人在做，不该被它挡住）
    回复「发版」我来打 tag 并推送（打之前会先跟你确认版本号）。
 EOF
-expect_same_file "$WORK/s17.expected" 'stale claim on a human-only spec reads as 中断待恢复' "$WORK/s17.out"
-expect_not_has '实现中' 'stale claim on a human-only spec is not 实现中' "$WORK/s17.out"
+expect_same_file "$WORK/s22.expected" 'stale claim on a human-only spec reads as 中断待恢复' "$WORK/s22.out"
+expect_not_has '实现中' 'stale claim on a human-only spec is not 实现中' "$WORK/s22.out"
 
-# Scenario 18: no integration branch and no claim record: the graph's word,
+# Scenario 23: no integration branch and no claim record: the graph's word,
 # byte for byte as before claims were read.
 rm -f "$CLAIMS_J/spec-26.json"
 git -C "$REPO" branch -D spec-26 >/dev/null 2>&1
-run_report "$WORK/s18.out" "$WORK/s18.err" "$REPO"
+run_report "$WORK/s23.out" "$WORK/s23.err" "$REPO"
 expect_exit 0 'unclaimed human-only spec exits zero'
-cat > "$WORK/s18.expected" <<'EOF'
+cat > "$WORK/s23.expected" <<'EOF'
 （本仓库没有 grill 题目记录）
    仓库里还在进行的规格（2 个）：
       ⏳ #26 规格：执行层换底座（待开始，票 1/2）
@@ -950,16 +1021,16 @@ cat > "$WORK/s18.expected" <<'EOF'
    推荐：A（没人在做，不该被它挡住）
    回复「发版」我来打 tag 并推送（打之前会先跟你确认版本号）。
 EOF
-expect_same_file "$WORK/s18.expected" 'unclaimed human-only spec reads as it did before claims were read' "$WORK/s18.out"
+expect_same_file "$WORK/s23.expected" 'unclaimed human-only spec reads as it did before claims were read' "$WORK/s23.out"
 
-# Scenario 19: the integration branch without any claim record is what
+# Scenario 24: the integration branch without any claim record is what
 # claim.sh calls interrupted, so the Spec reads as 中断待恢复, not 待开始.
 git -C "$REPO" branch spec-26
-run_report "$WORK/s19.out" "$WORK/s19.err" "$REPO"
+run_report "$WORK/s24.out" "$WORK/s24.err" "$REPO"
 expect_exit 0 'integration branch without a claim record exits zero'
-expect_same_file "$WORK/s17.expected" 'integration branch without a claim record reads as 中断待恢复' "$WORK/s19.out"
+expect_same_file "$WORK/s22.expected" 'integration branch without a claim record reads as 中断待恢复' "$WORK/s24.out"
 
-# Scenario 20: the graph says running (the recorded holder is alive) while
+# Scenario 25: the graph says running (the recorded holder is alive) while
 # claim.sh says free (the integration branch is gone): the graph's word stands.
 git -C "$REPO" branch -D spec-26 >/dev/null 2>&1
 GH_J2=$WORK/gh-j2
@@ -968,9 +1039,9 @@ cp "$GH_J"/issue-*.env "$GH_J2/"
 make_issue "$GH_J2" 51 STATE=open TITLE='路由表 票1' LABELS=ready-for-agent
 write_claim 27 "$HOLDER_START"
 GH_DATA=$GH_J2
-run_report "$WORK/s20.out" "$WORK/s20.err" "$REPO"
+run_report "$WORK/s25.out" "$WORK/s25.err" "$REPO"
 expect_exit 0 'graph running with a free claim exits zero'
-cat > "$WORK/s20.expected" <<'EOF'
+cat > "$WORK/s25.expected" <<'EOF'
 （本仓库没有 grill 题目记录）
    仓库里还在进行的规格（2 个）：
       ⏳ #26 规格：执行层换底座（待开始，票 1/2）
@@ -981,7 +1052,18 @@ cat > "$WORK/s20.expected" <<'EOF'
    推荐：B（#27 正在实现，做完再发）
    回复「发版」我来打 tag 并推送（打之前会先跟你确认版本号）。
 EOF
-expect_same_file "$WORK/s20.expected" 'graph running with a free claim still reads as 实现中 and recommends B' "$WORK/s20.out"
+expect_same_file "$WORK/s25.expected" 'graph running with a free claim still reads as 实现中 and recommends B' "$WORK/s25.out"
+
+# Scenario 26: the shape #15 was reported in — a stale claim record whose
+# integration branch is gone (since Scenario 25). claim.sh status says free,
+# so the graph's word stands and nobody is named: byte for byte as Scenario
+# 23, which had no record at all.
+GH_DATA=$GH_J
+rm -f "$CLAIMS_J/spec-27.json"
+write_claim 26 dead-for-test
+run_report "$WORK/s26.out" "$WORK/s26.err" "$REPO"
+expect_exit 0 'stale claim without an integration branch exits zero'
+expect_same_file "$WORK/s23.expected" 'stale claim without an integration branch reads as 待开始 and recommends A' "$WORK/s26.out"
 
 # ---------------------------------------------------------------- usage errors
 

@@ -329,10 +329,13 @@ testCase('flash mode Write one source line denies', home => {
       { FLASH_ORCHESTRATOR: '1' }
     )
   );
-  assert.match(
-    reason,
-    /flash 会话不写源码：派 glm-5\.4 子代理（或 codex worker）/
-  );
+  // The reason points at the dispatch module and opus-review.sh, the same two
+  // as subagent-guard's; it no longer names a subagent or codex worker, which
+  // a flash session would be denied a second time for.
+  assert.match(reason, /flash 会话不写源码：实现、fix、冲突解算经派发模块按「实现」路由派发/);
+  assert.match(reason, /stage-dispatch\.sh dispatch --stage implementation --brief <file>/);
+  assert.match(reason, /scripts\/opus-review\.sh/);
+  assert.doesNotMatch(reason, /glm-5\.4 子代理|codex worker/);
 });
 
 testCase('flash mode Edit one source line denies but documents allow', home => {
@@ -401,14 +404,34 @@ testCase('flash mode Bash redirect source write denies', home => {
   assert.match(reason, /flash 会话不写源码/);
 });
 
-testCase('flash mode subagent Write source allows', home => {
+// 规格 #26：实现不再由 flash 的会话内子代理完成（子代理拦截 hook 另行拦住派发），
+// 子代理与主线程一样不写源码；非源码文件照旧放行。
+testCase('flash mode subagent Write source denies', home => {
+  assert.match(
+    parseDeny(
+      runHook(
+        hookPayload(
+          'Write',
+          {
+            file_path: 'C:/WorkSpace/x/src/a.ts',
+            content: lines(50),
+          },
+          process.cwd(),
+          { agent_id: 'test-agent', agent_type: 'general-purpose' }
+        ),
+        home,
+        { FLASH_ORCHESTRATOR: '1' }
+      )
+    ),
+    /flash 会话不写源码/
+  );
   assertAllow(
     runHook(
       hookPayload(
         'Write',
         {
-          file_path: 'C:/WorkSpace/x/src/a.ts',
-          content: lines(50),
+          file_path: 'C:/WorkSpace/x/docs/a.md',
+          content: lines(500),
         },
         process.cwd(),
         { agent_id: 'test-agent', agent_type: 'general-purpose' }
@@ -419,18 +442,21 @@ testCase('flash mode subagent Write source allows', home => {
   );
 });
 
-testCase('flash mode subagent Bash source redirect allows', home => {
-  assertAllow(
-    runHook(
-      hookPayload(
-        'Bash',
-        { command: 'printf line > src/a.ts' },
-        process.cwd(),
-        { agent_id: 'test-agent', agent_type: 'general-purpose' }
-      ),
-      home,
-      { FLASH_ORCHESTRATOR: '1' }
-    )
+testCase('flash mode subagent Bash source redirect denies', home => {
+  assert.match(
+    parseDeny(
+      runHook(
+        hookPayload(
+          'Bash',
+          { command: 'printf line > src/a.ts' },
+          process.cwd(),
+          { agent_id: 'test-agent', agent_type: 'general-purpose' }
+        ),
+        home,
+        { FLASH_ORCHESTRATOR: '1' }
+      )
+    ),
+    /flash 会话不写源码/
   );
 });
 
@@ -690,7 +716,7 @@ testCase('bare codex exec denies in ordinary sessions', home => {
   for (const command of commands) {
     assert.match(
       parseDeny(runHook(hookPayload('Bash', { command }), home)),
-      /不要直接调 codex exec/
+      /不要直接调 codex exec：它没有卡死检测.*codex-worker\.sh 启动；票的实现由 scripts\/stage-dispatch\.sh 派发的 Orca worker 在自己的工作区里写，规格会话自己不写代码。$/
     );
   }
 });
@@ -728,7 +754,6 @@ testCase('codex wrappers and non-exec codex commands allow', home => {
     'codex login status',
     'codex e hi',
     '~/.claude/skills/implement-spec-split/scripts/codex-worker.sh --cwd /tmp --brief b.md --run-dir /tmp/r',
-    'scripts/pi-worker.sh --cwd /tmp',
     'scripts/selftest-codex.sh --only L1',
     'echo "run codex exec please"',
     "cat <<'EOF' > docs/a.md\ncodex exec hi\nEOF",

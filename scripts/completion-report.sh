@@ -9,7 +9,21 @@
 # overrides the graph's status, a free claim leaves it as the graph has it.
 # Read-only: it never tags and never pushes. claim.sh status creates an empty
 # .git/implement-spec-split/claims/ when that directory does not exist yet;
-# nothing else is written.
+# nothing else is written (beyond `git fetch --tags origin`, which updates
+# .git's tags and remote-tracking refs), --run-dir aside: what its verify
+# writes stays inside the Spec Run root it is given (the model it read, in
+# each sidecar, and the worker-show receipt of a live reading — .json and
+# .err — beside it).
+#
+# --run-dir <dir> names the Spec's run directory (the Spec Run root, where
+# scripts/stage-dispatch.sh keeps its sidecars) and makes the report end with
+# what `stage-dispatch.sh verify --run-dir <dir>` prints: the Stage route table
+# (the six stages, as the table's display command shows it) and one check line
+# per Orca worker of the Run, its route model against the model actually read
+# off its terminal — a mismatch as a warning, never a failed report (票 #47).
+# A verify that fails (a run directory that is not there, no node) is one
+# （查询失败） line: the report itself is never lost over it. Without --run-dir
+# the report is as it was.
 
 set -u
 
@@ -17,10 +31,11 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 GRILL_STATUS=$HERE/grill-status.sh
 PIPELINE_STATUS=$HERE/pipeline-status.sh
 CLAIM_SH=$HERE/claim.sh
+STAGE_DISPATCH=$HERE/stage-dispatch.sh
 
 usage() {
   cat <<'USAGE'
-Usage: completion-report.sh [<repo dir>] [--spec <n>] [--notify]
+Usage: completion-report.sh [<repo dir>] [--spec <n>] [--notify] [--run-dir <dir>]
 
 Print a fixed-format Chinese completion conclusion: the current grill topic's
 progress (--spec), repository-wide topic status, whether to tag a release (with
@@ -32,6 +47,10 @@ ready tickets that belong to no Spec or map count as loose tickets; those
 relations come from pipeline-status.sh --graph. --notify sends exactly one
 notification when the --spec topic is complete; COMPLETION_NOTIFY_CMD overrides
 the default osascript command and receives the title and body as two arguments.
+--run-dir, the Spec's run directory, ends the report with the Stage route table
+and stage-dispatch.sh verify's check lines (each Orca worker's route model
+against the model it actually ran on); a verify that fails is one （查询失败）
+line and the report stands.
 USAGE
 }
 
@@ -48,6 +67,7 @@ usage_error() {
 REPO_ARG=
 SPEC_ARG=
 NOTIFY=false
+RUN_DIR=
 while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help)
@@ -58,6 +78,11 @@ while [ $# -gt 0 ]; do
       [ -n "${2:-}" ] || usage_error '--spec needs a positive integer'
       [[ "${2:-}" =~ ^[1-9][0-9]*$ ]] || usage_error '--spec needs a positive integer'
       SPEC_ARG=$2
+      shift 2
+      ;;
+    --run-dir)
+      [ -n "${2:-}" ] || usage_error '--run-dir needs a directory'
+      RUN_DIR=$2
       shift 2
       ;;
     --notify)
@@ -1027,6 +1052,34 @@ elif [ "${#INT_TIMES[@]}" -gt 1 ]; then
     OUT+=("   ${INT_TIMES[$index]}「${INT_TITLES[$index]}」→ 要续上就重新 /grill-feature 或 /grill-map 这个话题")
     index=$((index + 1))
   done
+fi
+
+# ---------------------------------------------------------------- route block
+# With --run-dir the report ends with what the dispatch module's verify prints
+# for the Run: the Stage route table and a check line per Orca worker (route
+# model against the model read off its terminal, a mismatch as a warning). The
+# user reads the report to know who did the work (票 #47). verify never fails
+# over a verdict; when it fails at all (no such run directory, no node) the
+# block is one line and the report stands — the landing is already done.
+if [ -n "$RUN_DIR" ]; then
+  ROUTE_BLOCK=
+  if [ -x "$STAGE_DISPATCH" ] && command -v node >/dev/null 2>&1; then
+    # verify's stderr (a mismatch warning, the table's hints) passes through.
+    ROUTE_BLOCK=$(bash "$STAGE_DISPATCH" verify --run-dir "$RUN_DIR")
+    ROUTE_STATUS=$?
+  else
+    ROUTE_STATUS=1
+  fi
+  if [ "$ROUTE_STATUS" -eq 0 ] && [ -n "$ROUTE_BLOCK" ]; then
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      OUT+=("   $line")
+    done <<EOF
+$ROUTE_BLOCK
+EOF
+  else
+    OUT+=('   ⚠️ 路由表与模型核对（查询失败）')
+  fi
 fi
 
 if [ "${#OUT[@]}" -gt 0 ]; then

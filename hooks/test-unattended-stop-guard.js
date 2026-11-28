@@ -36,6 +36,23 @@ function commandLine(args) {
   });
 }
 
+// What an Orca worker-start session gets for its spec: the command line in
+// the `=== TASK ===` block after the worker preamble, with no <command-name>
+// tags (docs/orca-smoke-2026-11-27.md, item G).
+function taskLine(args) {
+  return JSON.stringify({
+    type: 'user',
+    message: {
+      role: 'user',
+      content:
+        'You are a dispatched worker; reply when the task is done.\n' +
+        '---\n' +
+        '=== TASK ===\n' +
+        `/implement-spec-split ${args}`,
+    },
+  });
+}
+
 function assistantTextLine(text) {
   return JSON.stringify({
     type: 'assistant',
@@ -291,6 +308,7 @@ testCase('done without close-self blocks with the self-close reason', () => {
       );
       assert.match(reason, /phase=done/);
       assert.match(reason, /close-self\.sh/);
+      assert.match(reason, /--run-dir <Spec Run root>/);
       assert.match(reason, /--remove-worktree <集成 worktree>/);
       assert.match(reason, /SKILL\.md 第 10 步/);
       assert.ok(reason.includes(path.join(skillDir, 'scripts', 'close-self.sh')));
@@ -396,6 +414,70 @@ testCase('close-self in a sidechain tool_use does not count', () => {
       parseBlock(
         runHook(stopPayload(fixture.transcriptPath, fixture.cwd), fixture.env)
       );
+    }
+  );
+});
+
+// ------------------- the === TASK === form an Orca worker-start session gets
+
+testCase('=== TASK === form: done without close-self blocks with the self-close reason', () => {
+  withFixture(
+    {
+      phase: 'done',
+      lines: [taskLine('19 --auto-land'), assistantTextLine('可以 /clear 了')],
+    },
+    fixture => {
+      const reason = parseBlock(
+        runHook(stopPayload(fixture.transcriptPath, fixture.cwd), fixture.env)
+      );
+      assert.match(reason, /phase=done/);
+      assert.match(reason, /close-self\.sh/);
+      assert.match(reason, /SKILL\.md 第 10 步/);
+    }
+  );
+});
+
+testCase('=== TASK === form: done with a close-self Bash command allows', () => {
+  withFixture(
+    {
+      phase: 'done',
+      lines: [
+        taskLine('19 --auto-land'),
+        assistantTextLine('收尾'),
+        bashLine(
+          `${skillDir}/scripts/close-self.sh --remove-worktree /tmp/wt/spec-19`
+        ),
+      ],
+    },
+    fixture => {
+      assertAllow(runHook(stopPayload(fixture.transcriptPath, fixture.cwd), fixture.env));
+    }
+  );
+});
+
+testCase('=== TASK === form: implement phase ending with a question blocks', () => {
+  withFixture(
+    {
+      phase: 'implement',
+      lines: [taskLine('19 --auto-land'), assistantTextLine('要不要继续？')],
+    },
+    fixture => {
+      const reason = parseBlock(
+        runHook(stopPayload(fixture.transcriptPath, fixture.cwd), fixture.env)
+      );
+      assert.match(reason, /无人值守 Run 没人会回复/);
+    }
+  );
+});
+
+testCase('=== TASK === form without --auto-land allows even when done and not closed', () => {
+  withFixture(
+    {
+      phase: 'done',
+      lines: [taskLine('19 --parallel 2'), assistantTextLine('可以 /clear 了')],
+    },
+    fixture => {
+      assertAllow(runHook(stopPayload(fixture.transcriptPath, fixture.cwd), fixture.env));
     }
   );
 });

@@ -33,7 +33,7 @@ matcher 必须包含 `Bash`，flash 模式才能识别 `sed -i`、heredoc、`>` 
 
 对所有会话生效：不论是否 `FLASH_ORCHESTRATOR`、是否子代理，也不受 `allow-direct-edit` 例外和 `DELEGATE_GUARD_DISABLE` 影响，hook 都会拒绝在 Bash 里直接调用 `codex exec`。判定方式是先复用现有的 shell 分词（去掉 heredoc 正文），再看某个命令位置（命令开头，或 `|` `;` `&&` `||` `&` `(` 之后，跳过 `env`、`VAR=val` 前缀、`nohup`、`timeout <n>`、`time`）的可执行名 basename 是否为 `codex`，且其后的第一个非选项参数是否为 `exec`（例如 `codex exec …`、`codex -C dir exec …`；只认 `exec`，不认 `codex e`）。
 
-不拦 `codex --version`、`codex login status`、`codex-worker.sh`、`pi-worker.sh`、`selftest-codex.sh`，也不把字符串或 heredoc 正文里出现的 `codex` 字样当成命令。拒绝理由是裸 `codex exec` 没有卡死检测（2026-11-22 曾挂 10 小时）：外部 worker 一律通过 `~/.claude/skills/implement-spec-split/scripts/codex-worker.sh` 启动，会话内实现者直接自己写代码。hook 内部异常仍 fail open。
+不拦 `codex --version`、`codex login status`、`codex-worker.sh`、`selftest-codex.sh`，也不把字符串或 heredoc 正文里出现的 `codex` 字样当成命令。拒绝理由是裸 `codex exec` 没有卡死检测（2026-11-22 曾挂 10 小时）：headless 的 codex worker 一律通过 `~/.claude/skills/implement-spec-split/scripts/codex-worker.sh` 启动；票的实现由 `scripts/stage-dispatch.sh` 派发的 Orca worker 在自己的工作区里写（见下文「精简启动的 worker」），规格会话自己不写代码。hook 内部异常仍 fail open。
 
 ## 配置
 
@@ -48,7 +48,7 @@ matcher 必须包含 `Bash`，flash 模式才能识别 `sed -i`、heredoc、`>` 
 
 ## flash 模式
 
-设置 `FLASH_ORCHESTRATOR=1` 表示当前会话是 flash Orchestrator。此时源码文件（按常见源码扩展名判定；无扩展名和文档、配置、日志等非源码扩展名放行）的 `Edit`、`Write`、`NotebookEdit` 一律拦截，行数阈值等效为 0；常见的 Bash 源码写入也会拦截，包括 `sed -i`、`perl -i`、heredoc 加重定向、`>` / `>>` 重定向和 `tee`。子代理的 hook payload 带非空 `agent_id` 时放行其源码写入。Bash 只拦截目标是源码文件的写入；fd 重定向（如 `2>&1`）和 heredoc 正文里的 `>` 不当成写入目标。拒绝提示为「flash 会话不写源码：派 glm-5.4 子代理（或 codex worker）」。
+设置 `FLASH_ORCHESTRATOR=1` 表示当前会话是 flash Orchestrator。此时源码文件（按常见源码扩展名判定；无扩展名和文档、配置、日志等非源码扩展名放行）的 `Edit`、`Write`、`NotebookEdit` 一律拦截，行数阈值等效为 0；常见的 Bash 源码写入也会拦截，包括 `sed -i`、`perl -i`、heredoc 加重定向、`>` / `>>` 重定向和 `tee`。主线程和子代理一视同仁：hook payload 带非空 `agent_id`（子代理）也不再放行源码写入——规格 #26 起实现固定经派发模块（`scripts/stage-dispatch.sh`）由 Orca worker 在自己的工作区里写，会话内子代理这条路径由 `subagent-guard` 另行拦住（见下文「subagent-guard hook」）。Bash 只拦截目标是源码文件的写入；fd 重定向（如 `2>&1`）和 heredoc 正文里的 `>` 不当成写入目标。拒绝提示为「flash 会话不写源码：实现、fix、冲突解算经派发模块按「实现」路由派发（`<skill dir>/scripts/stage-dispatch.sh dispatch --stage implementation --brief <file>`，见 SKILL.md），审查走 `scripts/opus-review.sh`。」——与 subagent-guard 的提示指向同两条路；提示不再让人派 glm-5.4 子代理或直接跑 codex worker，那两条在 flash 会话里分别被 subagent-guard 和 `codex-worker.sh` 的拒跑再拦一次。
 
 flash 模式优先于 `DELEGATE_GUARD_DISABLE=1`、项目配置和 `allow-direct-edit` 例外开关；两者同时设置时仍会拦截源码。文档、配置、记忆等非源码文件照常放行。没有 `FLASH_ORCHESTRATOR=1` 时，阈值、例外开关和 Bash 放行行为都与原模式一致。
 
@@ -74,6 +74,61 @@ flash 模式优先于 `DELEGATE_GUARD_DISABLE=1`、项目配置和 `allow-direct
 如需临时允许主模型直接修改源码，可在 `<home>/.claude/state/allow-direct-edit` 写入未来的 ISO 8601 时间或 epoch 秒，例如 `2026-01-01T00:00:00Z`。时间过期或内容无法解析时例外无效。
 
 flash 模式不使用这个例外开关：flash 会话一行源码都不写（见 [ADR 0001](../docs/adr/0001-cheap-orchestrator-default-deny.md)）。
+
+## 精简启动的 worker（规格 #26）
+
+implement-spec-split 派发实现类 worker（票的实现、fix）时默认精简启动（GLOSSARY.md「Lean start (精简启动)」）：`scripts/stage-dispatch.sh` 用「实现」路由的启动器加 `--bare --append-system-prompt-file <精简规则文件> [--mcp-config …]` 开一个终端，再用 `worker-start --terminal` 收编。`--bare` 不加载 CLAUDE.md、技能、插件和 **hooks**——包括本目录的 delegate-guard（flash 模式的源码拦截）、subagent-guard（flash 主线程的子代理拦截）、land-push-guard、unattended-ask-guard、unattended-stop-guard。所以：
+
+- 对精简启动的 worker，这些 hook 的硬拦不存在。原来靠 hook 挡住的事（flash 会话不写源码、没持落地锁不许 push、无人值守不问人、收尾前必须 close-self）降为**提示词**：写在 Brief（`find-next/templates/brief-implement.md` 的「要求」）和精简规则文件（`templates/lean-rules.md`，人工票 #39 落地）里。
+- 兜底不在 hook，在**合入前的脚本门和审查**：`scripts/merge-ticket.sh` 合入前检查票分支有新提交、票工作区和集成工作区都干净——任何一项不满足就不合（退出 2，测试也不跑）；合入后跑测试命令，测试红时 merge commit 保留、退出 4，由 fix 角色在它上面接着修；第 7 步审查照旧。worker 也没有 push 的机会：合入、落地都由规格会话做，Brief 明确写「不合并、不 push」。
+- merge 角色（解冲突）永远不精简启动——它在集成分支上干活，需要 CLAUDE.md 和 hooks 都在——所以 land-push-guard 等对它照常生效。
+- 没有精简规则文件时派发模块退回普通启动，hooks 照常加载；`ISS_DISPATCH_BARE=0` 也可关掉精简启动。每次派发是哪种启动记在 sidecar 的 `bare` / `bare_note`。
+- 规格会话本身不是精简启动的，上面几个 hook 对它照常生效：它一行源码不写（flash 模式）、push 前必须持落地锁、无人值守时不问人。
+
+`--bare` 在 TUI + 收编形态下是否可用、第二个 `--append-system-prompt-file` 是叠加还是覆盖、`--bare` 配非空 `--mcp-config`，是 #39 的验证项；结论出来前，本节按「精简 worker 身上这些 hook 不存在」理解。
+
+## subagent-guard hook
+
+`subagent-guard.js` 是 Claude Code 的 `PreToolUse` hook，用于在 flash 编排会话的主线程里拦住「用 Agent 工具开能写代码的子代理」。规格 #26 起票的实现、fix 和冲突解算固定经派发模块（`scripts/stage-dispatch.sh`）按「实现」路由派发，审查走 `scripts/opus-review.sh`，不再有会话内子代理这条路径——这样实现阶段的模型才切得掉，也不必为每个子代理加载全套 CLAUDE.md。提示词管不住 flash 自己开 `general-purpose` 子代理去实现或审查，和「一行源码不写」一样靠 hook 硬拦。
+
+判定方式：hook 只处理 `tool_name` 为 `Agent`（旧版 Claude Code 叫 `Task`，两个都认）的调用，其他工具直接无输出退出。以下条件同时满足才拒绝：
+
+- `FLASH_ORCHESTRATOR=1`（值不是 `1` 的不算）；
+- payload 没有非空 `agent_id`，即调用来自主线程。子代理继承 `FLASH_ORCHESTRATOR=1`，但它的 payload 带 `agent_id`，所以 flash 子代理再开的子代理放行；
+- `tool_input.subagent_type` 不在只读白名单里。白名单是 `Explore`、`Plan`、`claude-code-guide` 三个，精确匹配、区分大小写；`subagent_type` 缺省或为空按 Claude Code 的默认值 `general-purpose` 算，不在白名单里，照样拒绝（白名单默认禁止，漏列的拒绝而不是放行）。
+
+其余一律放行：非 flash 会话（含 claude-glm 会话和 CC 原生订阅会话）、flash 子代理、只读子代理。坏 JSON 或 hook 内部异常 fail open（不输出、退出 0）；`tool_input` 缺失时 `subagent_type` 为空，按上一条的默认值 `general-purpose` 拒绝，不放行。拒绝提示为「flash 会话不派会写代码的子代理：实现、fix、冲突解算经派发模块按「实现」路由派发（`<skill dir>/scripts/stage-dispatch.sh dispatch --stage implementation --brief <file>`，见 SKILL.md），审查走 `scripts/opus-review.sh`。只读子代理（Explore、Plan、claude-code-guide）照常可用。」，直接把派发命令和审查脚本指给模型。
+
+和 delegate-guard flash 模式的关系：delegate-guard 拦的是会话内「写源码」这个动作（主线程和子代理都拦），本 hook 拦的是「开子代理」这个动作（只拦主线程）；两个各自注册、互不替代。
+
+注册：在 `~/.claude/settings.json` 的 `hooks.PreToolUse` 数组里**追加**一项（不要覆盖已有的 hook）。它只在 `FLASH_ORCHESTRATOR=1` 时生效，注册在用户级对官方会话和 claude-glm 没有影响：
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ~/.claude/skills/implement-spec-split/hooks/subagent-guard.js",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+macOS / Linux 用上面的绝对路径；Windows 把路径换成 `node C:/Users/<you>/.claude/skills/implement-spec-split/hooks/subagent-guard.js`。claude-flash 和 openclaude 是用 `--settings` 叠加启动的，用户级 `~/.claude/settings.json` 照样生效，不需要在各自的 settings 里重复注册。**这一步是用户手工步骤**：仓库只带脚本和上面这段配置，不改 `~/.claude/settings.json`；没注册之前 hook 不生效，flash 主线程仍能开会话内子代理。精简启动的实现 worker 不加载本 hook（见上节），派发出去的 worker 本来就不该再派发，这条由 Brief 的「不再派发」条款兜底。
+
+测试命令：
+
+```text
+node hooks/test-subagent-guard.js
+```
 
 ## ask-sanitize hook
 
@@ -110,7 +165,9 @@ node hooks/test-ask-sanitize.js
 
 `unattended-ask-guard.js` 是 Claude Code 的 `PreToolUse` hook，用于在无人值守的 `/implement-spec-split --auto-land` 会话（含其子代理）里拒绝 `AskUserQuestion`：没人会来回答，提问只会把会话卡到第二天有人来答。提示词已经要求不问人，这个 hook 是不依赖模型理解提示词的硬兜底。
 
-判定方式：hook 读取 payload 里的 `transcript_path`（JSONL，每行一个 JSON），按块流式读取，只对包含 `/implement-spec-split</command-name>` 的行做 JSON 解析，取**最后一次** `/implement-spec-split` 调用的 `<command-args>`，按空白切分；其中恰好有 `--auto-land` 这个词就拒绝，`--auto-landing` 之类不算。以最后一次调用为准：先带后不带放行，先不带后带拒绝。子代理 payload 的 `transcript_path` 可能指向主会话 transcript，规则相同，不特判 `agent_id`。hook 只处理 `tool_name === "AskUserQuestion"`，其他工具直接无输出退出；`transcript_path` 缺失、不可读、某行 JSON 解析失败或 hook 内部异常都 fail open（不输出、退出 0）。
+判定方式：hook 读取 payload 里的 `transcript_path`（JSONL，每行一个 JSON），按块流式读取，只对包含 `/implement-spec-split</command-name>` 或 `=== TASK ===` 的行做 JSON 解析，取**最后一次** `/implement-spec-split` 调用的参数（两种形态见下一段），按空白切分；其中恰好有 `--auto-land` 这个词就拒绝，`--auto-landing` 之类不算。以最后一次调用为准：先带后不带放行，先不带后带拒绝。子代理 payload 的 `transcript_path` 可能指向主会话 transcript，规则相同，不特判 `agent_id`。hook 只处理 `tool_name === "AskUserQuestion"`，其他工具直接无输出退出；`transcript_path` 缺失、不可读、某行 JSON 解析失败或 hook 内部异常都 fail open（不输出、退出 0）。
+
+命令的两种形态（三个读 transcript 的守卫共用，`hooks/lib-transcript.js`）：人敲斜杠命令时，user 消息带 `<command-name>/implement-spec-split</command-name>` 和 `<command-args>…</command-args>`；Orca `worker-start --spec-file` 起的规格会话（find-next 的 launch-wave 派的就是这种）没有这些标签——命令行在 Orca 前言 `=== TASK ===` 之后，CLI 不展开句中的斜杠命令，是模型自己走 Skill 工具（`docs/orca-smoke-2026-11-27.md` G 项）。守卫把「独占一行的 `=== TASK ===` 之后、第一条非空行以 `/implement-spec-split` 开头」也算一次调用，参数取该行其余部分；标记夹在句中、标记后第一行不是命令、形似的命令名（`/implement-spec-split-foo`）都不算。没有这一条，无人值守的规格会话里三个守卫都不生效（规格 #26 US18，MAINTAINING 第 51 条）。形态按实测记录写、真机 transcript 没见过，归冒烟票 #50 校准一次。
 
 逃生口：环境变量 `UNATTENDED_ASK_GUARD_DISABLE=1` 时直接放行。
 
@@ -147,13 +204,13 @@ node hooks/test-unattended-ask-guard.js
 
 `unattended-stop-guard.js` 是 Claude Code 的 `Stop` hook，是无人值守 `/implement-spec-split --auto-land` 会话的最后一道兜底：会话要结束时，它检查这个 Run 是不是真的收尾了。起因是 2026-11-20 至 11-25 的排查：19 个无人值守 Run 里调用过 `close-self.sh` 的是 0 个，其中 10 个以「可以 /clear 了」结尾空转着不关；spec-18 还有一次用纯文本发问后停住。`unattended-ask-guard` 只拦得住 `AskUserQuestion` 工具，拦不住纯文本提问和「不自关就结束」。
 
-生效条件：与 `unattended-ask-guard` 相同。hook 读取 payload 的 `transcript_path`，取**最后一次** `/implement-spec-split` 调用的 `<command-args>`，其中恰好有 `--auto-land` 这个词才生效；其他会话一律放行。
+生效条件：与 `unattended-ask-guard` 相同。hook 读取 payload 里的 `transcript_path`，取**最后一次** `/implement-spec-split` 调用的参数（`<command-args>`，或 `=== TASK ===` 之后的命令行，见 unattended-ask-guard 的「两种形态」），其中恰好有 `--auto-land` 这个词才生效；其他会话一律放行。
 
 Run 状态：从 command-args 取第一个数字参数作为 `<n>`，再从 `ISS_STATE_DIR`（默认 `~/.cache/implement-spec-split`）下的 `runs/<repo>-<n>-*/run.json` 取 `phase`。`<repo>` 依次尝试 payload `cwd` 所在 git 仓库的 origin 仓库名（`<name>` 部分）、worktree 路径 `.../workspaces/<repo>/spec-<n>` 里的 `<repo>`，以及主 checkout 的目录名（SKILL.md 告诉 `run-phase.sh` 用的那个）；取 `run.json` mtime 最新的匹配目录。找不到 `run.json` 时只执行规则 B。
 
 两条规则：
 
-- **规则 A（自关）**：`phase` 为 `done`、`waiting` 或 `parked`，且 transcript 里没有任何 Bash tool_use 的 command 包含 `close-self.sh` 时，block。理由提醒先确认落地/停车报告评论已发出，最后一条命令运行 `<skill dir>/scripts/close-self.sh`（落地后加 `--remove-worktree <集成 worktree>`，停车不加），见 SKILL.md 第 10 步。
+- **规则 A（自关）**：`phase` 为 `done`、`waiting` 或 `parked`，且 transcript 里没有任何 Bash tool_use 的 command 包含 `close-self.sh` 时，block。理由提醒先确认落地/停车报告评论已发出，最后一条命令运行 `<skill dir>/scripts/close-self.sh --run-dir <Spec Run root>`（落地后加 `--remove-worktree <集成 worktree>`，停车不加；`--run-dir` 两种情况都带，不带它不释放票工作区），见 SKILL.md 第 10 步。
 - **规则 B（问人）**：`phase` 不是 `parked`、`done`、`waiting`，且最后一条 assistant 消息的文本（取最后一个 text block 的最后 300 个字符）以 `？` / `?` 结尾，或包含 `请确认`、`等你`、`需要你`、`要不要`、`是否继续`、`你来决定`、`请选择`、`回复我` 时，block。理由告诉模型：可自动采纳的按推荐做，合并冲突交 merger + Opus 审查，真要人决定的写停车报告后停车并自关；只是在等后台任务就继续等通知，不要问人。
 
 `phase` 为 `split`、`implement`、`integrate`、`review`、`land` 且最后一条消息不是在问人时放行，所以等后台任务通知时正常结束一轮不会被拦。
@@ -194,7 +251,7 @@ node hooks/test-unattended-stop-guard.js
 
 `land-push-guard.js` 是 Claude Code 的 `PreToolUse` hook，用于在会话里跑过 `/implement-spec-split` 之后拦住「没持本仓库 land 锁就 push 默认分支」的操作。起因是 2026-11-25 proxy-hub spec-22：落地时执行了 `lock.sh acquire land --scope repo`，实际返回 2（spec-19 正占着锁），但命令被包在一层 `echo` 里，外层退出码变成 0，被误读成拿到了锁，于是在没持锁的情况下执行了 `git push origin HEAD:main`。提示词管不住这种退出码误读，所以做成 hook，直接读锁目录和 `owner.json`。
 
-生效条件：hook 读取 payload 的 `transcript_path`，只要 transcript 里出现过 `<command-name>/implement-spec-split</command-name>`（带不带 `--auto-land` 都算）就生效；其他会话（包括人手动 push）一律放行。
+生效条件：hook 读取 payload 的 `transcript_path`，只要 transcript 里出现过 `/implement-spec-split` 调用（`<command-name>/implement-spec-split</command-name>`，或 `=== TASK ===` 之后的 `/implement-spec-split` 行，见 unattended-ask-guard 的「两种形态」；带不带 `--auto-land` 都算）就生效；其他会话（包括人手动 push）一律放行。
 
 实现上把 shell 分词和命令位置识别抽到 `hooks/lib-shell.js`，transcript 扫描抽到 `hooks/lib-transcript.js`；`delegate-guard.js` 和 `unattended-ask-guard.js` 改为复用这两个模块，行为不变（各自的测试仍全绿）。
 

@@ -56,8 +56,8 @@ const GIT_TIMEOUT_MS = 5000;
 function selfCloseReason(phase) {
   return (
     `Run 已结束（phase=${phase}）：先确认落地/停车报告评论已发出，` +
-    `然后最后一条命令运行 \`${SKILL_DIR}/scripts/${CLOSE_SELF_SCRIPT}\`` +
-    '（落地后加 `--remove-worktree <集成 worktree>`，停车不加），见 SKILL.md 第 10 步。'
+    `然后最后一条命令运行 \`${SKILL_DIR}/scripts/${CLOSE_SELF_SCRIPT} --run-dir <Spec Run root>\`` +
+    '（落地后加 `--remove-worktree <集成 worktree>`，停车不加；`--run-dir` 两种情况都带，不带它不释放票工作区），见 SKILL.md 第 10 步。'
   );
 }
 

@@ -15,10 +15,10 @@ If you only want the everyday division of labour and do not need the spec workfl
 
 ```
 Stage 0 common foundation
- ├─ Stage 1 parallel spec implementation (works with --impl sonnet)
- │     └─ with Stage 2 added, --impl codex works too
+ ├─ Stage 1 parallel spec implementation (Ticket workers are Orca workers on the 实现 route)
+ │     └─ with Stage 2 added, the headless exploration before a Spec works too
  └─ Stage 2 codex backend
-       └─ Stage 3 global division (CLAUDE.md rules + delegate-guard / unattended-ask-guard / unattended-stop-guard / land-push-guard hook)
+       └─ Stage 3 global division (CLAUDE.md rules + delegate-guard / unattended-ask-guard / unattended-stop-guard / land-push-guard / subagent-guard hook)
 ```
 
 ---
@@ -43,11 +43,11 @@ This division of labour is optimized for one specific situation: **Claude quota 
 
 | Item | Status |
 |---|---|
-| Platform | Windows 11 + Git Bash: fully verified, including real GLM end to end. Ubuntu 24.04: all model-free self-tests pass (`selftest-codex.sh --only V1`, hook tests, doctor tests), but it has not been run with a real codex and GLM. macOS 27 (stock bash 3.2): fully verified with codex-cli 0.164.0, including real GLM end to end (V3, 2026-10-24). Known limitation: the alternate pi backend (`pi-worker.sh`) only kills the root process on Linux/macOS; use the codex backend on those platforms |
+| Platform | Windows 11 + Git Bash: fully verified, including real GLM end to end. Ubuntu 24.04: all model-free self-tests pass (`selftest-codex.sh --only V1`, hook tests, doctor tests), but it has not been run with a real codex and GLM. macOS 27 (stock bash 3.2): fully verified with codex-cli 0.164.0, including real GLM end to end (V3, 2026-10-24) |
 | codex-cli | 0.163.0, 0.164.0. Other versions are unverified; after changing versions, first run `scripts/selftest-codex.sh --only V1` |
 | Model | GLM-5.4, through a local proxy |
-| Stage 1 | `--impl codex` and `--impl pi` verified end-to-end in a scratch repo; `--impl sonnet` unverified |
-| find-next | Local markdown tracker: script unit tests pass, `--worker codex` run once on a real repo (2026-11-01). The GitHub path and `--worker pi` not yet run |
+| Stage 1 | The former `codex` wrapper backend was verified end-to-end in a scratch repo; since 规格 #26 Ticket workers are dispatched as Orca workers, and that path awaits the real-machine smoke ticket |
+| find-next | Local markdown tracker: script unit tests pass, `--worker codex` run once on a real repo (2026-11-01). The GitHub path not yet run |
 | Stage 3 | Hook unit tests and a local smoke test pass; rule adherence in real sessions is still being validated |
 | Install commands | Plugin install commands are given using the marketplace name installed locally (`mattpocock`); `npm i -g @openai/codex` is codex's official installation method. Neither has been re-run on a fresh machine |
 
@@ -77,7 +77,7 @@ After installing any stage, you can run `scripts/doctor.sh` to check it.
 
 ## Stage 1: parallel implementation by spec (`/implement-spec-split`)
 
-This is a modified version of [Matt Pocock's `implement-spec`](https://github.com/mattpocock/skills): the orchestration logic is the same, but each role specifies its model separately. The implementing roles (exploration / implementer / merger / fix) use a cheaper model, while the two code-review subagents are fixed to Opus.
+This is a modified version of [Matt Pocock's `implement-spec`](https://github.com/mattpocock/skills): the orchestration logic is the same, but each role specifies its model separately. The implementing roles (exploration / implementer / fix; merges are done by a script first and a worker only on a conflict) use a cheaper model, all dispatched by the Spec session as Orca workers through `scripts/stage-dispatch.sh`, with the launcher, model and reasoning effort taken from the Stage route table; the two code-review subagents are fixed to Opus.
 
 **Install**
 
@@ -90,6 +90,8 @@ This is a modified version of [Matt Pocock's `implement-spec`](https://github.co
 
 2. Run `/setup-matt-pocock-skills` once in the **target project**. It generates `docs/agents/issue-tracker.md` (which tells the skill where issues live and how to query them).
 
+3. Orca, and on PATH the launcher the 实现 route names (`claude-glm` by default, see `scripts/stage-route.sh`; change routes with `/grill-router`): a Ticket's implementing worker is an Orca worker, and without Orca none can be dispatched. The headless exploration before a Spec starts runs `codex-worker.sh` and needs Stage 2.
+
 **Prepare a spec**
 
 A spec is a parent GitHub issue. Its child issues are tickets, and dependencies between tickets determine which can run in parallel. You can generate it with one of Matt Pocock's planning skills or create it manually.
@@ -97,27 +99,38 @@ A spec is a parent GitHub issue. Its child issues are tickets, and dependencies 
 **Use**
 
 ```text
-/implement-spec-split                      # No argument: automatically list unfinished specs for you to choose
+/implement-spec-split                      # No argument: tells you to run /find-next --batch, which gives the order and the commands
 /implement-spec-split #12                  # Specify a spec
-/implement-spec-split #12                  # No --impl: codex in an official-subscription session, agent in a GLM session (DELEGATE_GUARD_DISABLE=1)
-/implement-spec-split #12 --impl sonnet    # Implementing roles use Sonnet subagents
-/implement-spec-split #12 --impl codex     # Implementing roles use codex workers (requires Stage 2)
-/implement-spec-split #12 --impl codex --parallel 3
+/implement-spec-split #12 --parallel 3     # At most 3 Ticket workers of this Run at once
 ```
 
 **How parallelism happens**
 
-- The skill first reads the spec and tickets, then builds a task graph. Tickets whose dependencies are all satisfied form the "frontier"; each ticket in the frontier gets its own worktree and is implemented in parallel.
-- Merges happen serially: at any one time, only one merger merges completed tickets into the integration branch.
-- Concurrency limit: with `--impl sonnet`, it is governed by Claude subagent concurrency; with `--impl codex/pi`, it is governed by `GLM_MAX_PARALLEL` (default 2), and `--parallel n` overrides it for the current run only. A value of 2-3 is recommended, with 4 at most during quiet hours: Zhipu rate-limits at peak times, and any worker that hits a 429 stops the whole run to ask you.
+- The skill first reads the spec and tickets, then builds a task graph. Tickets whose dependencies are all satisfied form the "frontier"; each ticket in the frontier gets its own child worktree (under the Spec's) and is implemented in parallel.
+- Merges happen serially, and a script goes first: `scripts/merge-ticket.sh` merges a ticket into the integration branch and runs the tests when there is no conflict; a worker is dispatched only to resolve a conflict.
+- Concurrency limit: governed by `GLM_MAX_PARALLEL` (default 2), and `--parallel n` overrides it for the current run only. A value of 2-3 is recommended, with 4 at most during quiet hours: Zhipu rate-limits at peak times, and any worker that hits a 429 stops the whole run to ask you.
 - After each ticket is complete, it must pass the verification gate and two Opus reviews (Standards and Spec) before it counts as done.
-- Several specs at once: open one session per Orca worktree of the same clone and run the skill in each. Without a spec number, the skill lists the candidates with their state (free / in progress / interrupted?) and lets you choose; once taken, it links the session's worktree to that issue and retitles the tab `spec-<n> …`. Choosing an in-progress or interrupted spec continues the unfinished work (Recovery). `--parallel` counts per run: the workers of parallel runs add up and share one GLM quota.
+- Several specs at once: open one session per Orca worktree of the same clone and run the skill in each. Without a spec number the skill does not scan or list candidates: it says "run `/find-next --batch` first; it gives the build order and the command to type in each worktree" and stops, since what to build is decided in one place (find-next) and several worktrees started at once never scan and pick in parallel. With a number, it links the session's worktree to that issue and retitles the tab `spec-<n> …`. An in-progress or interrupted spec is listed under "resume first" in find-next's build order with its command; running that continues the unfinished work (Recovery). `--parallel` counts per run: the workers of parallel runs add up and share one GLM quota.
+
+**The worktree tree and taking over**
+
+- **The sidebar is one collapsible tree**, with no progress tabs (规格 #26): main session → Spec worktree `spec-<n>` (branch `spec-<n>` off `origin/main`; find-next's launch-wave creates it as a child of the main session's worktree) → Ticket worktree `spec-<n>-t<m>` (branch `spec-<n>-t<m>` off the integration branch `spec-<n>`; the dispatch module creates it as a child of the Spec worktree), each Ticket's worker in a terminal titled `spec-<n> t<m>`. The fix and conflict roles run in the Spec worktree itself. Which Spec a Ticket belongs to and how far it has got is what the sidebar shows.
+- **Scripts remove worktrees**: once a Ticket is merged, `scripts/stage-dispatch.sh release` removes its worktree with its branch; once the Spec has landed, `scripts/close-self.sh` removes the remaining Ticket worktrees first and then the Spec worktree; a parked Spec keeps its worktree; the keeper sweeps abandoned ones every round (`scripts/sweep-worktrees.sh`: only those clean and merged into origin; a worktree with commits that never landed is never swept and takes a person). Do not remove a Spec worktree by hand while its Ticket worktrees exist: Orca neither refuses nor cascades, it orphans them.
+- **One Orca Run per Spec**: the Spec session creates its own at step 0 with `orca orchestration run-create` (its Ticket workers report into it), and the `launch-wave.sh --apply` that started the wave created another one for that wave's Spec sessions. Closing the main session, the Spec session or any coordinating terminal stops nothing below: the workers keep running and their `worker_done` mail keeps landing in the Run. To take over in a new terminal:
+
+  ```bash
+  cat ~/.cache/implement-spec-split/runs/<repo>-<n>-<time>/orca-run-id        # one Spec's Run (that Spec's newest run directory)
+  grep '"run"' ~/.cache/implement-spec-split/launch/<owner>__<repo>.json       # one wave's Run (the launch state)
+  orca orchestration run-use --id <run id> --json
+  ```
+
+  After `run-use` that terminal is the Run's coordinator again (`orca orchestration run-current` names it) and `stage-dispatch.sh` `dispatch` / `wait` / `release` work from it; a Spec session that was replaced continues under the skill's Recovery. A takeover re-dispatches nothing: the workers never stopped.
 
 Change defaults in the "Config" section of `SKILL.md`.
 
 **Verify**
 
-Run `/implement-spec-split <spec> --impl sonnet` once in a scratch repository that has a spec, and observe: tickets in the frontier start in parallel, merges are serial, and two review reports are produced at the end.
+Run `/implement-spec-split <spec>` once in a scratch repository that has a spec, and observe: tickets in the frontier start in parallel, each in its own child worktree; merges are serial and go through the script first; two review reports are produced at the end. (The dispatched-worker path of 规格 #26 is verified by that spec's real-machine smoke ticket.)
 
 ---
 
@@ -140,7 +153,7 @@ ln -s ~/.claude/skills/implement-spec-split/find-next ~/.claude/skills/find-next
 ln -s ~/.claude/skills/implement-spec-split/grill-router ~/.claude/skills/grill-router
 ```
 
-**Use**: `/find-next [--worker codex|pi|self]`, or just ask "what's next". For the whole picture use `/find-next --list` (or ask "what is left"): it lists every to-do (in progress, needs tickets, needs a spec, open decisions, unfinished bookkeeping, loose issues) without a worker. To write every missing spec at once use `/find-next --batch`: codex workers draft a spec plus its tickets per group, you confirm once, then they are published and you get a start order for `/implement-spec-split`.
+**Use**: `/find-next [--worker codex|self]`, or just ask "what's next". For the whole picture use `/find-next --list` (or ask "what is left"): it lists every to-do (in progress, needs tickets, needs a spec, open decisions, unfinished bookkeeping, loose issues) without a worker. To write every missing spec at once use `/find-next --batch`: codex workers draft a spec plus its tickets per group, you confirm once, then they are published and you get a start order for `/implement-spec-split`.
 
 - Default `codex`: a script does the mechanical scan (`find-next/scripts/scan.py` for local markdown trackers, `scripts/pipeline-status.sh` for GitHub), and a read-only codex worker does the judgment; the session reads only its conclusion of at most 15 lines. Needs Stage 2.
 - `self`: the session judges on its own, no codex needed.
@@ -150,7 +163,7 @@ Read-only throughout: no ticket edits, no claims. Design rationale: `MAINTAINING
 
 ## Stage 2: codex backend (GLM)
 
-This makes `codex exec` do work with GLM. Both Stage 1's `--impl codex` and Stage 3's everyday division of labour depend on it.
+This makes `codex exec` do work with GLM. Both Stage 1's headless exploration and Stage 3's everyday division of labour depend on it.
 
 **Install**
 
@@ -219,6 +232,7 @@ This makes everyday sessions in **all projects** follow this division: Opus hand
 | unattended-ask-guard hook | `~/.claude/settings.json` | Deny `AskUserQuestion` in unattended `--auto-land` runs, without relying on the model remembering not to ask |
 | unattended-stop-guard hook | `~/.claude/settings.json` | Before an unattended `--auto-land` run ends, deny ending without self-closing and deny ending on a question to the user |
 | land-push-guard hook | `~/.claude/settings.json` | After a session has run `/implement-spec-split`, deny a push to the default branch unless this session holds the repo's land lock |
+| subagent-guard hook | `~/.claude/settings.json` | In the main thread of a flash session, deny opening a code-writing subagent with the Agent tool (implementation, fix and conflict resolution are dispatched through the dispatch module) |
 
 **Install**
 
@@ -301,6 +315,29 @@ This makes everyday sessions in **all projects** follow this division: Opus hand
 
    On macOS / Linux, use the absolute path as well. Like `unattended-ask-guard`, it decides from whether the last `/implement-spec-split` invocation in the transcript carries `--auto-land`; set `UNATTENDED_STOP_GUARD_DISABLE=1` to turn it off temporarily. See [hooks/README.md](../hooks/README.md).
 
+   **Register subagent-guard as well** (since 规格 #26): in the main thread of a flash session (`FLASH_ORCHESTRATOR=1`) this hook denies opening a code-writing subagent with the Agent tool — a Ticket's implementation, fix and conflict resolution are dispatched to Orca workers through `scripts/stage-dispatch.sh` on the 实现 route, and review goes through `scripts/opus-review.sh`; the prompt alone does not stop flash from opening a `general-purpose` subagent, so, like "not one line of source itself", it is enforced by a hook. Read-only subagents (`Explore`, `Plan`, `claude-code-guide`) are allowed as before; non-flash sessions are not affected. In `~/.claude/settings.json`, **append** one entry to the `hooks.PreToolUse` array (do not replace the entries delegate-guard, unattended-ask-guard and land-push-guard already have):
+
+   ```json
+   {
+     "hooks": {
+       "PreToolUse": [
+         {
+           "matcher": "Agent|Task",
+           "hooks": [
+             {
+               "type": "command",
+               "command": "node C:/Users/<you>/.claude/skills/implement-spec-split/hooks/subagent-guard.js",
+               "timeout": 5
+             }
+           ]
+         }
+       ]
+     }
+   }
+   ```
+
+   On macOS / Linux, use the absolute path as well. It acts only when `FLASH_ORCHESTRATOR=1` is set, so registering it at the user level affects neither the official session nor claude-glm. See [hooks/README.md](../hooks/README.md).
+
 3. Start a new Claude Code session so both the hook and the rules take full effect.
 
 **Hook decision rules**
@@ -328,16 +365,19 @@ This makes everyday sessions in **all projects** follow this division: Opus hand
 **Verify**
 
 ```bash
-# 1. Hook unit tests: should print Summary: 46 passed, 0 failed
+# 1. Hook unit tests: should print Summary: 60 passed, 0 failed
 node ~/.claude/skills/implement-spec-split/hooks/test-delegate-guard.js
 
-# 2. land-push-guard unit tests: should print Summary: 24 passed, 0 failed
+# 2. land-push-guard unit tests: should print Summary: 27 passed, 0 failed
 node ~/.claude/skills/implement-spec-split/hooks/test-land-push-guard.js
 
-# 3. unattended-stop-guard unit tests: should print Summary: 37 passed, 0 failed
+# 3. unattended-stop-guard unit tests: should print Summary: 41 passed, 0 failed
 node ~/.claude/skills/implement-spec-split/hooks/test-unattended-stop-guard.js
 
-# 4. Smoke test: should print a JSON object whose permissionDecision is deny
+# 4. subagent-guard unit tests: should print Summary: 14 passed, 0 failed
+node ~/.claude/skills/implement-spec-split/hooks/test-subagent-guard.js
+
+# 5. Smoke test: should print a JSON object whose permissionDecision is deny
 node -e 'console.log(JSON.stringify({tool_name:"Write",tool_input:{file_path:"C:/x/a.py",content:"l\n".repeat(15)}}))' \
   | node ~/.claude/skills/implement-spec-split/hooks/delegate-guard.js
 ```
@@ -370,7 +410,7 @@ Run records are stored in `~/.cache/codex-runs/<repository>-<time>-<task>/`, con
 
 ## Stage 4: flash mode (cheap Orchestrator)
 
-Everyday scheduling spends no subscription quota: the main session (Orchestrator) runs on Zhipu `glm-5.3-flash` and only executes and relays within a whitelist; source changes and bulk reading go to glm-5.4 subagents; every judgment call (review, root cause, trade-offs, landability, stop-or-go) leaves the session for the official-subscription Opus ([ADR 0001](adr/0001-cheap-orchestrator-default-deny.md)). This stage targets mini6 (macOS) only.
+Everyday scheduling spends no subscription quota: the main session (Orchestrator) runs on Zhipu `glm-5.3-flash` and only executes and relays within a whitelist; source changes and bulk reading are dispatched by the Spec session through `scripts/stage-dispatch.sh` on the Stage route table (实现 / 调研起草) to glm-5.4 workers that work in their own worktrees (since 规格 #26 there are no in-session subagents for this: the hook denies them); every judgment call (review, root cause, trade-offs, landability, stop-or-go) leaves the session for the official-subscription Opus ([ADR 0001](adr/0001-cheap-orchestrator-default-deny.md)). This stage targets mini6 (macOS) only.
 
 **Prerequisites**
 
@@ -384,7 +424,7 @@ Everyday scheduling spends no subscription quota: the main session (Orchestrator
 
 **Starting a flash main session**
 
-- Run `claude-flash` in a terminal (it sets `FLASH_ORCHESTRATOR=1` and injects flash-only settings and a system prompt: the whitelist, judgments go to Opus, source changes go to subagents; the official sessions' Opus/codex division rules are excluded and the codex plugin is disabled).
+- Run `claude-flash` in a terminal (it sets `FLASH_ORCHESTRATOR=1` and injects flash-only settings and a system prompt: the whitelist, judgments go to Opus, source changes go to workers through the dispatch module; the official sessions' Opus/codex division rules are excluded and the codex plugin is disabled).
 - Permission mode: the launcher appends `--dangerously-skip-permissions` to ordinary sessions (never twice), so flash sessions always run in bypass. Orca's OpenClaude slot does not add the flag itself; without it a session falls into auto mode, where the classifier can stall an unattended spec session and, through the Zhipu gateway, triggers a billing notice.
 - To take over the Orca slot: repoint the `/opt/homebrew/bin/openclaude` symlink at `~/ops/services/claude-flash/claude-flash` (or fill Orca Settings → Agents → OpenClaude's command override with the absolute path of `claude-flash`). The OpenClaude slot then opens flash main sessions; the original `claude-glm` stays available side by side.
 - Smoke test:
@@ -402,7 +442,7 @@ Everyday scheduling spends no subscription quota: the main session (Orchestrator
 
 **Spec sessions and Opus review**
 
-- In a flash main session, `/find-next` has launch-wave open spec sessions through the OpenClaude slot (i.e. flash) with `--impl agent` by default (glm-5.4 subagents implement), so a spec runs start to finish without subscription quota.
+- In a flash main session, `/find-next` has launch-wave open spec sessions through the OpenClaude slot (i.e. flash); the Spec session dispatches each Ticket's implementation as an Orca worker through `scripts/stage-dispatch.sh` on the 实现 route (claude-glm / glm-5.4 by default), so a spec runs start to finish without subscription quota.
 - Code review, draft review and consecutive-failure diagnosis inside a flash spec session never run in-session (an "opus" subagent in a GLM session is actually GLM — a fake review); they always call `scripts/opus-review.sh`, which runs outside the session on the review or diagnosis Stage route (official Opus by default): `--kind code` (a branch/fixed point), `--kind draft` (a spec/ticket draft), `--kind diagnose` (a failure; recommends continue / re-brief / stop). Any non-zero exit parks the run with an explanation (meanings in the script's header comment); no automatic retry, no GLM downgrade, no in-session self-review.
 
 **The Stage route table: which launcher, model and effort each Stage runs on (`/grill-router`)**
@@ -440,9 +480,9 @@ $S migrate                                                              # carry 
 
 **The flash boundary**
 
-- Whitelisted: run scripts and branch on exit codes, read short structured output, write tickets from prepared text, relay questions with prepared options, start sessions/subagents/Opus reviews, conflict-free merges and commits, and follow findings item by item.
+- Whitelisted: run scripts and branch on exit codes, read short structured output, write tickets from prepared text, relay questions with prepared options, start and finish workers through the dispatch module (`stage-dispatch.sh dispatch` / `wait` / `release`), start sessions, run Opus reviews, conflict-free merges and commits, and follow findings item by item.
 - It writes no source line, ever: the Stage 3 delegate-guard hard-blocks source writes in flash sessions (threshold 0; `~/.claude/state/allow-direct-edit` does not apply).
-- Every conclusion cites its source (a subagent result or an Opus findings path); when unsure who to hand to, default to Opus; push, tagging and releases ask you first (Design-session doc pushes excepted).
+- Every conclusion cites its source (a dispatched role's report path, the sidecar's `worker_done.report_path`, or an Opus findings path); when unsure who to hand to, default to Opus; push, tagging and releases ask you first (Design-session doc pushes excepted).
 
 **Rollback**
 
@@ -486,4 +526,4 @@ The script exits with code 1 if there is any `FAIL`; otherwise it exits with 0.
 | The hook does not intercept | Check the path in `settings.json`; open a new session; use the smoke command above to test the hook itself; check whether `allow-direct-edit` is unexpired |
 | Claude does not follow the division in a project | Project-level CLAUDE.md may contain conflicting rules; check project rules first |
 | An investigation task returns `violation` (exit code 8) | The worker modified files during a read-only investigation. Inspect `changed_paths` in `status.json` and `git diff`, then decide how to revert |
-| `--impl codex` stops mid-run to ask you | A worker hit a rate limit. Lower `--parallel`, or move to a quieter time |
+| A spec parks mid-run on quota / 429 | A worker hit a rate limit. Lower `--parallel`, or move to a quieter time |

@@ -9,31 +9,35 @@ The main agent running in the user's Claude Code session; it owns the task graph
 _Avoid_: coordinator, lead
 
 **In-session subagent**:
-A subagent spawned by the Orchestrator inside the Claude Code session, with its model chosen by name (sonnet, opus, haiku, fable).
+A subagent spawned by the Orchestrator inside the Claude Code session, with its model chosen by name (sonnet, opus, haiku, fable). Since 规格 #26 only the code-review subagents of a non-flash session are In-session subagents: the implementing roles are always Orca workers dispatched by `scripts/stage-dispatch.sh`.
 _Avoid_: native subagent, Claude subagent
 
 **External worker**:
-A separate coding-agent CLI process, a Worker harness running a Worker model, that the Orchestrator launches outside the session to do one role's work; it shares no conversation with the Orchestrator.
+A separate coding-agent CLI process, a Worker harness running a Worker model, that the Orchestrator launches outside the session to do one role's work; it shares no conversation with the Orchestrator. Since 规格 #26 that is the headless executor (`scripts/codex-worker.sh`: the step-2 exploration and find-next's research, decision and drafting workers); the implementing roles are not External workers but Orca workers the dispatch module starts on the 实现 route.
 _Avoid_: delegate, GLM subagent, headless subagent
 
+**Orca worker**:
+An executor that Orca orchestration runs for one dispatch of a Stage and keeps track of: a terminal started on a Launcher profile in a worktree and adopted into an Orca Run (`worker-start --terminal`), so that its liveness, its completion report (`worker_done`) and its release are Orca's. Since 规格 #26 the implementing roles are Orca workers the dispatch module starts on the 实现 Stage route; unlike an External worker they have no Time limit or Idle timeout of their own, and nothing wraps them.
+_Avoid_: External worker (that is the headless executor outside Orca), subagent, backend
+
 **Worker harness**:
-The coding-agent CLI program an External worker runs in (codex or pi); it decides how progress is observed, how a stopped worker is Resumed and how its processes are killed, independent of which model it talks to.
-_Avoid_: codex worker / pi worker when the model matters, agent CLI
+The coding-agent CLI program an External worker runs in (codex); it decides how progress is observed, how a stopped worker is Resumed and how its processes are killed, independent of which model it talks to.
+_Avoid_: codex worker when the model matters, agent CLI
 
 **Worker model**:
-The model an External worker's harness talks to (GLM-5.4 today); chosen separately from the harness, so one harness can serve different models and one model can run under different harnesses. On the codex path the Stage routes decide it: a dispatch with `--read-only` runs the research route, any other dispatch the implementation route, both set by the user with `/grill-router`. Every fresh `codex-worker.sh` run reads the table, so a Run that is already executing changes model at its next dispatch, while a Resume keeps the model and effort of its first segment. v1 routes the codex path only: pi and the `agent` backend keep their own model choice.
+The model an External worker's harness talks to (GLM-5.4 today); chosen separately from the harness, so one harness can serve different models and one model can run under different harnesses. On the codex path the Stage routes decide it: a dispatch with `--read-only` runs the research route, any other dispatch the implementation route, both set by the user with `/grill-router`. Every fresh `codex-worker.sh` run reads the table, so a Run that is already executing changes model at its next dispatch, while a Resume keeps the model and effort of its first segment. An Orca worker's model is the 实现 route the dispatch module read when it started, recorded in its Sidecar.
 _Avoid_: implement model, backend model
 
 **Implement backend**:
-Which kind of executor runs the implementing roles for a run: an In-session subagent on the agent model (`agent` backend; `sonnet` is the legacy alias for it with the model pinned to sonnet), or an External worker on GLM (`codex` / `pi`).
-_Avoid_: implement model (GLM is not a model the session can select)
+Retired (规格 #26): which kind of executor ran the implementing roles for a run — an In-session subagent or an External worker — chosen in the Config. The implementing roles are now always Orca workers dispatched by `scripts/stage-dispatch.sh` on the 实现 Stage route, whatever the session.
+_Avoid_: using it for the Stage route (the route chooses the launcher, model and effort, never whether a role is dispatched)
 
 **Agent model**:
-The model the `agent` backend passes explicitly on every Agent call, selected per run with `--agent-model <sonnet|opus|haiku|fable>`; defaults to `IMPLEMENT_MODEL` (sonnet). In a GLM proxy environment an explicit `opus` may actually run GLM-5.4.
+Retired (规格 #26): the model the former in-session implementing subagents were passed on every Agent call. The model an implementing role runs on is its Stage route, read by the dispatch module at each dispatch.
 _Avoid_: implement model (ambiguous with harness-specific settings such as `GLM_MODEL`)
 
 **Implementing roles**:
-The exploration, implementer, merger and fix roles; everything except review.
+The four roles a Run dispatches through the dispatch module (`scripts/stage-dispatch.sh`), each on its Stage route (规格 #26): the step-2 exploration — headless, a `--read-only` dispatch whose executor is `codex-worker.sh`, on the 调研起草 route — and, on the 实现 route as Orca workers, a Ticket's implementer, the fix role and the conflict role. Not review, and not a merger: merging is `scripts/merge-ticket.sh`, a script, and only a conflict dispatches the conflict role.
 
 **Review roles**:
 The Standards and Spec reviewers of `mattpocock-skills:code-review`; always In-session subagents on a strong model (non-flash sessions only; in Flash mode every review runs out-of-session via `opus-review.sh`).
@@ -67,6 +71,10 @@ _Avoid_: harness (when meaning the route entry), agent slot
 **Spec**:
 The issue describing the whole feature; implemented in one run. On GitHub this is an open issue using the to-spec template heading `## Problem Statement`; a legacy open parent issue with unfinished children is also treated as a Spec. On a local-markdown tracker it is a ticket whose body uses `## Problem Statement`, or a closed Closing ticket. The Spec number is the number of that issue, and the integration branch is `spec-<Spec number>`. A Hand-written Spec (手写规格) is an existing Spec whose body has neither a `实现票：#N` line nor a `地图：#N` / `来源地图：#N` line, so it hangs under no map; find-next still drafts its Tickets (`S<k>=spec:<n>`) with a Brief that points to neither a map nor an implementation ticket.
 _Avoid_: PRD, epic
+
+**Spec Run root**:
+The directory one Run of a Spec keeps its files in: `~/.cache/implement-spec-split/runs/<repo>-<n>-<YYYYmmdd-HHMM>/` (`<repo>` = the main checkout's directory name), outside every worktree. `run-phase.sh` writes `run.json` there, which is how Recovery finds the Run; it is the `--run-dir` of every dispatch the Run makes — the `<run dir>` a Sidecar lives in, with each dispatch's own files under `<Spec Run root>/<name>/` — and it holds the Briefs (`briefs/`), the review findings and the parking and final reports. The dispatch module refuses a run directory inside the Spec worktree, since release removes that worktree.
+_Avoid_: run dir / run directory / `<run dir>` on their own (once a Sidecar is involved they name this directory, but say Spec Run root), state dir, dispatch dir (that is one dispatch's `<Spec Run root>/<name>/`)
 
 **Ticket**:
 One child issue of a Spec, or — for a single-ticket Spec — the referenced map implementation issue itself; the unit an implementer works on.
@@ -120,7 +128,15 @@ A wayfinder Map ticket that has an Assignee and was updated within 3 days, while
 _Avoid_: stale claim (older than 3 days, decided by update time alone)
 
 **Run**:
-One invocation of the skill, implementing one Spec from start to finish; several Runs may work on different Specs at the same time.
+One invocation of the skill, implementing one Spec from start to finish; several Runs may work on different Specs at the same time. Not an Orca Run: its wave's Orca Run only starts a Run (and serves as the handle for taking a wave over); a Run does not report into it — whether a Run is done is read from `pipeline-status.sh` and the keeper — and it creates one Orca Run of its own for its Ticket workers. The dispatch a Run's start left in the wave's Orca Run never reports `worker_done`; Orca releases it once the terminal closes.
+
+**Orca Run**:
+An Orca orchestration Run, named by its id on every Orca orchestration call that acts on a Run and never inherited from the terminal (the calls that name none are the two kinds `lib-orca.sh` Rule 2 excepts: the ones addressing one dispatch by its id, `worker-stop` / `worker-show` / `worker-release`, and `worker-list`, which the keeper calls without a Run of its own): the one `launch-wave.sh` creates per wave for the Spec sessions it dispatches (kept in the Launch state as `run`), and the one each Spec session creates for the Ticket workers it dispatches.
+_Avoid_: Run without "Orca" (that is one invocation of the skill), wave (that is the batch, not Orca's object)
+
+**Takeover**:
+Binding a new terminal to an existing Orca Run with `orca orchestration run-use --id <run id>` after the terminal that coordinated it closed or was replaced, so that dispatching, waiting and releasing can go on. The workers never stopped and nothing is re-dispatched: a worker's `worker_done` mail keeps landing in the Run while no terminal coordinates it.
+_Avoid_: Recovery (that is continuing a Spec's implementation in a new Run), adopt, bind
 
 **Recovery**:
 Continuing, in a new Run, a Spec that an earlier Run started but did not finish; triggered only by the user choosing that Spec.
@@ -155,7 +171,7 @@ A Claim record that `find-next/scripts/launch-wave.sh` writes with `claim.sh res
 _Avoid_: pre-claim, lease
 
 **Launch state**:
-The file `~/.cache/implement-spec-split/launch/<owner>__<name>.json` where `launch-wave.sh --apply` records the chosen worker count, wave size, apart pairs, whether the batch lands unattended (`auto_land`), and (when the `agent` backend was chosen) backend and agent model for a repository; `--next-wave` reuses those judgments while recalculating the order. State files from before the agent backend have no backend field and keep behaving like `--impl codex`; state files from before unattended landing became the default have no `auto_land` field and keep landing unattended.
+The file `~/.cache/implement-spec-split/launch/<owner>__<name>.json` where `launch-wave.sh --apply` records the chosen worker count, wave size, apart pairs, whether the batch lands unattended (`auto_land`) and the Orca Run of the latest wave (`run`) for a repository; for a batch a flash orchestrator launched it also records `flash: true` with `launch_agent`, the Orca slot the 编排 route named for that wave. `--next-wave` reuses those judgments while recalculating the order. How a Spec's tickets are implemented is not in it: that is the Stage route table's 实现 route, read at each dispatch, and the `impl`/`agent_model` fields state files carried before 规格 #26 are ignored. State files from before unattended landing became the default have no `auto_land` field and keep landing unattended.
 _Avoid_: order cache (the order itself is recalculated)
 
 **Repo registry**:
@@ -185,7 +201,7 @@ The Tickets whose blockers are all merged, so they can be started now; of the Ti
 _Avoid_: using it for a map's open decisions (that is the Map frontier)
 
 **Time limit**:
-The longest an External worker may run in one go, set per role; reaching it stops the worker but keeps its conversation so it can be Resumed.
+The longest an External worker may run in one go, set per role; reaching it stops the worker but keeps its conversation so it can be Resumed. An Orca worker (a dispatched implementing role) has none: nothing wraps it, and its liveness is Orca's.
 _Avoid_: timeout (ambiguous with Idle timeout and with a worker's own command timeouts)
 
 **Idle timeout**:
@@ -197,5 +213,13 @@ Continuing a stopped External worker's own conversation, in the same worktree, i
 _Avoid_: retry (that is the wrapper re-sending after an API error), re-brief
 
 **Brief**:
-The self-contained task description handed to an External worker, made of context pointers rather than copied content.
+The self-contained task description handed to a worker (an Orca worker the dispatch module started, or the headless executor), made of products rather than of process: a Ticket's Brief carries the Spec issue's content, the exploration notes that concern it and the Ticket issue's content, never the Spec session's reasoning; for a fix role, the review report; for a conflict role, the conflicted paths. A Ticket's Brief is drafted from `find-next/templates/brief-implement.md`.
 _Avoid_: prompt
+
+**Lean start (精简启动)**:
+Starting an implementation worker (a Ticket's implementation or fix role, dispatched by `scripts/stage-dispatch.sh` on the implementation Stage route; the merge role starts normally, since it resolves conflicts on the Integration branch and needs the CLAUDE.md and hooks `--bare` drops) with the Launcher profile's `--bare`: no CLAUDE.md, skills, plugins or hooks are loaded; the rules it must follow come from a rules file injected as a system prompt (`--append-system-prompt-file`, the file named by `ISS_DISPATCH_LEAN_RULES`, default `templates/lean-rules.md`) and the MCP servers it needs from `--mcp-config`, which takes a trivial task from 18.6K to 1.2K input tokens (ADR 0004). It is the default; without the rules file the start is a normal one, `ISS_DISPATCH_BARE` (0, off, no or false) turns it off, and the dispatch's Sidecar records which it was (`bare`, `bare_note`).
+_Avoid_: 精简开关 as the name of the start (the switch is only the opt-out), bare mode
+
+**Sidecar**:
+The JSON file `<run dir>/dispatch-<name>.json` (`<run dir>` is the Spec Run root) that `scripts/stage-dispatch.sh` writes for one dispatch and keeps current as the dispatch lives: the Stage route it took, the worktree, terminal and Orca dispatch id it got, whether the start was a Lean start and why not when it was not, the worker_done once `wait` recorded it (with the report path), the model read off the worker's terminal while it still existed (`actual_model`, taken by `release` or `verify`: Orca records none for an adopted terminal), and the release time. It lives in the Spec's run directory, outside every worktree, so that `release` removing the child worktree loses none of it; a report the worker wrote inside that worktree is copied out next to the sidecar first (`report-from-worktree.md`).
+_Avoid_: dispatch record, dispatch state (that is Orca's), status.json (a headless executor's own file, which the sidecar's report_path may name)

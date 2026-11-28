@@ -6,10 +6,11 @@
 // types, small edits, disabled projects, and a temporary override stored at
 // <home>/.claude/state/allow-direct-edit. Flash orchestrator sessions
 // (FLASH_ORCHESTRATOR=1) deny every source-code write, including common Bash
-// writes, while payloads from dispatched subagents (a non-empty agent_id) are
-// allowed. The ordinary limit comes from the nearest
-// .claude/delegate-guard.json above payload.cwd, DELEGATE_GUARD_LIMIT, or the
-// default. Invalid input fails open;
+// writes, from the main thread and from subagents alike: since 规格 #26
+// implementation goes through the dispatch module, not an in-session subagent,
+// so a payload with a non-empty agent_id gets no exemption. The ordinary limit
+// comes from the nearest .claude/delegate-guard.json above payload.cwd,
+// DELEGATE_GUARD_LIMIT, or the default. Invalid input fails open;
 // internal failures fail open and append an error to
 // <home>/.claude/state/delegate-guard.log when that log is writable.
 
@@ -29,12 +30,17 @@ const {
 
 const LIMIT = 10;
 const TOOLS = new Set(['Edit', 'Write', 'NotebookEdit', 'Bash']);
+// The same pointers as subagent-guard's reason: since 规格 #26 an in-session
+// subagent is denied and codex-worker.sh refuses to start in a flash session,
+// so a reason naming either would send the model into a second denial.
 const FLASH_REASON =
-  'flash 会话不写源码：派 glm-5.4 子代理（或 codex worker）。';
+  'flash 会话不写源码：实现、fix、冲突解算经派发模块按「实现」路由派发' +
+  '（`<skill dir>/scripts/stage-dispatch.sh dispatch --stage implementation --brief <file>`，见 SKILL.md），' +
+  '审查走 `scripts/opus-review.sh`。';
 const BARE_CODEX_EXEC_REASON =
   '不要直接调 codex exec：它没有卡死检测（2026-11-22 曾挂 10 小时）。' +
-  '用 ~/.claude/skills/implement-spec-split/scripts/codex-worker.sh；' +
-  '会话内实现者直接自己写代码。';
+  'headless 的 codex worker 一律通过 ~/.claude/skills/implement-spec-split/scripts/codex-worker.sh 启动；' +
+  '票的实现由 scripts/stage-dispatch.sh 派发的 Orca worker 在自己的工作区里写，规格会话自己不写代码。';
 const TEXT_EXTENSIONS = new Set([
   '.md',
   '.txt',
@@ -447,8 +453,6 @@ function main() {
     if (!toolInput || typeof toolInput !== 'object') return;
 
     const flashMode = process.env.FLASH_ORCHESTRATOR === '1';
-    const isSubagent =
-      typeof payload.agent_id === 'string' && payload.agent_id !== '';
     if (payload.tool_name === 'Bash') {
       const command = toolInput.command;
       if (typeof command === 'string' && command !== '') {
@@ -459,7 +463,6 @@ function main() {
           return;
         }
         if (!flashMode) return;
-        if (isSubagent) return;
         if (isSourceBashWrite(command)) deny(FLASH_REASON);
       }
       return;
@@ -472,7 +475,6 @@ function main() {
     if (typeof filePath !== 'string' || filePath === '') return;
 
     if (flashMode) {
-      if (isSubagent) return;
       if (isSourceFileName(filePath)) deny(FLASH_REASON);
       return;
     }

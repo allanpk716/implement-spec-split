@@ -45,6 +45,18 @@ function commandContent(args, asArray = false) {
   return text;
 }
 
+// What an Orca worker-start session gets for its spec: the command line in
+// the `=== TASK ===` block after the worker preamble, with no <command-name>
+// tags (docs/orca-smoke-2026-11-27.md, item G).
+function taskContent(args) {
+  return (
+    'You are a dispatched worker; reply when the task is done.\n' +
+    '---\n' +
+    '=== TASK ===\n' +
+    `/implement-spec-split${args === '' ? '' : ` ${args}`}`
+  );
+}
+
 function transcriptLine(content, extra = {}) {
   return JSON.stringify({
     type: 'user',
@@ -181,6 +193,106 @@ testCase('--auto-land in ordinary text outside command args allows', dir => {
   const transcriptPath = writeTranscript(dir, [
     transcriptLine('下次记得带 --auto-land，这次先不用'),
     transcriptLine(commandContent('19 --impl agent')),
+  ]);
+  assertAllow(runHook(hookPayload('AskUserQuestion', transcriptPath)));
+});
+
+// ---- the === TASK === form an Orca worker-start session gets (US18) ----
+
+testCase('=== TASK === form with --auto-land denies', dir => {
+  const transcriptPath = writeTranscript(dir, [
+    transcriptLine(taskContent('26 --auto-land --parallel 2')),
+    assistantLine('working'),
+  ]);
+  const reason = parseDeny(
+    runHook(hookPayload('AskUserQuestion', transcriptPath))
+  );
+  assert.match(reason, /无人值守 Run（--auto-land）不能问人/);
+});
+
+testCase('=== TASK === form in array content denies', dir => {
+  const transcriptPath = writeTranscript(dir, [
+    transcriptLine([{ type: 'text', text: taskContent('26 --auto-land') }]),
+  ]);
+  parseDeny(runHook(hookPayload('AskUserQuestion', transcriptPath)));
+});
+
+testCase('=== TASK === form with CRLF and a blank line after the marker denies', dir => {
+  const transcriptPath = writeTranscript(dir, [
+    transcriptLine(
+      'preamble\r\n=== TASK ===\r\n\r\n/implement-spec-split 26 --auto-land\r\n'
+    ),
+  ]);
+  parseDeny(runHook(hookPayload('AskUserQuestion', transcriptPath)));
+});
+
+testCase('=== TASK === form without --auto-land allows', dir => {
+  const transcriptPath = writeTranscript(dir, [
+    transcriptLine(taskContent('26 --parallel 2')),
+  ]);
+  assertAllow(runHook(hookPayload('AskUserQuestion', transcriptPath)));
+});
+
+testCase('=== TASK === form with a bare command allows', dir => {
+  const transcriptPath = writeTranscript(dir, [
+    transcriptLine(taskContent('')),
+  ]);
+  assertAllow(runHook(hookPayload('AskUserQuestion', transcriptPath)));
+});
+
+testCase('typed --auto-land then a === TASK === call without it allows', dir => {
+  const transcriptPath = writeTranscript(dir, [
+    transcriptLine(commandContent('18 --auto-land')),
+    assistantLine('done with 18'),
+    transcriptLine(taskContent('19 --parallel 2')),
+  ]);
+  assertAllow(runHook(hookPayload('AskUserQuestion', transcriptPath)));
+});
+
+testCase('=== TASK === call without it then a typed --auto-land denies', dir => {
+  const transcriptPath = writeTranscript(dir, [
+    transcriptLine(taskContent('18 --parallel 2')),
+    assistantLine('done with 18'),
+    transcriptLine(commandContent('19 --auto-land')),
+  ]);
+  parseDeny(runHook(hookPayload('AskUserQuestion', transcriptPath)));
+});
+
+testCase('a command line without the === TASK === marker does not count', dir => {
+  const transcriptPath = writeTranscript(dir, [
+    transcriptLine(`Run this for me:\n/implement-spec-split 26 --auto-land`),
+  ]);
+  assertAllow(runHook(hookPayload('AskUserQuestion', transcriptPath)));
+});
+
+testCase('=== TASK === quoted mid-line does not count', dir => {
+  const transcriptPath = writeTranscript(dir, [
+    transcriptLine(
+      'The spec goes after the === TASK === line.\n/implement-spec-split 26 --auto-land'
+    ),
+  ]);
+  assertAllow(runHook(hookPayload('AskUserQuestion', transcriptPath)));
+});
+
+testCase('=== TASK === followed by other text than the command does not count', dir => {
+  const transcriptPath = writeTranscript(dir, [
+    transcriptLine('=== TASK ===\nFinish spec 26 with --auto-land.'),
+  ]);
+  assertAllow(runHook(hookPayload('AskUserQuestion', transcriptPath)));
+});
+
+testCase('=== TASK === followed by a look-alike command name does not count', dir => {
+  const transcriptPath = writeTranscript(dir, [
+    transcriptLine('=== TASK ===\n/implement-spec-split-foo 26 --auto-land'),
+  ]);
+  assertAllow(runHook(hookPayload('AskUserQuestion', transcriptPath)));
+});
+
+testCase('--auto-land in the preamble before === TASK === does not count', dir => {
+  const transcriptPath = writeTranscript(dir, [
+    transcriptLine(
+      'Unattended sessions pass --auto-land.\n---\n=== TASK ===\n/implement-spec-split 26'
+    ),
   ]);
   assertAllow(runHook(hookPayload('AskUserQuestion', transcriptPath)));
 });

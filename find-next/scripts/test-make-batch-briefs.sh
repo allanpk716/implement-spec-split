@@ -13,7 +13,7 @@ BIN=$WORK/bin
 SKILLS=$WORK/skills-root
 LOG=$WORK/gh.log
 # The shared-counter rule and its label clause as the Brief templates word them
-# (MAINTAINING 第 45 条); every drafted Brief is checked for both.
+# (MAINTAINING 第 46 条); every drafted Brief is checked for both.
 COUNTER_RULE='会改同一处计数器的执行票按顺序挂 `blocked_by` 链，本组内写 `T<n>`，后一张等前一张，不是全部等第一张'
 COUNTER_LABEL_RULE='并给这些票在清单 `labels` 里写上 `shared-counter`'
 PASSED=0

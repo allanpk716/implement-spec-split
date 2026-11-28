@@ -54,6 +54,7 @@ EOF
   printf '%s\n' 'wire_api = "responses"' >> "$CASE_CODEX/config.toml"
   printf '<!-- opus-codex-division: v2 -->\n' > "$CASE_CLAUDE/CLAUDE.md"
   hook_settings "$ROOT/hooks/delegate-guard.js" 'Edit|Write|NotebookEdit|Bash' > "$CASE_CLAUDE/settings.json"
+  with_subagent_guard "$ROOT/hooks/subagent-guard.js" 'Agent|Task'
 }
 
 hook_settings() {
@@ -71,6 +72,57 @@ process.stdout.write(JSON.stringify({
     }],
   },
 }, null, 2) + '\n');
+NODE
+}
+
+# Appends a subagent-guard PreToolUse entry (规格 #26) to the case's
+# settings.json; a case written with hook_settings alone has delegate-guard only.
+with_subagent_guard() { # path matcher [node-cmd]
+  SETTINGS=$CASE_CLAUDE/settings.json HOOK_PATH=$1 MATCHER=$2 NODE_CMD=${3:-node} node - <<'NODE'
+const fs = require('fs');
+const file = process.env.SETTINGS;
+const hookPath = process.env.HOOK_PATH;
+const normalized = process.platform === 'win32' && /^\/[A-Za-z]\//.test(hookPath)
+  ? hookPath.replace(/^\/([A-Za-z])\//, '$1:/')
+  : hookPath;
+let root = {};
+try { root = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
+root.hooks = root.hooks || {};
+root.hooks.PreToolUse = Array.isArray(root.hooks.PreToolUse) ? root.hooks.PreToolUse : [];
+root.hooks.PreToolUse.push({
+  matcher: process.env.MATCHER,
+  hooks: [{type: 'command', command: `${process.env.NODE_CMD} "${normalized}"`, timeout: 5}],
+});
+fs.writeFileSync(file, JSON.stringify(root, null, 2) + '\n');
+NODE
+}
+
+# Writes the settings.json of hooks/README.md's snippets: both hooks registered
+# as `node ~/.claude/skills/implement-spec-split/hooks/<script>`, the ~ unquoted
+# (the shell that runs the hook expands it), with the README's matchers.
+tilde_hook_settings() {
+  SETTINGS=$CASE_CLAUDE/settings.json node - <<'NODE'
+const fs = require('fs');
+const dir = '~/.claude/skills/implement-spec-split/hooks/';
+const entry = (matcher, script) => ({
+  matcher,
+  hooks: [{type: 'command', command: `node ${dir}${script}`, timeout: 5}],
+});
+fs.writeFileSync(process.env.SETTINGS, JSON.stringify({
+  hooks: {PreToolUse: [entry('Edit|Write|NotebookEdit|Bash', 'delegate-guard.js'), entry('Agent|Task', 'subagent-guard.js')]},
+}, null, 2) + '\n');
+NODE
+}
+
+# Drops the matcher of PreToolUse entry <n> (0-based): a hook registered for
+# every tool (Claude Code reads a missing matcher as all tools) is recorded
+# with an empty first column.
+without_matcher() { # n
+  INDEX=$1 SETTINGS=$CASE_CLAUDE/settings.json node - <<'NODE'
+const fs = require('fs');
+const root = JSON.parse(fs.readFileSync(process.env.SETTINGS, 'utf8'));
+delete root.hooks.PreToolUse[Number(process.env.INDEX)].matcher;
+fs.writeFileSync(process.env.SETTINGS, JSON.stringify(root, null, 2) + '\n');
 NODE
 }
 
@@ -122,6 +174,14 @@ process.exit(out.checks.some(c => c.level === process.env.LEVEL) ? 1 : 0);
 NODE
 }
 
+expect_without() {
+  local level=$1 text=$2 name=$3
+  OUT_FILE=$CASE_DIR/doctor.out LEVEL=$level TEXT=$text node - <<'NODE' && record PASS "$name" || record FAIL "$name" "unexpected [$level] $text"
+const out = JSON.parse(require('fs').readFileSync(process.env.OUT_FILE, 'utf8'));
+process.exit(out.checks.some(c => c.level === process.env.LEVEL && c.message.includes(process.env.TEXT)) ? 1 : 0);
+NODE
+}
+
 free_port() {
   node -e 'const n=require("net"),s=n.createServer();s.listen(0,"127.0.0.1",()=>{console.log(s.address().port);s.close()})'
 }
@@ -157,6 +217,9 @@ expect_none FAIL "full configuration has no FAIL"
 expect_has PASS "覆盖 Edit 和 Write" "full configuration matcher covers Edit and Write"
 expect_has PASS "覆盖 Bash" "full configuration matcher covers Bash"
 expect_has PASS "delegate-guard 冒烟测试" "full configuration smoke hook"
+expect_has PASS "已注册 subagent-guard" "full configuration registers subagent-guard"
+expect_has PASS "subagent-guard matcher 覆盖 Agent" "full configuration subagent-guard matcher covers Agent"
+expect_has PASS "subagent-guard 冒烟测试" "full configuration subagent-guard smoke"
 
 # 2. Stage 3 entirely absent.
 new_case
@@ -208,6 +271,76 @@ if [ "$(cat "$CASE_CLAUDE/settings.json")" = "$SETTINGS_BEFORE" ]; then
 else
   record FAIL "doctor leaves settings.json unchanged" "settings.json was modified"
 fi
+
+# 5d. delegate-guard only: an install from before 规格 #26 has no
+# subagent-guard; that is a WARN, never a FAIL.
+new_case
+hook_settings "$ROOT/hooks/delegate-guard.js" 'Edit|Write|NotebookEdit|Bash' > "$CASE_CLAUDE/settings.json"
+run_doctor --json
+expect_exit 0 "without subagent-guard has no FAIL exit"
+expect_none FAIL "without subagent-guard reports no FAIL"
+expect_has WARN "未注册 subagent-guard" "without subagent-guard reports WARN"
+expect_hint WARN "docs/setup.md" "without subagent-guard hints at docs/setup.md"
+
+# 5e. subagent-guard on a matcher that does not cover Agent: it never fires.
+new_case
+hook_settings "$ROOT/hooks/delegate-guard.js" 'Edit|Write|NotebookEdit|Bash' > "$CASE_CLAUDE/settings.json"
+with_subagent_guard "$ROOT/hooks/subagent-guard.js" 'Task'
+run_doctor --json
+expect_exit 1 "subagent-guard matcher without Agent exits 1"
+expect_has PASS "已注册 subagent-guard" "subagent-guard matcher without Agent is still registered"
+expect_has FAIL "未覆盖 Agent" "subagent-guard matcher without Agent reports FAIL"
+expect_hint FAIL "hooks/README.md" "subagent-guard matcher without Agent hints at hooks/README.md"
+
+# 5f. subagent-guard path does not exist.
+new_case
+hook_settings "$ROOT/hooks/delegate-guard.js" 'Edit|Write|NotebookEdit|Bash' > "$CASE_CLAUDE/settings.json"
+with_subagent_guard "$CASE_DIR/missing/subagent-guard.js" 'Agent|Task'
+run_doctor --json
+expect_exit 1 "missing subagent-guard path exits 1"
+expect_has FAIL "subagent-guard.js 不存在" "missing subagent-guard path reports FAIL"
+
+# 5g. Hooks registered the way hooks/README.md's snippets have them: `node ~/…`
+# with the ~ unquoted. The hook runs (the shell expands it), so doctor expands
+# it too and judges the files present instead of "does not exist".
+new_case
+mkdir -p "$CASE_CLAUDE/skills/implement-spec-split/hooks"
+cp "$ROOT/hooks/delegate-guard.js" "$ROOT/hooks/lib-shell.js" "$ROOT/hooks/lib-transcript.js" \
+  "$ROOT/hooks/subagent-guard.js" "$CASE_CLAUDE/skills/implement-spec-split/hooks/"
+tilde_hook_settings
+run_doctor --json
+expect_exit 0 "hooks registered with ~/ have no FAIL exit"
+expect_none FAIL "hooks registered with ~/ report no FAIL"
+expect_has PASS "delegate-guard.js 存在" "a ~/ delegate-guard.js path is judged present"
+expect_has PASS "subagent-guard.js 存在" "a ~/ subagent-guard.js path is judged present"
+expect_has PASS "delegate-guard 冒烟测试" "a ~/ delegate-guard.js path runs for the smoke test"
+expect_has PASS "subagent-guard 冒烟测试" "a ~/ subagent-guard.js path runs for the smoke test"
+
+# 5h. A PreToolUse entry without a matcher is recorded with an empty first
+# column: the command must stay in its own column and the hook read as
+# registered (a tab separator folded the two and called it unregistered). The
+# blank matcher is every tool, so the coverage checks pass too, and doctor
+# must not die on the empty pattern list.
+new_case
+without_matcher 1
+run_doctor --json
+expect_exit 0 "subagent-guard without a matcher has no FAIL exit"
+expect_none FAIL "subagent-guard without a matcher reports no FAIL"
+expect_has PASS "已注册 subagent-guard" "subagent-guard without a matcher is still registered"
+expect_has PASS "subagent-guard.js 存在" "subagent-guard without a matcher: its command is still read"
+expect_has PASS "subagent-guard matcher 覆盖 Agent" "a blank matcher covers Agent"
+expect_without WARN "未注册 subagent-guard" "subagent-guard without a matcher is not called unregistered"
+
+# 5i. delegate-guard registered without a matcher: every tool, so all three
+# coverage checks pass.
+new_case
+without_matcher 0
+run_doctor --json
+expect_exit 0 "delegate-guard without a matcher has no FAIL exit"
+expect_none FAIL "delegate-guard without a matcher reports no FAIL"
+expect_has PASS "覆盖 Edit 和 Write" "a blank matcher covers Edit and Write"
+expect_has PASS "覆盖 Bash" "a blank matcher covers Bash"
+expect_has PASS "delegate-guard.js 存在" "delegate-guard without a matcher: its command is still read"
 
 # 6. Installed rule version is v0.
 new_case

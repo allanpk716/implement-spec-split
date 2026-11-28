@@ -1101,8 +1101,17 @@ expect_equal "$WORK/order-apart-repeat.out" "$WORK/order-apart.out" 'same order 
 
 run_order "$WORK/order-no-apart.out" --parallel 5
 expect_exit 0 "order mode without apart succeeds"
-expect_has ' 1. #300 Hub root → /implement-spec-split 300 --impl codex' 'default command suffix is appended' "$WORK/order-no-apart.out"
+expect_has ' 1. #300 Hub root → /implement-spec-split 300 --auto-land' 'default command suffix is --auto-land' "$WORK/order-no-apart.out"
+expect_without '--impl' 'default command names no implementation backend' "$WORK/order-no-apart.out"
 expect_without ' 2. #390 ' 'tie-break spec follows equal-score lower specs' "$WORK/order-no-apart.out"
+
+# The suffix in the order comes from the shell side alone (CMD_SUFFIX), which
+# always passes it; the node side keeps no default of its own behind it.
+run_order "$WORK/order-suffix-custom.out" --parallel 5 --cmd-suffix '--no-auto-land'
+expect_exit 0 "a custom command suffix succeeds"
+expect_has ' 1. #300 Hub root → /implement-spec-split 300 --no-auto-land' 'a custom command suffix is used as the shell passed it' \
+  "$WORK/order-suffix-custom.out"
+expect_without '--auto-land' 'no default suffix is added behind the one the shell passed' "$WORK/order-suffix-custom.out"
 
 # An --apart pair whose other side is in flight (running, or interrupted and
 # resumed first) holds its idle side out of the new wave: a running or resumed
@@ -1183,7 +1192,7 @@ run_workers_order "$WORK/order-workers-4.out" --parallel 2 --workers 4
 expect_exit 0 "worker-aware order succeeds"
 expect_has '开发顺序（同时 2 份，共 4 个 worker）' \
   'worker order heading includes total workers' "$WORK/order-workers-4.out"
-expect_has ' 1. #300 Hub root → /implement-spec-split 300 --impl codex --parallel 2' \
+expect_has ' 1. #300 Hub root → /implement-spec-split 300 --auto-land --parallel 2' \
   'worker order appends per-spec parallel' "$WORK/order-workers-4.out"
 
 run_workers_order "$WORK/order-workers-4.json" --parallel 2 --workers 4 --json
@@ -1191,12 +1200,12 @@ expect_exit 0 "worker-aware JSON plan succeeds"
 
 run_workers_order "$WORK/order-workers-5.out" --parallel 2 --workers 5
 expect_exit 0 "worker total rounds down to per-spec parallel"
-expect_has ' 1. #300 Hub root → /implement-spec-split 300 --impl codex --parallel 2' \
+expect_has ' 1. #300 Hub root → /implement-spec-split 300 --auto-land --parallel 2' \
   'five workers still use parallel two' "$WORK/order-workers-5.out"
 
 run_workers_order "$WORK/order-workers-1.out" --parallel 2 --workers 1
 expect_exit 0 "worker total uses minimum per-spec parallel"
-expect_has ' 1. #300 Hub root → /implement-spec-split 300 --impl codex --parallel 1' \
+expect_has ' 1. #300 Hub root → /implement-spec-split 300 --auto-land --parallel 1' \
   'one worker uses parallel one' "$WORK/order-workers-1.out"
 
 run_order "$WORK/order-capacity.out" --parallel 5 --apart 300:390
@@ -1218,9 +1227,9 @@ cat > "$WORK/order-json-text.expected" <<EOF
 先恢复：#380
 进行中：#370（spec-370）
 第 1 波：
- 1. #300 Hub root → /implement-spec-split 300 --impl codex --parallel 1
- 2. #420 Spec-owned blocker root → /implement-spec-split 420 --impl codex --parallel 1
- 3. #330 Partial dependency → /implement-spec-split 330 --impl codex --parallel 1（部分等 #380；另需 #399）
+ 1. #300 Hub root → /implement-spec-split 300 --auto-land --parallel 1
+ 2. #420 Spec-owned blocker root → /implement-spec-split 420 --auto-land --parallel 1
+ 3. #330 Partial dependency → /implement-spec-split 330 --auto-land --parallel 1（部分等 #380；另需 #399）
 之后：
  4. #310 Downstream one（等 #300）
  5. #320 Downstream two（等 #300）
