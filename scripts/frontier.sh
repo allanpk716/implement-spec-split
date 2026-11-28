@@ -14,13 +14,19 @@
 # lowest-numbered one is in the frontier; the others wait in `# blocked`,
 # naming it, until that one is merged and closed.
 #
+# The loose source ticket of the Spec (the graph's `source` flag: the mapless
+# ticket its `实现票：#N` line names when the Spec has no sub-issues, 票 #83) is
+# never in the frontier. It is not an execution ticket: nothing is dispatched
+# for it, and it is closed together with the Spec when that lands (SKILL.md
+# step 9). It is listed under `# source`, without a blocker query.
+#
 # Output:
 #   zero or more lines `#<t>` — the frontier, one ticket per line, ascending;
 #   then the sections `# blocked` (blocked tickets with their open blockers,
 #   and `shared-counter` tickets waiting for the one released:
 #   `（等共享计数器：#m）`), `# human` (ready-for-human tickets, never
-#   dispatched) and `# shelved` (shelved tickets). A ticket may appear in more
-#   than one of those three.
+#   dispatched), `# shelved` (shelved tickets) and `# source` (the loose
+#   source ticket). A ticket may appear in more than one of those four.
 #
 # Exit codes:
 #   0  success
@@ -135,6 +141,8 @@ const open = (Array.isArray(spec.tickets) ? spec.tickets : [])
 const blockers = new Map();
 for (const ticket of open) {
   const number = Number(ticket.number);
+  // The loose source ticket is listed, never dispatched: no blocker query.
+  if (ticket.source === true) continue;
   let text;
   try {
     text = cp.execFileSync('gh', [
@@ -160,6 +168,7 @@ const frontier = [];
 const blocked = [];
 const human = [];
 const shelved = [];
+const source = [];
 // The one `shared-counter` ticket released this run (the lowest-numbered among
 // those that pass the other frontier conditions; `open` is ascending, so the
 // first one met is it). The rest wait for it in `# blocked`, naming it.
@@ -170,6 +179,10 @@ for (const ticket of open) {
   const line = `#${number} ${clean(ticket.title)}`;
   if (ticket.human === true) human.push(`${line}（人工）`);
   if (ticket.shelved === true) shelved.push(`${line}（搁置）`);
+  if (ticket.source === true) {
+    source.push(`${line}（源票）`);
+    continue;
+  }
   if (openBlockers.length > 0) {
     blocked.push(`${line}（阻塞：${openBlockers.map((value) => `#${value}`).join(' ')}）`);
   }
@@ -192,5 +205,7 @@ out.push('# human');
 out.push(...(human.length > 0 ? human : ['（无）']));
 out.push('# shelved');
 out.push(...(shelved.length > 0 ? shelved : ['（无）']));
+out.push('# source');
+out.push(...(source.length > 0 ? source : ['（无）']));
 process.stdout.write(`${out.join('\n')}\n`);
 NODE

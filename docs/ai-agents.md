@@ -4,7 +4,7 @@ This guide is for an AI agent that has been asked to install or run this skill. 
 
 ## What the skill does
 
-`implement-spec-split` implements a GitHub spec and its child tickets on one integration branch. An Orchestrator in the user's Claude Code session owns scheduling, verification, review, and judgment. Cheaper executors do exploration, implementation, and fixes (merging is a script's job; a worker is dispatched only on a conflict); two stronger reviewers always review the result.
+`implement-spec-split` implements a GitHub spec and its child tickets on one integration branch. An Orchestrator in the user's Claude Code session owns scheduling, verification, review, and judgment. Cheaper executors do exploration, implementation, and fixes (merging is a script's job; a worker is dispatched only on a conflict or a colliding shared counter); two stronger reviewers always review the result.
 
 How the implementing roles run is fixed (规格 #26): a headless read-only exploration through `scripts/codex-worker.sh` (Codex on GLM, on the 调研起草 Stage route) runs once before the Tickets, and each Ticket's implementation, fix and merge-conflict role is an Orca worker dispatched by `scripts/stage-dispatch.sh` on the 实现 Stage route. The launcher, model and reasoning effort come from the Stage route table, which only the user changes with `/grill-router`. There is no backend to choose.
 
@@ -73,3 +73,4 @@ This reports state, recent commands and edits, time since the last progress even
 - Do not automatically switch from GLM to Claude after auth, quota, or transient errors; ask the user.
 - Do not ask Codex workers to delete directories recursively; their command policy may reject it.
 - Confirmations stay only in a Run that keeps them: one started by typing `/implement-spec-split <n>` without `--auto-land`, or a Run of a batch started with `--no-auto-land`. There, ask the user before pushing, closing issues, or publishing anything. An unattended Run that `launch-wave.sh` started — the default, with `--auto-land` — does not ask: it lands, closes its tickets and starts the next wave by itself.
+- Exception for closing an execution Ticket as it merges (2026-11-28, 票 #78; allowed by the owner): `scripts/merge-ticket.sh --close-ticket <n>` (SKILL.md step 5) closes the Ticket without asking in every Run, with or without `--auto-land`. The Ticket has already merged, and closing it can be undone by reopening it. The rule above still holds for pushing, for closing the Spec, and for any other issue.

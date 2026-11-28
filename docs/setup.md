@@ -126,7 +126,7 @@ spec 是一个 GitHub 父 issue，它的子 issue 就是 ticket，ticket 之间�
 **并行是怎么发生的**
 
 - 技能先读 spec 和 ticket，建任务图。依赖都已满足的 ticket 组成"前沿"，前沿里的 ticket 各在自己的子工作区（挂在规格工作区下）并行实现。
-- 合并串行进行，而且先由脚本合：`scripts/merge-ticket.sh` 没冲突就直接合进集成分支并跑测试，有冲突才派一个 worker 解。
+- 合并串行进行，而且先由脚本合：`scripts/merge-ticket.sh` 没冲突就直接合进集成分支并跑测试，有冲突或碰撞的共享计数器才派一个 worker 解。
 - 并发上限：`GLM_MAX_PARALLEL` 控制（默认 2），可以用 `--parallel n` 只对本次运行覆盖。建议 2–3，闲时最多 4：智谱高峰期会限流，任何一个 worker 撞上 429 都会让整个运行停下来问你。
 - 每个 ticket 完成后都要经过验证关口和两个 Opus 审查（Standards、Spec）才算完。
 - 多个 spec 同时做：在同一个 clone 的多个 Orca worktree 里各开一个会话、各跑一次技能。不带 spec 编号时，技能不扫描、也不列候选，只提示「先运行 `/find-next --batch`，它给出开发顺序和每个 worktree 要敲的命令」然后停下：选哪个开发只在 find-next 一处决定，几个 worktree 同时启动也不会各自扫描、各选一个。带上编号后，会话的 worktree 关联到该 issue、标签页改名为 `spec-<n> …`。进行中或疑似中断的 spec 由 find-next 的开发顺序列进「先恢复」并给出命令，照着敲就是接着做上次没做完的（Recovery）。`--parallel` 按每个运行计，几个运行的 worker 数相加，共享 GLM 额度。
@@ -503,7 +503,7 @@ $S migrate                                                              # 迁移
 
 - 白名单内：跑脚本并按退出码分支、读短的结构化输出、照现成文本写票、转述已备好选项的问题、经派发模块（`stage-dispatch.sh dispatch` / `wait` / `release`）启动与收尾 worker、启动会话、跑 Opus review、无冲突合并与 commit、逐条执行 findings。
 - 一行源码都不写：阶段 3 的 delegate-guard 在 flash 会话里对源码写入硬拦（阈值 0，`~/.claude/state/allow-direct-edit` 不生效）。
-- 每个结论注明出处（派发角色的报告路径——sidecar 里的 `worker_done.report_path`——或 Opus findings 路径）；拿不准交给谁时默认上交 Opus；push、打 tag、发版先问用户（Design session 推送文档除外）。
+- 每个结论注明出处（派发角色的报告路径——sidecar 里的 `worker_done.report_path`，worker 空闲未报时是主会话核实后写的 `<dispatch dir>/session-verify.md`——或 Opus findings 路径）；拿不准交给谁时默认上交 Opus；push、打 tag、发版先问用户（Design session 推送文档除外）。
 
 **回退**
 
