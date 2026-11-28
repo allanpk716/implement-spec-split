@@ -59,7 +59,12 @@
 # report and the hooks README's rule B all say identity, credentials or
 # physical action, and the flash paths — Stopping and the input of find-next's
 # selecting Opus review — pick no option that needs the owner's hands; the
-# category set itself is not touched).
+# category set itself is not touched); and four wording points (硬违规 3, 判断
+# 5 / 6 / 7): the landing report's section is 要你做的 in both setup guides, the
+# hands-on bullet of step 8 sits at the level of the two rules above it, the
+# parking report's 现状 paragraph says like its lead-in that the supervisor
+# reads the first section, and an ops step's rollback line names this machine
+# next to the remote host.
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -750,6 +755,48 @@ has '已知限制：clone 直装形态下如果别处还有一份主 checkout' \
   'docs/setup.md states the two-clone limitation of the clone-direct install' "$SETUP"
 has 'Known limitation: with the clone-direct shape and a second, main checkout elsewhere' \
   'docs/setup.en.md states the two-clone limitation of the clone-direct install' "$SETUP_EN"
+
+# --- four wording points of the third review fix of 规格 #58 (r3: Standards 硬违规 3, 判断 5 / 6 / 7) ---
+
+# The landing report and its ## 结论 block name their section 要你做的 (step
+# 9.3, the local install paragraph, the report format); 要你做 is the name of
+# find-next's wrap-up list and of its supervisor. The two-clone limitation the
+# second fix added to both setup guides got the name wrong twice in each.
+without '落地报告的「要你做」' 'docs/setup.md names the landing report section 要你做的' "$SETUP"
+has '落地报告的「要你做的」会写一句 `git pull`' 'docs/setup.md says the git pull goes under 要你做的' "$SETUP"
+has '落地报告的「要你做的」每次挂这一条' 'docs/setup.md says the two-clone manual step goes under 要你做的' "$SETUP"
+without "landing report's 要你做 " 'docs/setup.en.md names the landing report section 要你做的' "$SETUP_EN"
+has "the landing report's 要你做的 says \`git pull\`" 'docs/setup.en.md says the git pull goes under 要你做的' "$SETUP_EN"
+has 'under 要你做的 each time' 'docs/setup.en.md says the two-clone manual step goes under 要你做的' "$SETUP_EN"
+# The hands-on bullet of step 8 is a sibling of the loosening bullet and of the
+# two parking rules above it, so the Release sentence after the blank line
+# stays a paragraph of Design-level review items. As a top-level bullet it took
+# that paragraph away from them. The pin is anchored at the line start, since
+# the whole-sentence pin under "step 8 never picks an option" cannot see the
+# indentation.
+if grep -Eq '^  - An option that needs the owner'\''s own hands' "$SKILL" 2>/dev/null; then
+  ok 'SKILL.md step 8: the hands-on bullet sits at the level of the two rules above it'
+else
+  bad 'SKILL.md step 8: the hands-on bullet sits at the level of the two rules above it' \
+    "no line starts with two spaces and the hands-on bullet in ${SKILL#$ROOT/}"
+fi
+# The lead-in of the parking report says the supervisor reads its first
+# section; the 现状 paragraph said it relays it verbatim, which is also what
+# the rule below the table no longer says (only an error park's items are
+# relayed one by one). Both now say the same thing.
+without 'the first section the supervisor relays verbatim' \
+  'SKILL.md no longer says the supervisor relays every first section verbatim' "$SKILL"
+has 'because find-next'\''s supervisor reads its first section and keeper reads the two machine-readable lines' \
+  'SKILL.md: the parking report lead-in says the supervisor reads its first section' "$SKILL"
+has 'so the first section the supervisor reads and the two machine-readable lines keeper reads are untouched' \
+  'SKILL.md: the 现状 paragraph says the supervisor reads the first section, as its lead-in does' "$SKILL"
+# An ops step's rollback line names this machine next to the remote host, as
+# the Ops tickets section of SKILL.md does: a local ops ticket never leaves
+# this machine, which the Brief template's own new entry says.
+without '远端改了什么、怎么回滚' 'find-next: the rollback line of an ops step no longer names the remote host alone' "$FIND_NEXT"
+count_at_least '远端或本机改了什么、怎么回滚' 2 'find-next: both sentences on an ops step result name this machine too' "$FIND_NEXT"
+without '远端改了什么、怎么回滚' 'Brief template: the rollback line no longer names the remote host alone' "$BRIEF"
+has '报告里写清远端或本机改了什么、怎么回滚' 'Brief template: the rollback line of the ops section names this machine too' "$BRIEF"
 
 printf '\n%d passed, %d failed\n' "$PASSED" "$FAILED"
 exit "$FAILED"

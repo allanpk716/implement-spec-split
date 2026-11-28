@@ -237,7 +237,7 @@ This batch lands without the user, typically to run overnight: `launch-wave.sh` 
   - An item whose reason is an action that needs the owner's identity, credentials or physical action (a first login, a payment, a verification code) parks with category `auth`.
   - An item whose listed options hold nothing reversible parks with category `error`; never invent an option.
   - An option that loosens a safety boundary is never taken, whatever the rule above would pick: record it under 「未执行的放宽项」 in the landing report and decide among the remaining options as above.
-- An option that needs the owner's own hands — a physical action the Run cannot carry out — is never picked either, whatever the rule above would pick: list it under 要你做的 in the landing report and decide among the remaining options as above; when no option is left, the item parks by the two parking rules above: with category `auth` when its options all need the owner's identity, credentials or physical action, with `error` when none of them is reversible.
+  - An option that needs the owner's own hands — a physical action the Run cannot carry out — is never picked either, whatever the rule above would pick: list it under 要你做的 in the landing report and decide among the remaining options as above; when no option is left, the item parks by the two parking rules above: with category `auth` when its options all need the owner's identity, credentials or physical action, with `error` when none of them is reversible.
 
   Release that fix role when it ends. The step-8 review-round cap applies unchanged: at most 3 review → fix → re-review rounds per review stream; after the third, mechanical-only leftovers land and are reported, and any correctness leftover parks with category `error`.
 - **Follow-up tickets (step 9)**: a leftover or cleanup ticket opened while landing is attached to the Spec, has each of its dependencies registered with `blocked_by`, and leaves the Spec open as a partial landing. Never write dependencies only into a title, and never close the Spec on top of such tickets (on 2026-11-25 spec-22 left #50/#51/#52 as loose issues that the tracker still called ready).
@@ -270,7 +270,7 @@ The two lines right after `## 停车报告` are mandatory and come before `### �
 - `停车类别：quota|transient|auth|error`
 - `可恢复时间：<ISO 8601 含时区>|无`
 
-`### 现状` also carries the route table and the check lines — the output of `stage-dispatch.sh verify --run-dir <Spec Run root>`, pasted as it is: a park is exactly when the user needs to know who wrote and who reviewed, and a worker still running (a parked Ticket's) is read live by that command. A line that says 警告 (the worker ran another model than its route) or 无法核对 is pasted as it is; it never held back anything. All of it goes under `### 现状`, so the first section the supervisor relays verbatim and the two machine-readable lines keeper reads are untouched.
+`### 现状` also carries the route table and the check lines — the output of `stage-dispatch.sh verify --run-dir <Spec Run root>`, pasted as it is: a park is exactly when the user needs to know who wrote and who reviewed, and a worker still running (a parked Ticket's) is read live by that command. A line that says 警告 (the worker ran another model than its route) or 无法核对 is pasted as it is; it never held back anything. All of it goes under `### 现状`, so the first section the supervisor reads and the two machine-readable lines keeper reads are untouched.
 
 | 类别 | 场景 | 可恢复时间 |
 |---|---|---|
