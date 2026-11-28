@@ -24,7 +24,9 @@
 # park alone (做错 4 — relayed to the user, never decided or resumed) and no
 # decision point of find-next picks an option that loosens a safety boundary
 # (做错 3 — step 6, the selecting Opus review of the flash mode and the
-# supervisor each carry the rule).
+# supervisor each carry the rule), and step 9's local install is for this
+# skill's own repository only (越界 2 — no other repository's install.sh is
+# run at landing).
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -369,6 +371,27 @@ has '因选项全是放宽安全边界而没拍板的条目另列「未执行的
   'ALL_DONE records the refused loosenings of the supervision' "$FIND_NEXT"
 has 'no decision round ever picks such an option' 'GLOSSARY: the Loosening entry covers every decision round' "$GLOSSARY"
 has "not find-next's decision round or its Supervisor" 'GLOSSARY: the Loosening entry names find-next and the Supervisor' "$GLOSSARY"
+
+# --- step 9's local install is for this skill's own repository only (规格 #58
+# 审查 Spec 越界 2，取舍 2 选 A) ---
+
+# The spec's 落地流程接入 names the install.sh it adds: the one that keeps this
+# skill's links and configuration in step with what landed. The condition read
+# "the repository root has an install.sh", so a Spec on any other repository ran
+# that repository's own installer after every landing, unconfirmed in an
+# unattended one. Only this skill's own repository is installed now; another
+# repository's install.sh is never run and the section is omitted.
+has "For a Spec on this skill's own repository only" "SKILL.md: the local install is for this skill's own repository only" "$SKILL"
+has 'A Spec on any other repository never gets an `install.sh` run here, whatever script its root may hold' \
+  "SKILL.md: no other repository's install.sh is run at landing" "$SKILL"
+without 'A repository without `install.sh` has nothing to install: skip this and omit the section' \
+  'SKILL.md: the install is no longer conditioned on the repository root having an install.sh' "$SKILL"
+has '「下次落地会补上」; omit for a Spec on any other repository)' \
+  'SKILL.md: the landing report omits the install section for another repository' "$SKILL"
+has "Omit for a Spec on any other repository: step 9 installs this skill's own repository only." \
+  'SKILL.md: the final report omits the install section for another repository' "$SKILL"
+has "never for a Spec on another repository, whatever \`install.sh\` its root may hold" \
+  "GLOSSARY: the Unattended landing entry keeps the install to this skill's own repository" "$GLOSSARY"
 
 # --- the Ticket Brief template --------------------------------------------------
 
