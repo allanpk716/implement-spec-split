@@ -4,7 +4,7 @@ This guide is for an AI agent that has been asked to install or run this skill. 
 
 ## What the skill does
 
-`implement-spec-split` implements a GitHub spec and its child tickets on one integration branch. An Orchestrator in the user's Claude Code session owns scheduling, verification, review, and judgment. Cheaper executors do exploration, implementation, and fixes (merging is a script's job; a worker is dispatched only on a conflict); two stronger reviewers always review the result.
+`implement-spec-split` implements a GitHub spec and its child tickets on one integration branch. An Orchestrator in the user's Claude Code session owns scheduling, verification, review, and judgment. Cheaper executors do exploration, implementation, and fixes (merging is a script's job; a worker is dispatched only on a conflict or a colliding shared counter); two stronger reviewers always review the result.
 
 How the implementing roles run is fixed (规格 #26): a headless read-only exploration through `scripts/codex-worker.sh` (Codex on GLM, on the 调研起草 Stage route) runs once before the Tickets, and each Ticket's implementation, fix and merge-conflict role is an Orca worker dispatched by `scripts/stage-dispatch.sh` on the 实现 Stage route. The launcher, model and reasoning effort come from the Stage route table, which only the user changes with `/grill-router`. There is no backend to choose.
 

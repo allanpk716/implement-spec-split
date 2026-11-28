@@ -35,6 +35,6 @@ supersedes: ADR-0002, ADR-0003
 - `orca worktree rm` 删父工作区会把子工作区变孤儿：清理顺序必须先票后规格。`new-child` 默认保留工作区，`worker-release` 不删工作区，脚本要显式删除，并带 `--delete-branch`（新版默认留分支）；另有定期清理扫掉无主的遗弃工作区（社区有攒到 173GB 的实例）。
 - 主会话或协调终端关闭不影响下层；新终端 `orca orchestration run-use --id <run>` 接管。keeper.sh 与 Orca 心跳并行一段时间再定去留：判活以 `worker-list` 的 liveness 为第一证据、mtime 为第二证据；「确认失败」与「无法确认」分开，无法确认的不自动重派（Orca 官方不许凭 `unverifiable` 自动恢复）。
 - 自定义 agent 官方已明确不做任意 CLI（stablyai/orca#14952 closed not planned），启动档案是长期方案；PR #47662（基于已安装 agent 的自定义 agent）合入后可把档案迁过去，路由表不动。
-- 社区调研（`20261127_1354_社区如何用Orca做多Agent工作流_调研.md`）确认整体形状是主流，路由表、嵌套工作区、合并互斥、全天判活四点社区没有成体系的做法；`whutlichao/orchestra-auto` 与本项目同构但用平级工作区，只借鉴其把关与收尾规则，不整体采用。版本号、CHANGELOG 这类共享计数器在并行票间的冲突不在本 ADR 范围，单独记票（2026-11-28 注：单独记票 = #24；Resolution 后 B 方向由 #62 承接，A 方向由 #52 承接）。
+- 社区调研（`20261127_1354_社区如何用Orca做多Agent工作流_调研.md`）确认整体形状是主流，路由表、嵌套工作区、合并互斥、全天判活四点社区没有成体系的做法；`whutlichao/orchestra-auto` 与本项目同构但用平级工作区，只借鉴其把关与收尾规则，不整体采用。版本号、CHANGELOG 这类共享计数器在并行票间的冲突不在本 ADR 范围，单独记票（2026-11-28 注：单独记票 = #24；Resolution 后 B 方向由 #62 承接，A 方向由 #52 承接）（2026-11-28 注：订正上注——「A 方向由 #52 承接」已随 #52 作为规格 #61 的重复关闭而失效：A 方向由规格 #61 承接，执行票 #73/#74；B 方向 = 规格 #62，执行票 #51）。
 - `pi-worker.sh` 退役；`codex-worker.sh` 保留为 headless 执行器。
 - ADR 0001 的「会话不许自己换模型」仍成立：换模型只能是用户经 `/grill-router` 改表，脚本执行。`/grill-router` 是 `disable-model-invocation`，与旧开关一样是软约束。

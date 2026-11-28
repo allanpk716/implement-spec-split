@@ -37,7 +37,11 @@ Retired (规格 #26): the model the former in-session implementing subagents wer
 _Avoid_: implement model (ambiguous with harness-specific settings such as `GLM_MODEL`)
 
 **Implementing roles**:
-The four roles a Run dispatches through the dispatch module (`scripts/stage-dispatch.sh`), each on its Stage route (规格 #26): the step-2 exploration — headless, a `--read-only` dispatch whose executor is `codex-worker.sh`, on the 调研起草 route — and, on the 实现 route as Orca workers, a Ticket's implementer, the fix role and the conflict role. Not review, and not a merger: merging is `scripts/merge-ticket.sh`, a script, and only a conflict dispatches the conflict role.
+The four roles a Run dispatches through the dispatch module (`scripts/stage-dispatch.sh`), each on its Stage route (规格 #26): the step-2 exploration — headless, a `--read-only` dispatch whose executor is `codex-worker.sh`, on the 调研起草 route — and, on the 实现 route as Orca workers, a Ticket's implementer, the fix role and the conflict role. The fix role has one dispatch form of its own, the Re-bump role (规格 #61); it is not a fifth role. Not review, and not a merger: merging is `scripts/merge-ticket.sh`, a script, and only a conflict dispatches the conflict role.
+
+**Re-bump role**:
+The fix role in the form the Spec session dispatches after `scripts/merge-ticket.sh` exits 6 because both sides added the same number of a numbered directory, or left a version file with the same content (规格 #61): `--role fix --ticket <m>` in step 5 (named `fix-<m>`; it works in the Ticket worktree on `spec-<n>-t<m>`) and `--role fix` without a ticket in step 9.1 (it works in the integration worktree on `spec-<n>`; main is the other side). Its Brief's first sentence overrides the dispatch module's Task, since a fix role's terminal opens in the integration worktree either way; the Brief carries the merger's collision list verbatim, and the role reads the other side only (`git ls-tree`, `git show`), lists every number that side holds before choosing, re-increments, runs the test command and commits — it merges nothing back: the merger is rerun instead, and only its exit `0` gets through — a numbered directory clears to a merge, while a version file clears the gate but, both sides having changed the same line to different values, meets a textual conflict at the merge (exit `3`, for the merge role in step 5 or the fix role in step 9.1, with both sides' intent). At most 2 rounds per ticket in step 5, per main merge in step 9.1; each round's role is released when it ends. In step 9.1 the re-bump's commits get one review only; in step 5 they are reviewed with step 7's review.
+_Avoid_: re-bump worker, counter role (it is the fix role; a re-bump is its work)
 
 **Review roles**:
 The Standards and Spec reviewers of `mattpocock-skills:code-review`; always In-session subagents on a strong model (non-flash sessions only; in Flash mode every review runs out-of-session via `opus-review.sh`).
@@ -213,7 +217,7 @@ Continuing a stopped External worker's own conversation, in the same worktree, i
 _Avoid_: retry (that is the wrapper re-sending after an API error), re-brief
 
 **Brief**:
-The self-contained task description handed to a worker (an Orca worker the dispatch module started, or the headless executor), made of products rather than of process: a Ticket's Brief carries the Spec issue's content, the exploration notes that concern it and the Ticket issue's content, never the Spec session's reasoning; for a fix role, the review report; for a conflict role, the conflicted paths. A Ticket's Brief is drafted from `find-next/templates/brief-implement.md`.
+The self-contained task description handed to a worker (an Orca worker the dispatch module started, or the headless executor), made of products rather than of process: a Ticket's Brief carries the Spec issue's content, the exploration notes that concern it and the Ticket issue's content, never the Spec session's reasoning; for a fix role, the review report; for a conflict role, the conflicted paths; for a Re-bump role, the merger's collision list (its stderr lines, verbatim), behind the first sentence that overrides the dispatch module's Task by naming the worktree and branch the role works in. A Ticket's Brief is drafted from `find-next/templates/brief-implement.md`.
 _Avoid_: prompt
 
 **Lean start (精简启动)**:

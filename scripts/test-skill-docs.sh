@@ -9,7 +9,15 @@
 # going red. The cumulative review's settled points (MAINTAINING 第 51 条) are
 # pinned the same way: find-next's flash default, delegate-guard's flash
 # reason, the === TASK === form the guards read and the hooks README's
-# fail-open wording.
+# fail-open wording. So is the merger's exit 6 wiring (规格 #61 票 #74 and the
+# review fixes after it): the step 5 / 9.1 re-bump dispatch forms, the one
+# review of the re-bump and the conflict resolution, every 9.1 round taking
+# the next free --attempt, a failed-gate re-dispatch counting as a 9.1 round,
+# the re-bump Brief named after its dispatch, the step 5 rerun reading exits 4
+# and 1 from their own lines (one positive and one negative check), where a
+# 9.1 rerun's 3 / 4 / 5 go, the 9.1 review trigger stated once and pointed to
+# from Unattended landing and Flash mode, and the --attempt of a step 5
+# re-dispatch and of 9.1's fix roles taken as the next free one.
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -96,6 +104,102 @@ has 'new commits' 'the gate checks new commits' "$SKILL"
 has 'a clean tree' 'the gate checks a clean tree' "$SKILL"
 has "merger script's test run passes" 'the gate checks the merger script test run' "$SKILL"
 
+# --- SKILL.md: the merger's exit 6 is wired in (规格 #61 票 #74) -------------------
+
+# Step 5 dispatches a re-bump role at the conflict role's hook: the fix role
+# with the ticket number (named fix-<m>), sent to the ticket worktree by its
+# Brief because the module opens a fix role's terminal in the integration
+# worktree. The role reads the other side and merges nothing back; at most 2
+# rounds, then a park; the implementer is released before the re-bump role.
+has 'a worker is dispatched only on a conflict or a colliding shared counter' \
+  'SKILL.md step 5 dispatches a worker on a conflict or a colliding counter' "$SKILL"
+has "--ticket spec-<n>-t<m> --test '<the repo's test command>' [--counter <path>]..." \
+  'SKILL.md step 5 passes --counter to the merger' "$SKILL"
+has '`--role fix --ticket <m>`, one command as above, which the module names `fix-<m>`' \
+  'SKILL.md step 5 dispatches the re-bump role as fix with the ticket number' "$SKILL"
+has 'it works in the ticket worktree `<ticket worktree>` on branch `spec-<n>-t<m>` and changes nothing in the integration worktree' \
+  'SKILL.md step 5 re-bump Brief overrides the Task with the ticket worktree' "$SKILL"
+has 'the other side is read only (`git ls-tree spec-<n>:docs/adr/`, `git show spec-<n>:VERSION`)' \
+  'SKILL.md step 5 re-bump role reads the other side and merges nothing back' "$SKILL"
+has 'At most 2 re-bump rounds per ticket' 'SKILL.md step 5 caps the re-bump at 2 rounds' "$SKILL"
+# On a rerun, exits 4 and 1 are read as their own lines say: those lines sit
+# below the `6` line, so "as above" pointed at nothing (规格 #61 review r2,
+# Standards 4).
+has '`4` and `1` read as in their own lines below' 'SKILL.md step 5 rerun reads exits 4 and 1 from their own lines' "$SKILL"
+without '`4` and `1` read as above' 'SKILL.md step 5 rerun no longer points 4 and 1 upward' "$SKILL"
+has 'a third `6` parks with category `error`' 'SKILL.md step 5 parks on a third re-bump miss' "$SKILL"
+has 'release in this order: the implementer first' \
+  'SKILL.md step 5 releases the implementer before the re-bump role' "$SKILL"
+has '--watch <ticket worktree>=<its dispatch dir>' \
+  'SKILL.md step 5 watches the ticket worktree for the re-bump role' "$SKILL"
+has '`fix-<m>` for step 5' 'SKILL.md names the re-bump role fix-<m> in the run directory' "$SKILL"
+# Its Brief follows the general rule, briefs/<name>.md with <name> the dispatch
+# name: it gets no naming scheme of its own (规格 #61 review r2, 取舍 3).
+has '<Spec Run root>/briefs/fix-<m>.md' 'SKILL.md step 5 names the re-bump Brief after the dispatch name' "$SKILL"
+without 'briefs/rebump-<m>.md' 'SKILL.md no longer gives the re-bump Brief a name of its own' "$SKILL"
+has "step 5's re-bump takes \`--ticket <m>\` and is named \`fix-<m>\`" \
+  'SKILL.md dispatch section lets fix take --ticket for a re-bump' "$SKILL"
+# Step 9.1 merges main through the merger (ticket #73's --no-ticket-worktree
+# shape) and reads its exits: 5 is nothing to do, not a test pass; 6 is a
+# re-bump role without a ticket number that reads main only; one review covers
+# the re-bump commits and the conflict resolution, in Unattended landing and
+# Flash mode alike.
+has "--ticket origin/<main branch> --no-ticket-worktree --test '<the repo's test command>'" \
+  'SKILL.md step 9.1 merges main through the merger' "$SKILL"
+without 'the main merge is the plain git merge' 'SKILL.md step 9.1 no longer merges main by hand' "$SKILL"
+has 'this is not a test pass' 'SKILL.md step 9.1 reads exit 5 as nothing to do, not a test pass' "$SKILL"
+has '`--role fix` without `--ticket`' 'SKILL.md step 9.1 dispatches the re-bump role as fix without a ticket' "$SKILL"
+# Every round of that re-bump takes the next free --attempt: step 8's fix role
+# may already hold the bare name `fix`, and the module refuses a second
+# dispatch under a name that has a sidecar (exit 64), so a first round sent
+# as `--role fix` alone would never start (规格 #61 review, Standards 1).
+has 'every round takes the next free `--attempt <n>`' \
+  'SKILL.md step 9.1 re-bump rounds each take the next free attempt' "$SKILL"
+without 'each later round as `--attempt <n>`' \
+  'SKILL.md step 9.1 no longer leaves the first re-bump round without an attempt' "$SKILL"
+# The cap counts what step 5 counts: a re-dispatch after the re-bump role's
+# failed gate is a round too, so 9.1 cannot be read as three dispatches
+# (规格 #61 review r2, Spec a-1).
+has 'at most 2 rounds, a re-dispatch after a failed gate counting as a round (every round takes the next free `--attempt <n>`' \
+  'SKILL.md step 9.1 counts a re-dispatch after a failed gate as a round' "$SKILL"
+has 'git ls-tree origin/<main branch>:docs/adr/' 'SKILL.md step 9.1 re-bump role reads main only' "$SKILL"
+has 'the re-bump commits and the conflict resolution together' \
+  'SKILL.md reviews the step 9.1 re-bump and the conflict resolution once' "$SKILL"
+has 'shared counters collide (merger exit `6`) — dispatch a re-bump role' \
+  'unattended landing dispatches a re-bump role on exit 6' "$SKILL"
+has '**Step 9 conflicts and re-bumps**' 'flash mode covers the step 9 re-bump' "$SKILL"
+# A rerun of the 9.1 merger has a destination for every exit, as step 5's rerun
+# has: 3 / 4 go to their own lines, a 4 the fix role turned green is reviewed
+# like a committed conflict resolution, and a 5 means the re-bump role merged
+# main itself -- that role's failed gate, and never step 2 without tests and
+# review (规格 #61 review r3, 取舍 2A). The review trigger is written once, in
+# 9.1's `6` line, and Unattended landing and Flash mode point back to it (r3,
+# Standards 6). A step 5 re-dispatch and 9.1's fix roles take the next free
+# --attempt, never a bare `--attempt 2` a re-bump round may already hold (r3,
+# 主审补充 2).
+has "a rerun's \`3\` / \`4\` go to their own lines below" \
+  'SKILL.md step 9.1 rerun sends exits 3 and 4 to their own lines' "$SKILL"
+has 'or the fix role has turned the tests green after a `4`' \
+  'SKILL.md step 9.1 reviews the re-bump once a 4 is turned green' "$SKILL"
+has "a rerun \`5\` means the re-bump role merged main itself" \
+  'SKILL.md step 9.1 reads a rerun 5 as the re-bump role having merged main' "$SKILL"
+has 'never to step 2 without tests and review' \
+  'SKILL.md step 9.1 does not go on after a rerun 5 without tests and review' "$SKILL"
+has "Once step 9.1's merge has landed (step 9.1's \`6\` line says when: after a re-bump, a committed conflict resolution, or a \`4\` turned green)" \
+  'unattended landing points the 9.1 review trigger back to step 9.1' "$SKILL"
+has "then once step 9.1's merge has landed (step 9.1's \`6\` line says when) run" \
+  'flash mode points the 9.1 review trigger back to step 9.1' "$SKILL"
+without 'has landed after either' \
+  'SKILL.md no longer repeats the two-case 9.1 review trigger verbatim' "$SKILL"
+has 're-dispatch it once with the next free `--attempt <n>`, within the 2-round cap' \
+  'SKILL.md step 5 re-dispatches a failed re-bump gate with the next free attempt' "$SKILL"
+has "step 8's form, with the next free \`--attempt <n>\` since step 8's fix role and the re-bump rounds already hold names" \
+  'SKILL.md step 9.1 conflict fix role takes the next free attempt' "$SKILL"
+has "step 8's form, each round with the next free \`--attempt <n>\`" \
+  'SKILL.md step 9.1 test-fix rounds take the next free attempt' "$SKILL"
+without 're-dispatch it once with `--attempt 2`' \
+  'SKILL.md step 5 no longer names a fixed attempt for a re-bump re-dispatch' "$SKILL"
+
 # --- SKILL.md: the three reports carry the route table and the check lines (票 #47)
 
 # The landing report: completion-report.sh with the run directory ends with
@@ -135,6 +239,9 @@ has '--bare' 'hooks README says --bare loads no hooks' "$HOOKS"
 has 'unattended-stop-guard' 'hooks README names the hooks a lean worker lacks' "$HOOKS"
 # Rule A's reminder is step 10's sentence again: it carries the run directory too.
 has 'close-self.sh --run-dir <Spec Run root>' 'hooks README rule A closes with the run directory' "$HOOKS"
+# The script gate counts the shared-counter gate in (规格 #61 票 #74): a
+# collision exits 6 and merges nothing, as a gate miss exits 2.
+has '以「需 re-bump」退出 6' 'hooks README counts the counter gate in' "$HOOKS"
 
 # --- what the cumulative review of 规格 #26 settled (MAINTAINING 第 51 条) -------
 
