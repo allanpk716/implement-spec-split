@@ -458,7 +458,7 @@ node -e 'console.log(JSON.stringify({tool_name:"Write",tool_input:{file_path:"C:
 **两个设计入口（Design session）**
 
 - `/grill-feature <想法>`：小功能。flash 主会话调 `scripts/design-session.sh` 开出一个 Design session（按「讨论」阶段的路由启动，默认官方 Opus），然后阻塞等待、不耗 token；Orca 会自动切到那个会话，你直接和 Opus 讨论，讨论完它当场做 to-spec、to-tickets、commit、push，写交接摘要后通知 flash 继续并自动切回主会话，flash 读完摘要就在主会话接着跑 `/find-next` 推进模式（起草、发布、启动第 1 波、总控都在这里）。
-- `/grill-map <地图或想法>`：大模块（wayfinder 地图）。同上，接上后 find-next 停在合成提问那一步等你；你说"先到这"就提前结束，这时不接 find-next，flash 只转述交接摘要里的地图状态和下一步。
+- `/grill-map <地图或想法>`：大模块（wayfinder 地图）。同上，接上后 find-next 把要拍板的取舍合成一轮按推荐自动拍板（可推翻）、不等回复，接着往下推进；你说"先到这"就提前结束，这时不接 find-next，flash 只转述交接摘要里的地图状态和下一步。
 - Design session 的运行目录在 `~/.cache/implement-spec-split/design/<repo>-<时间>-<kind>/`，交接摘要是其中的 `handoff.md`。
 
 **规格会话与 Opus review**

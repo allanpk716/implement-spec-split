@@ -37,6 +37,9 @@
 # ticket paragraph says that a smoke test of the skill's own text loads the
 # branch through CLAUDE_CONFIG_DIR, since the installed skills point at main
 # until the landing (the review's 未核实与提醒).
+# The second review fix of 规格 #58 (r2) pins, group by group: no document still
+# says find-next stops at a question round (Standards 2 — both setup guides,
+# grill-map's hand-over and find-next's usage bullet).
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -594,6 +597,33 @@ for doc in README.md docs/setup.md docs/setup.en.md; do
 done
 has '**Orca worker**:' 'GLOSSARY defines Orca worker' "$GLOSSARY"
 has '**Takeover**:' 'GLOSSARY defines Takeover' "$GLOSSARY"
+
+# --- no document still says find-next stops at a question round (规格 #58 复审 Standards 硬违规 2) ---
+
+# The first review fix pinned the documents it had touched. Four sentences it
+# did not touch still described the old stop: both setup guides and grill-map's
+# hand-over said find-next stops at its synthesized question round, and
+# find-next's usage bullet still parked on "what truly needs a human decision" —
+# the parking rule of before 票 #70. Each old sentence is gone and its
+# replacement, which says the round is decided by recommendation and waits for
+# nobody, is pinned. The ADRs are not listed: ADR 0004 keeps the old sentence as
+# history, with a 2026-11-28 note.
+SETUP=$ROOT/docs/setup.md
+SETUP_EN=$ROOT/docs/setup.en.md
+GRILL_MAP=$ROOT/grill-map/SKILL.md
+without 'find-next 停在合成提问那一步等你' 'docs/setup.md no longer says find-next stops at a question round' "$SETUP"
+has '接上后 find-next 把要拍板的取舍合成一轮按推荐自动拍板（可推翻）、不等回复' \
+  'docs/setup.md says the grill-map hand-over goes on through a decision round' "$SETUP"
+without 'synthesized question round' 'docs/setup.en.md no longer says find-next stops at a question round' "$SETUP_EN"
+has 'find-next settles the trade-offs in one decision round by the worker' \
+  'docs/setup.en.md says the grill-map hand-over goes on through a decision round' "$SETUP_EN"
+without 'stopping at its synthesized question round' 'grill-map no longer says find-next stops at a question round' "$GRILL_MAP"
+has 'settling every trade-off in one decision round by the worker' \
+  'grill-map says find-next decides the round by recommendation' "$GRILL_MAP"
+without '只有真要人决定的事才停车' 'find-next usage no longer parks on what needs a human decision' "$FIND_NEXT"
+has 'Opus 审查里的取舍不因是取舍而停车' 'find-next usage says a review trade-off never parks' "$FIND_NEXT"
+has '只有要本人身份或凭据的事（停车类别 `auth`）、或列出的选项里没有可逆的（`error`）才停车' \
+  'find-next usage names the two reasons that still park' "$FIND_NEXT"
 
 printf '\n%d passed, %d failed\n' "$PASSED" "$FAILED"
 exit "$FAILED"

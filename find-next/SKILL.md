@@ -18,7 +18,7 @@ description: 默认进入推进模式：循环扫描当前 GitHub 仓库的 wayf
 - `/find-next --watch`：只进入**总控**（见「总控」一节），不推进、不起草；推进模式第 11 步收尾后自动进入同一节。grill-feature / grill-map 启动规格后，本仓库没有总控在跑时也走这里
 - `--workers N` 可选，是全机 GLM worker 总数；每份规格的 `--parallel` = N ÷ K（至少 1）。没给时读 `~/.cache/implement-spec-split/max-workers`（`scripts/max-workers.sh` 用的同一文件）；文件也没有就把 worker 上限并入本轮拍板轮的最后一个条目，按建议值拍板（可推翻）。`--specs K` 是同时开几份规格，默认 2。**同一仓库同一时间只在一个会话里运行推进模式**：推进模式全程持仓库级 `find-next-advance` 锁（见「推进模式」第 1 步），第二个会话会被拦下；持锁会话被意外关闭后锁自动失效
 - `--agent-model <sonnet|opus|haiku|fable>` 只在 `--worker agent` 时有效，默认 `sonnet`；给了 `--worker codex`/`self`（或不给 `--worker`）却给 `--agent-model` 是参数冲突，报错让用户改。一个开关管全程：`--worker agent` 决定本技能自己的调研/决策/起草方式，不提供混搭；生成的开发命令不带后端参数（实现走路由表）。
-- **无人值守落地**（GLOSSARY.md）默认开启：本批规格（含之后自动开的波次）不停下问人；Opus 审查里带推荐、标「可自动采纳：是」的取舍按推荐落地并记为「自动拍板（可推翻）」，只有真要人决定的事才停车。落地、部分落地、停车都在规格 issue 下留报告，由本会话的总控汇总给用户。`--no-auto-land` 只在推进模式有效，用来让本批保留 push 前确认：第 10 步把它透传给 launch-wave.sh，`--apply` 会把 `auto_land: false` 写进启动状态，`--next-wave` 沿用；`--auto-land` 保留为兼容别名，等同默认。
+- **无人值守落地**（GLOSSARY.md）默认开启：本批规格（含之后自动开的波次）不停下问人；Opus 审查里的取舍不因是取舍而停车：带推荐、标「可自动采纳：是」的按推荐落地，标「可自动采纳：否」或「推荐：无」的按可逆性规则自选，都记为「自动拍板（可推翻）」（flash 规格会话里自选的那一类交一次 Opus review，见根 `SKILL.md`「Flash mode」）；只有要本人身份或凭据的事（停车类别 `auth`）、或列出的选项里没有可逆的（`error`）才停车。落地、部分落地、停车都在规格 issue 下留报告，由本会话的总控汇总给用户。`--no-auto-land` 只在推进模式有效，用来让本批保留 push 前确认：第 10 步把它透传给 launch-wave.sh，`--apply` 会把 `auto_land: false` 写进启动状态，`--next-wave` 沿用；`--auto-land` 保留为兼容别名，等同默认。
 
 只扫当前仓库，不跨仓库汇总。
 
