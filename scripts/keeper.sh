@@ -80,11 +80,11 @@ usage: $SCRIPT_NAME [--once] [--dry-run] [--repo <owner/name>] [--state <file>]
 Runs one keeper round: resumes quota/transient parking and dead sessions when
 their recoverable time has passed, asks Orca whether a silent or interrupted
 session is still alive and restarts it only when Orca says it exited (or lists
-no worker for it), notifies a human about parking that needs a decision, about
-sessions Orca cannot vouch for and about an interrupted claim whose session is
-still live, and sweeps abandoned Spec and Ticket worktrees
-(scripts/sweep-worktrees.sh). Reads GitHub, claims, run directories, session
-transcripts and Orca; with --dry-run it writes nothing.
+no worker for it), notifies a human once about auth and error parking, which it
+never resumes, about sessions Orca cannot vouch for and about an interrupted
+claim whose session is still live, and sweeps abandoned Spec and Ticket
+worktrees (scripts/sweep-worktrees.sh). Reads GitHub, claims, run directories,
+session transcripts and Orca; with --dry-run it writes nothing.
 
   --once     one round and exit (launchd); without it, rounds every
              KEEPER_INTERVAL seconds (default 600)
@@ -541,7 +541,11 @@ report_info() { # spec number -> kind<US>id<US>url<US>category<US>recover_at<US>
         const line = lines[i].replace(/\*/g, "").trim();
         let match = line.match(/^停车类别\s*[：:]\s*(.*)$/);
         if (match && !category) {
-          const word = String(match[1]).match(/quota|transient|decision|error|other/i);
+          // The four categories of the SKILL.md table: quota and transient are
+          // resumed once their time has passed, auth and error only notified.
+          // Any other word (decision and other retired with 票 #70) reads as no
+          // category, so the report takes the keyword fallback below.
+          const word = String(match[1]).match(/quota|transient|auth|error/i);
           category = word ? word[0].toLowerCase() : "";
         }
         match = line.match(/^可恢复时间\s*[：:]\s*(.*)$/);
@@ -574,7 +578,10 @@ report_info() { # spec number -> kind<US>id<US>url<US>category<US>recover_at<US>
         for (const value of future) if (value < best) best = value;
         recover = best;
       } else {
-        category = "decision";
+        // No quota keyword: a report a human must act on. error is the category
+        // keeper only notifies (auth names an identity it cannot supply, which
+        // the old reports never said in words).
+        category = "error";
         recover = "";
       }
     }
@@ -1014,6 +1021,9 @@ EOF
         fi
         ;;
       *)
+        # auth and error (and anything unrecognized): a human must act first, so
+        # the report is notified once and never resumed — the category alone
+        # decides this, whatever 可恢复时间 says.
         notify_park_once "$spec" "$id" "$url" "$category"
         ;;
     esac
