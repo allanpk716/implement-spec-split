@@ -123,6 +123,10 @@ has 'release in this order: the implementer first' \
 has '--watch <ticket worktree>=<its dispatch dir>' \
   'SKILL.md step 5 watches the ticket worktree for the re-bump role' "$SKILL"
 has '`fix-<m>` for step 5' 'SKILL.md names the re-bump role fix-<m> in the run directory' "$SKILL"
+# Its Brief follows the general rule, briefs/<name>.md with <name> the dispatch
+# name: it gets no naming scheme of its own (规格 #61 review r2, 取舍 3).
+has '<Spec Run root>/briefs/fix-<m>.md' 'SKILL.md step 5 names the re-bump Brief after the dispatch name' "$SKILL"
+without 'briefs/rebump-<m>.md' 'SKILL.md no longer gives the re-bump Brief a name of its own' "$SKILL"
 has "step 5's re-bump takes \`--ticket <m>\` and is named \`fix-<m>\`" \
   'SKILL.md dispatch section lets fix take --ticket for a re-bump' "$SKILL"
 # Step 9.1 merges main through the merger (ticket #73's --no-ticket-worktree
