@@ -122,6 +122,22 @@ has '--watch <ticket worktree>=<its dispatch dir>' \
 has '`fix-<m>` for step 5' 'SKILL.md names the re-bump role fix-<m> in the run directory' "$SKILL"
 has "step 5's re-bump takes \`--ticket <m>\` and is named \`fix-<m>\`" \
   'SKILL.md dispatch section lets fix take --ticket for a re-bump' "$SKILL"
+# Step 9.1 merges main through the merger (ticket #73's --no-ticket-worktree
+# shape) and reads its exits: 5 is nothing to do, not a test pass; 6 is a
+# re-bump role without a ticket number that reads main only; one review covers
+# the re-bump commits and the conflict resolution, in Unattended landing and
+# Flash mode alike.
+has "--ticket origin/<main branch> --no-ticket-worktree --test '<the repo's test command>'" \
+  'SKILL.md step 9.1 merges main through the merger' "$SKILL"
+without 'the main merge is the plain git merge' 'SKILL.md step 9.1 no longer merges main by hand' "$SKILL"
+has 'this is not a test pass' 'SKILL.md step 9.1 reads exit 5 as nothing to do, not a test pass' "$SKILL"
+has '`--role fix` without `--ticket`' 'SKILL.md step 9.1 dispatches the re-bump role as fix without a ticket' "$SKILL"
+has 'git ls-tree origin/<main branch>:docs/adr/' 'SKILL.md step 9.1 re-bump role reads main only' "$SKILL"
+has 'the re-bump commits and the conflict resolution together' \
+  'SKILL.md reviews the step 9.1 re-bump and the conflict resolution once' "$SKILL"
+has 'shared counters collide (merger exit `6`) — dispatch a re-bump role' \
+  'unattended landing dispatches a re-bump role on exit 6' "$SKILL"
+has '**Step 9 conflicts and re-bumps**' 'flash mode covers the step 9 re-bump' "$SKILL"
 
 # --- SKILL.md: the three reports carry the route table and the check lines (票 #47)
 
