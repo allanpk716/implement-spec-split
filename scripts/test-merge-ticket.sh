@@ -2,7 +2,10 @@
 # Tests for scripts/merge-ticket.sh (temporary git repositories; no Orca).
 # The test command is passed as an argument the way a Spec session passes it;
 # the fake it names records its working directory and arguments, and fails
-# while the file TEST_FAIL names exists.
+# while the file TEST_FAIL names exists. Shared counters (a numbered directory,
+# a version file) have their own gate: when both sides added the same one the
+# script exits 6 and merges nothing, so the second half of the file builds a
+# branch group with docs/adr, VERSION, CHANGELOG.md and pyproject.toml.
 
 set -u
 
@@ -428,6 +431,469 @@ expect_has 'has no commits' "a fresh branch off an older Integration commit says
 expect_without 'already part of' "a fresh branch off an older Integration commit is not read as landed" "$WORK/fresh-old.out.err"
 expect_test_not_run "a fresh branch off an older Integration commit runs no tests"
 expect_head "$HEAD_AFTER_T13" "a fresh branch off an older Integration commit changes nothing"
+
+# --- shared counters ------------------------------------------------------------
+# A new branch group off main (spec-102) so the assertions above keep their
+# Integration branch: a numbered directory docs/adr with two entries already, a
+# VERSION file, a CHANGELOG and a pyproject.toml. From here on the expect_*
+# helpers read INTEGRATION, so it points at the new group.
+
+expect_quiet() { # stderr file name — the run printed nothing on stderr
+  if [ -s "$1" ]; then
+    bad "$2" "$(cat "$1")"
+  else
+    ok "$2"
+  fi
+}
+
+expect_untouched() { # worktree sha name — the worktree's HEAD is <sha> and it is clean
+  head=$(git -C "$1" rev-parse HEAD 2>/dev/null)
+  out=$(git -C "$1" status --porcelain 2>/dev/null)
+  if [ "$head" != "$2" ]; then
+    bad "$3" "HEAD is ${head:-unknown}, expected $2"
+  elif [ -n "$out" ]; then
+    bad "$3" "status: $out"
+  else
+    ok "$3"
+  fi
+}
+
+expect_content() { # worktree path content name — HEAD:<path> in the worktree holds exactly <content>
+  got=$(git -C "$1" show "HEAD:$2" 2>/dev/null)
+  if [ "$got" = "$3" ]; then
+    ok "$4"
+  else
+    bad "$4" "content is [${got}], expected [$3]"
+  fi
+}
+
+expect_absent() { # worktree path name — HEAD:<path> does not exist in the worktree
+  if git -C "$1" cat-file -e "HEAD:$2" 2>/dev/null; then
+    bad "$3" "$2 exists at HEAD"
+  else
+    ok "$3"
+  fi
+}
+
+commit_in() { # worktree message — stage everything and commit
+  git -C "$1" add -A
+  git -C "$1" commit --quiet -m "$2"
+}
+
+new_ticket() { # m base — a Ticket worktree spec-102-t<m> off <base>, its physical path in T
+  T=$WORK/spec-102-t$1
+  git -C "$MAIN" worktree add --quiet -b "spec-102-t$1" "$T" "$2"
+  T=$(cd "$T" && pwd -P)
+}
+
+SPEC102=$WORK/spec-102
+git -C "$MAIN" worktree add --quiet -b spec-102 "$SPEC102" main
+INTEGRATION=$(cd "$SPEC102" && pwd -P)
+mkdir -p "$INTEGRATION/docs/adr"
+printf '%s\n' 'adr one' > "$INTEGRATION/docs/adr/0001-one.md"
+printf '%s\n' 'adr two' > "$INTEGRATION/docs/adr/0002-two.md"
+printf '%s\n' '1.0.0' > "$INTEGRATION/VERSION"
+printf '%s\n' '# changelog' '' '- base' > "$INTEGRATION/CHANGELOG.md"
+printf '%s\n' '[project]' 'version = "1.0.0"' '' '[tool.x]' 'key = 1' > "$INTEGRATION/pyproject.toml"
+commit_in "$INTEGRATION" 'spec 102 base: two ADRs, VERSION 1.0.0'
+BASE102=$(git -C "$INTEGRATION" rev-parse HEAD)
+HEAD_AFTER_USAGE=$BASE102
+
+# The two options: --counter may repeat, an empty one is a usage error, and
+# --no-ticket-worktree alone changes nothing about a local branch that is
+# checked out and clean.
+: > "$TEST_LOG"
+run_merge "$WORK/counter-empty.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-101-t7 --test 'fake-test' --counter ''
+expect_exit 64 "an empty --counter exits 64"
+run_merge "$WORK/counter-lone.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-101-t7 --test 'fake-test' --counter
+expect_exit 64 "a --counter without a path exits 64"
+expect_test_not_run "usage errors of the counter options run no tests"
+expect_head "$HEAD_AFTER_USAGE" "usage errors of the counter options change nothing"
+
+# --- both classes collide: t1 landed first, t2 merged the Integration branch back ---
+# t1 adds ADR 0005-a and bumps VERSION to 1.1.0; nothing on the Integration
+# side has changed since the base, so the gate has nothing to compare against.
+new_ticket 1 "$BASE102"
+T1=$T
+printf '%s\n' 'adr five a' > "$T1/docs/adr/0005-a.md"
+printf '%s\n' '1.1.0' > "$T1/VERSION"
+commit_in "$T1" 'ticket one adds ADR 0005-a and bumps VERSION to 1.1.0'
+TIP1=$(git -C "$T1" rev-parse HEAD)
+SHORT1=$(git -C "$T1" rev-parse --short HEAD)
+: > "$TEST_LOG"
+run_merge "$WORK/counter-t1.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t1 --test 'fake-test'
+expect_exit 0 "a ticket adding a numbered entry against an unmoved Integration branch merges"
+expect_quiet "$WORK/counter-t1.out.err" "a gate with nothing to compare prints nothing"
+expect_merged "$TIP1" "the first ticket lands"
+expect_test_ran "the first ticket's merge runs the tests"
+HEAD_AFTER_T1=$(git -C "$INTEGRATION" rev-parse HEAD)
+
+# t2 branched from the same base, adds ADR 0005-b and also bumps VERSION to
+# 1.1.0, then merges the Integration branch back before reporting: the
+# merge-base has moved to the Integration tip, so only the first-parent base
+# still finds t1's additions.
+new_ticket 2 "$BASE102"
+T2=$T
+printf '%s\n' 'adr five b' > "$T2/docs/adr/0005-b.md"
+printf '%s\n' '1.1.0' > "$T2/VERSION"
+commit_in "$T2" 'ticket two adds ADR 0005-b and bumps VERSION to 1.1.0'
+SHORT2=$(git -C "$T2" rev-parse --short HEAD)
+git -C "$T2" merge --quiet --no-edit spec-102
+TIP2=$(git -C "$T2" rev-parse HEAD)
+: > "$TEST_LOG"
+run_merge "$WORK/counter-both.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t2 --test 'fake-test'
+expect_exit 6 "both sides adding ADR 0005 and VERSION 1.1.0 exits 6"
+expect_has 'numbered-dir docs/adr 0005' "the collision names the numbered directory and its prefix" "$WORK/counter-both.out.err"
+expect_has 'version VERSION' "the collision names the version file" "$WORK/counter-both.out.err"
+expect_has 'docs/adr/0005-a.md' "the collision names the Integration side's entry" "$WORK/counter-both.out.err"
+expect_has 'docs/adr/0005-b.md' "the collision names the ticket side's entry" "$WORK/counter-both.out.err"
+expect_has $'integration\t'"$SHORT1" "the collision cites the Integration side's commit" "$WORK/counter-both.out.err"
+expect_has $'ticket\t'"$SHORT2" "the collision cites the ticket side's commit" "$WORK/counter-both.out.err"
+expect_has 'nothing merged' "the collision says nothing was merged" "$WORK/counter-both.out.err"
+expect_head "$HEAD_AFTER_T1" "a counter collision leaves the Integration branch where it was"
+expect_clean "a counter collision leaves no half-merged state"
+expect_test_not_run "a counter collision runs no tests"
+expect_untouched "$T2" "$TIP2" "a counter collision leaves the ticket branch and worktree alone"
+expect_without 'gate not met' "a counter collision is not a gate failure" "$WORK/counter-both.out.err"
+if [ -s "$WORK/counter-both.out" ]; then
+  bad "a counter collision prints nothing on stdout" "$(cat "$WORK/counter-both.out")"
+else
+  ok "a counter collision prints nothing on stdout"
+fi
+
+# Re-bump on the ticket side only: 0005-b renamed to 0006-b, VERSION 1.1.1, no
+# merge-back. The ticket side's net additions no longer collide and its VERSION
+# differs from the Integration tip, so the rerun merges.
+git -C "$T2" mv docs/adr/0005-b.md docs/adr/0006-b.md
+printf '%s\n' '1.1.1' > "$T2/VERSION"
+commit_in "$T2" 'ticket two re-bumps: ADR 0006-b, VERSION 1.1.1'
+TIP2=$(git -C "$T2" rev-parse HEAD)
+: > "$TEST_LOG"
+run_merge "$WORK/counter-rebump.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t2 --test 'fake-test'
+expect_exit 0 "after the re-bump the rerun merges"
+expect_quiet "$WORK/counter-rebump.out.err" "a cleared collision prints nothing"
+expect_merged "$TIP2" "the re-bumped ticket lands"
+expect_content "$INTEGRATION" VERSION '1.1.1' "the merge brings the re-bumped VERSION"
+expect_absent "$INTEGRATION" docs/adr/0005-b.md "the merge brings no entry 0005 from the ticket"
+expect_content "$INTEGRATION" docs/adr/0006-b.md 'adr five b' "the merge brings the renumbered entry"
+expect_content "$INTEGRATION" docs/adr/0005-a.md 'adr five a' "the merge keeps the Integration side's entry 0005"
+expect_test_ran "the rerun runs the tests"
+
+# --- numbered directory alone, VERSION already past: only one class is listed ---
+# t3 lands ADR 0007-a and VERSION 1.2.0. t4 branched from the tip before that,
+# adds ADR 0007-b, merges the Integration branch back, then moves VERSION on
+# to 1.3.0: the numbered directory collides, the version file does not.
+HEAD_BEFORE_T3=$(git -C "$INTEGRATION" rev-parse HEAD)
+new_ticket 3 "$HEAD_BEFORE_T3"
+T3=$T
+printf '%s\n' 'adr seven a' > "$T3/docs/adr/0007-a.md"
+printf '%s\n' '1.2.0' > "$T3/VERSION"
+commit_in "$T3" 'ticket three adds ADR 0007-a and bumps VERSION to 1.2.0'
+TIP3=$(git -C "$T3" rev-parse HEAD)
+SHORT3=$(git -C "$T3" rev-parse --short HEAD)
+run_merge "$WORK/counter-t3.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t3 --test 'fake-test'
+expect_exit 0 "the third ticket lands"
+HEAD_AFTER_T3=$(git -C "$INTEGRATION" rev-parse HEAD)
+
+new_ticket 4 "$HEAD_BEFORE_T3"
+T4=$T
+printf '%s\n' 'adr seven b' > "$T4/docs/adr/0007-b.md"
+commit_in "$T4" 'ticket four adds ADR 0007-b'
+SHORT4=$(git -C "$T4" rev-parse --short HEAD)
+git -C "$T4" merge --quiet --no-edit spec-102
+printf '%s\n' '1.3.0' > "$T4/VERSION"
+commit_in "$T4" 'ticket four moves VERSION on to 1.3.0'
+TIP4=$(git -C "$T4" rev-parse HEAD)
+: > "$TEST_LOG"
+run_merge "$WORK/counter-adr-only.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t4 --test 'fake-test'
+expect_exit 6 "a colliding ADR with VERSION already past exits 6"
+expect_has 'numbered-dir docs/adr 0007' "the collision names ADR 0007" "$WORK/counter-adr-only.out.err"
+expect_without 'version VERSION' "a VERSION that moved past is not listed" "$WORK/counter-adr-only.out.err"
+expect_without 'numbered-dir docs/adr 0005' "an ADR number the ticket did not add is not listed" "$WORK/counter-adr-only.out.err"
+expect_has $'integration\t'"$SHORT3" "the collision cites the Integration side's commit" "$WORK/counter-adr-only.out.err"
+expect_has $'ticket\t'"$SHORT4" "the collision cites the ticket side's commit" "$WORK/counter-adr-only.out.err"
+expect_head "$HEAD_AFTER_T3" "an ADR-only collision leaves the Integration branch where it was"
+expect_clean "an ADR-only collision leaves no half-merged state"
+expect_test_not_run "an ADR-only collision runs no tests"
+expect_untouched "$T4" "$TIP4" "an ADR-only collision leaves the ticket branch and worktree alone"
+
+git -C "$T4" mv docs/adr/0007-b.md docs/adr/0008-b.md
+commit_in "$T4" 'ticket four re-bumps: ADR 0008-b'
+TIP4=$(git -C "$T4" rev-parse HEAD)
+: > "$TEST_LOG"
+run_merge "$WORK/counter-adr-rebump.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t4 --test 'fake-test'
+expect_exit 0 "after the ADR re-bump the rerun merges"
+expect_quiet "$WORK/counter-adr-rebump.out.err" "a cleared ADR collision prints nothing"
+expect_merged "$TIP4" "the renumbered ticket lands"
+expect_content "$INTEGRATION" docs/adr/0008-b.md 'adr seven b' "the merge brings the renumbered entry 0008"
+expect_absent "$INTEGRATION" docs/adr/0007-b.md "the merge brings no entry 0007 from the ticket"
+expect_content "$INTEGRATION" VERSION '1.3.0' "the merge brings the ticket's VERSION"
+expect_test_ran "the ADR rerun runs the tests"
+
+# --- no merge-back: still a collision; a different number is not ---
+# t5 lands ADR 0010-a and VERSION 1.4.0. t6 branched from the tip before that
+# adds ADR 0010-b and also sets VERSION to 1.4.0, without merging anything
+# back: both collide (and git alone would have merged the ADRs silently).
+HEAD_BEFORE_T5=$(git -C "$INTEGRATION" rev-parse HEAD)
+new_ticket 5 "$HEAD_BEFORE_T5"
+T5=$T
+printf '%s\n' 'adr ten a' > "$T5/docs/adr/0010-a.md"
+printf '%s\n' '1.4.0' > "$T5/VERSION"
+commit_in "$T5" 'ticket five adds ADR 0010-a and bumps VERSION to 1.4.0'
+TIP5=$(git -C "$T5" rev-parse HEAD)
+SHORT5=$(git -C "$T5" rev-parse --short HEAD)
+run_merge "$WORK/counter-t5.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t5 --test 'fake-test'
+expect_exit 0 "the fifth ticket lands"
+HEAD_AFTER_T5=$(git -C "$INTEGRATION" rev-parse HEAD)
+
+new_ticket 6 "$HEAD_BEFORE_T5"
+T6=$T
+printf '%s\n' 'adr ten b' > "$T6/docs/adr/0010-b.md"
+printf '%s\n' '1.4.0' > "$T6/VERSION"
+commit_in "$T6" 'ticket six adds ADR 0010-b and bumps VERSION to 1.4.0'
+TIP6=$(git -C "$T6" rev-parse HEAD)
+SHORT6=$(git -C "$T6" rev-parse --short HEAD)
+: > "$TEST_LOG"
+run_merge "$WORK/counter-nomergeback.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t6 --test 'fake-test'
+expect_exit 6 "a collision without a merge-back exits 6"
+expect_has 'numbered-dir docs/adr 0010' "the collision without a merge-back names ADR 0010" "$WORK/counter-nomergeback.out.err"
+expect_has 'version VERSION' "the collision without a merge-back names VERSION" "$WORK/counter-nomergeback.out.err"
+expect_has $'integration\t'"$SHORT5" "the collision without a merge-back cites the Integration side's commit" "$WORK/counter-nomergeback.out.err"
+expect_has $'ticket\t'"$SHORT6" "the collision without a merge-back cites the ticket side's commit" "$WORK/counter-nomergeback.out.err"
+expect_head "$HEAD_AFTER_T5" "a collision without a merge-back leaves the Integration branch where it was"
+expect_clean "a collision without a merge-back leaves no half-merged state"
+expect_test_not_run "a collision without a merge-back runs no tests"
+expect_untouched "$T6" "$TIP6" "a collision without a merge-back leaves the ticket branch and worktree alone"
+
+# t7 from the same tip adds ADR 0011-b: a different number from the Integration
+# side's 0010-a, so it merges (VERSION untouched).
+new_ticket 7 "$HEAD_BEFORE_T5"
+T7=$T
+printf '%s\n' 'adr eleven b' > "$T7/docs/adr/0011-b.md"
+commit_in "$T7" 'ticket seven adds ADR 0011-b'
+TIP7=$(git -C "$T7" rev-parse HEAD)
+: > "$TEST_LOG"
+run_merge "$WORK/counter-other-number.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t7 --test 'fake-test'
+expect_exit 0 "a different ADR number is not a collision"
+expect_quiet "$WORK/counter-other-number.out.err" "a different ADR number prints nothing"
+expect_merged "$TIP7" "the ticket with the other number lands"
+expect_content "$INTEGRATION" docs/adr/0010-a.md 'adr ten a' "the Integration side's entry 0010 stays"
+expect_content "$INTEGRATION" docs/adr/0011-b.md 'adr eleven b' "the merge brings the ticket's entry 0011"
+
+# --- VERSION alone: merged back without touching it, or moved on after --------
+# t8 adds an unrelated file and merges the Integration branch back: its VERSION
+# equals the Integration tip (it came from there) and its own commits never
+# touched the file, so nothing is listed.
+new_ticket 8 "$HEAD_BEFORE_T5"
+T8=$T
+printf '%s\n' 'feature eight' > "$T8/feature8.txt"
+commit_in "$T8" 'ticket eight adds a feature'
+git -C "$T8" merge --quiet --no-edit spec-102
+TIP8=$(git -C "$T8" rev-parse HEAD)
+: > "$TEST_LOG"
+run_merge "$WORK/counter-version-untouched.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t8 --test 'fake-test'
+expect_exit 0 "a ticket that merged back without touching VERSION merges"
+expect_quiet "$WORK/counter-version-untouched.out.err" "an untouched VERSION prints nothing"
+expect_merged "$TIP8" "the ticket that did not touch VERSION lands"
+HEAD_AFTER_T8=$(git -C "$INTEGRATION" rev-parse HEAD)
+
+# t9 set VERSION to the Integration tip's value, merged the Integration branch
+# back, then moved VERSION on: touched by its own commits, but the tips differ.
+new_ticket 9 "$HEAD_BEFORE_T5"
+T9=$T
+printf '%s\n' '1.4.0' > "$T9/VERSION"
+commit_in "$T9" 'ticket nine bumps VERSION to 1.4.0'
+git -C "$T9" merge --quiet --no-edit spec-102
+printf '%s\n' '1.5.0' > "$T9/VERSION"
+commit_in "$T9" 'ticket nine moves VERSION on to 1.5.0'
+TIP9=$(git -C "$T9" rev-parse HEAD)
+: > "$TEST_LOG"
+run_merge "$WORK/counter-version-moved.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t9 --test 'fake-test'
+expect_exit 0 "a ticket that moved VERSION on after merging back merges"
+expect_quiet "$WORK/counter-version-moved.out.err" "a VERSION that moved on prints nothing"
+expect_merged "$TIP9" "the ticket that moved VERSION on lands"
+expect_content "$INTEGRATION" VERSION '1.5.0' "the merge brings the ticket's VERSION 1.5.0"
+expect_content "$INTEGRATION" feature8.txt 'feature eight' "the merge keeps the earlier ticket's file"
+
+# --- not built in: CHANGELOG and pyproject.toml; --counter names them ---------
+# t10 appends a line to the CHANGELOG and lands. t11 from the tip before that
+# appends the same line: identical changes merge cleanly and the CHANGELOG is
+# not a built-in counter, so nothing is listed.
+HEAD_BEFORE_T10=$(git -C "$INTEGRATION" rev-parse HEAD)
+new_ticket 10 "$HEAD_BEFORE_T10"
+T10=$T
+printf '%s\n' '- change ten' >> "$T10/CHANGELOG.md"
+commit_in "$T10" 'ticket ten appends to the CHANGELOG'
+TIP10=$(git -C "$T10" rev-parse HEAD)
+run_merge "$WORK/counter-t10.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t10 --test 'fake-test'
+expect_exit 0 "the tenth ticket lands"
+HEAD_AFTER_T10=$(git -C "$INTEGRATION" rev-parse HEAD)
+
+new_ticket 11 "$HEAD_BEFORE_T10"
+T11=$T
+printf '%s\n' '- change ten' >> "$T11/CHANGELOG.md"
+commit_in "$T11" 'ticket eleven appends the same CHANGELOG line'
+TIP11=$(git -C "$T11" rev-parse HEAD)
+: > "$TEST_LOG"
+run_merge "$WORK/counter-changelog.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t11 --test 'fake-test'
+expect_exit 0 "the CHANGELOG is not a built-in counter"
+expect_quiet "$WORK/counter-changelog.out.err" "identical CHANGELOG changes print nothing"
+expect_merged "$TIP11" "the ticket with the same CHANGELOG change lands"
+HEAD_AFTER_T11=$(git -C "$INTEGRATION" rev-parse HEAD)
+
+# pyproject.toml: t12 sets version = "2.0.0" and lands; t13 from the tip
+# before that makes the identical change and merges unlisted; t14 from the
+# same tip makes it again, and now --counter names the file (twice, to show
+# the option repeats and takes the union with the built-ins: the CHANGELOG
+# is named too but is not in the Integration side's diff since the base).
+HEAD_BEFORE_T12=$HEAD_AFTER_T11
+new_ticket 12 "$HEAD_BEFORE_T12"
+T12=$T
+printf '%s\n' '[project]' 'version = "2.0.0"' '' '[tool.x]' 'key = 1' > "$T12/pyproject.toml"
+commit_in "$T12" 'ticket twelve sets the pyproject version to 2.0.0'
+TIP12=$(git -C "$T12" rev-parse HEAD)
+SHORT12=$(git -C "$T12" rev-parse --short HEAD)
+run_merge "$WORK/counter-t12.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t12 --test 'fake-test'
+expect_exit 0 "the twelfth ticket lands"
+HEAD_AFTER_T12=$(git -C "$INTEGRATION" rev-parse HEAD)
+
+new_ticket 13 "$HEAD_BEFORE_T12"
+T13B=$T
+printf '%s\n' '[project]' 'version = "2.0.0"' '' '[tool.x]' 'key = 1' > "$T13B/pyproject.toml"
+commit_in "$T13B" 'ticket thirteen sets the same pyproject version'
+TIP13B=$(git -C "$T13B" rev-parse HEAD)
+: > "$TEST_LOG"
+run_merge "$WORK/counter-pyproject.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t13 --test 'fake-test'
+expect_exit 0 "pyproject.toml is not a built-in counter"
+expect_quiet "$WORK/counter-pyproject.out.err" "identical pyproject.toml changes print nothing"
+expect_merged "$TIP13B" "the ticket with the same pyproject.toml change lands"
+HEAD_AFTER_T13B=$(git -C "$INTEGRATION" rev-parse HEAD)
+
+new_ticket 14 "$HEAD_BEFORE_T12"
+T14=$T
+printf '%s\n' '[project]' 'version = "2.0.0"' '' '[tool.x]' 'key = 1' > "$T14/pyproject.toml"
+commit_in "$T14" 'ticket fourteen sets the same pyproject version'
+TIP14=$(git -C "$T14" rev-parse HEAD)
+SHORT14=$(git -C "$T14" rev-parse --short HEAD)
+: > "$TEST_LOG"
+run_merge "$WORK/counter-named.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-102-t14 --test 'fake-test' --counter pyproject.toml --counter CHANGELOG.md
+expect_exit 6 "a named counter both sides set to the same content exits 6"
+expect_has 'version pyproject.toml' "the collision names the counter the caller passed" "$WORK/counter-named.out.err"
+expect_without 'version CHANGELOG.md' "a named counter outside the Integration side's diff is not listed" "$WORK/counter-named.out.err"
+expect_has $'integration\t'"$SHORT12" "the named collision cites the Integration side's commit" "$WORK/counter-named.out.err"
+expect_has $'ticket\t'"$SHORT14" "the named collision cites the ticket side's commit" "$WORK/counter-named.out.err"
+expect_head "$HEAD_AFTER_T13B" "a named collision leaves the Integration branch where it was"
+expect_clean "a named collision leaves no half-merged state"
+expect_test_not_run "a named collision runs no tests"
+expect_untouched "$T14" "$TIP14" "a named collision leaves the ticket branch and worktree alone"
+
+# --- step 9.1 shape: main into the Integration branch, checked out nowhere ------
+# --ticket names a remote-tracking ref with --no-ticket-worktree. origin/main is
+# still the commit spec-102 branched from: nothing to merge is exit 5, not the
+# gate failure a fresh Ticket branch would be.
+git -C "$INTEGRATION" fetch --quiet origin
+HEAD_BEFORE_91=$(git -C "$INTEGRATION" rev-parse HEAD)
+: > "$TEST_LOG"
+run_merge "$WORK/step91-uptodate.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket origin/main --no-ticket-worktree --test 'fake-test'
+expect_exit 5 "an origin/main already in the Integration branch exits 5"
+expect_has 'ticket ref origin/main is already part of spec-102: nothing to merge' "an origin/main with nothing to merge says so" "$WORK/step91-uptodate.out.err"
+expect_without 'gate not met' "an origin/main with nothing to merge is not a gate failure" "$WORK/step91-uptodate.out.err"
+expect_test_not_run "an origin/main with nothing to merge runs no tests"
+expect_head "$HEAD_BEFORE_91" "an origin/main with nothing to merge changes nothing"
+
+# spec-102 adds ADR 0005-d and main adds 0020-c (another Spec landed there): no
+# number in common, so the merge happens as a merge commit of the previous tip
+# and origin/main.
+mkdir -p "$MAIN/docs/adr"
+printf '%s\n' 'adr twenty c' > "$MAIN/docs/adr/0020-c.md"
+commit_in "$MAIN" 'main adds ADR 0020-c'
+git -C "$MAIN" push --quiet origin main
+printf '%s\n' 'adr five d' > "$INTEGRATION/docs/adr/0005-d.md"
+commit_in "$INTEGRATION" 'spec 102 adds ADR 0005-d'
+git -C "$INTEGRATION" fetch --quiet origin
+ORIGIN_MAIN=$(git -C "$INTEGRATION" rev-parse origin/main)
+HEAD_91=$(git -C "$INTEGRATION" rev-parse HEAD)
+: > "$TEST_LOG"
+run_merge "$WORK/step91-clean.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket origin/main --no-ticket-worktree --test 'fake-test unit'
+expect_exit 0 "step 9.1 with a different ADR number merges"
+expect_quiet "$WORK/step91-clean.out.err" "a clean step 9.1 prints nothing"
+expect_has 'merge-ticket: merged origin/main into spec-102' "a clean step 9.1 reports the merge" "$WORK/step91-clean.out"
+parents=$(git -C "$INTEGRATION" log -1 --format='%P' HEAD)
+if [ "$parents" = "$HEAD_91 $ORIGIN_MAIN" ]; then
+  ok "a clean step 9.1 is a merge commit of the previous tip and origin/main"
+else
+  bad "a clean step 9.1 is a merge commit of the previous tip and origin/main" "parents=[$parents]"
+fi
+expect_content "$INTEGRATION" docs/adr/0020-c.md 'adr twenty c' "a clean step 9.1 brings main's entry"
+expect_test_ran "a clean step 9.1 runs the tests"
+expect_clean "a clean step 9.1 leaves a clean worktree"
+HEAD_AFTER_91=$(git -C "$INTEGRATION" rev-parse HEAD)
+
+# origin/main now sits behind that merge: still exit 5, still no tests.
+: > "$TEST_LOG"
+run_merge "$WORK/step91-landed.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket origin/main --no-ticket-worktree --test 'fake-test unit'
+expect_exit 5 "an origin/main behind a merge commit exits 5"
+expect_has 'nothing to merge' "an origin/main behind a merge commit says so" "$WORK/step91-landed.out.err"
+expect_without 'gate not met' "an origin/main behind a merge commit is not a gate failure" "$WORK/step91-landed.out.err"
+expect_test_not_run "an origin/main behind a merge commit runs no tests"
+expect_head "$HEAD_AFTER_91" "an origin/main behind a merge commit changes nothing"
+
+# main adds ADR 0005-c (another Spec landed there): the same number spec-102
+# holds as 0005-a and 0005-d, and main is never merged back.
+printf '%s\n' 'adr five c' > "$MAIN/docs/adr/0005-c.md"
+commit_in "$MAIN" 'main adds ADR 0005-c'
+git -C "$MAIN" push --quiet origin main
+SHORT_MAIN_91=$(git -C "$MAIN" rev-parse --short HEAD)
+git -C "$INTEGRATION" fetch --quiet origin
+HEAD_91=$(git -C "$INTEGRATION" rev-parse HEAD)
+: > "$TEST_LOG"
+run_merge "$WORK/step91-collide.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket origin/main --no-ticket-worktree --test 'fake-test unit'
+expect_exit 6 "step 9.1 with ADR 0005 added on both sides exits 6"
+expect_has 'numbered-dir docs/adr 0005' "the step 9.1 collision names ADR 0005" "$WORK/step91-collide.out.err"
+expect_has 'docs/adr/0005-c.md' "the step 9.1 collision names main's entry" "$WORK/step91-collide.out.err"
+expect_has 'docs/adr/0005-d.md' "the step 9.1 collision names the Integration side's entry" "$WORK/step91-collide.out.err"
+expect_has $'ticket\t'"$SHORT_MAIN_91" "the step 9.1 collision cites main's commit" "$WORK/step91-collide.out.err"
+expect_head "$HEAD_91" "the step 9.1 collision leaves the Integration branch where it was"
+expect_clean "the step 9.1 collision leaves no half-merged state"
+expect_test_not_run "the step 9.1 collision runs no tests"
+# Without the switch the default gate is unchanged: origin/main is not a local
+# branch, so it does not exist as far as --ticket is concerned.
+run_merge "$WORK/step91-default.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket origin/main --test 'fake-test unit'
+expect_exit 2 "origin/main without --no-ticket-worktree exits 2"
+expect_has 'ticket branch origin/main does not exist' "origin/main without the switch is not a ticket branch" "$WORK/step91-default.out.err"
+expect_without 'numbered-dir' "the default gate stops before the counters" "$WORK/step91-default.out.err"
+
+# The switch is about the check, not the kind of ref: a local Ticket branch
+# with no worktree (spec-101-t9 above) passes with it and merges.
+: > "$TEST_LOG"
+run_merge "$WORK/no-worktree-switch.out" --worktree "$INTEGRATION" --integration spec-102 \
+  --ticket spec-101-t9 --no-ticket-worktree --test 'fake-test'
+expect_exit 0 "a ticket branch without a worktree merges with --no-ticket-worktree"
+expect_merged "$(git -C "$MAIN" rev-parse spec-101-t9)" "the ticket branch without a worktree lands"
+expect_test_ran "the ticket branch without a worktree runs the tests"
 
 printf '\n%d passed, %d failed\n' "$PASSED" "$FAILED"
 [ "$FAILED" -eq 0 ]
