@@ -231,6 +231,26 @@ without 'grilling 是 HITL' 'find-next step 3 no longer holds grilling for the u
 without '人工清单放进第 6 步那一轮' 'find-next step 3 no longer puts the human list in a question round' "$FIND_NEXT"
 without '其他三类仍按第 6 步问用户后处理' 'find-next step 4 no longer asks about the other three classes' "$FIND_NEXT"
 
+# The wrap-up lists every auto-decision of the round with its reversal recipe and
+# the items left to the human; the supervisor decides a parked Spec's recommended
+# items itself (a 拍板 comment marked 总控自动拍板, then --only), asks only for
+# auth, and ALL_DONE lists every auto-decision of the supervision. The error
+# handling no longer asks the user to choose between waiting and stopping, and
+# no longer names the three-round cap.
+has '完成度结论之下列「**本轮自动拍板**」' 'find-next step 11 lists the round auto-decisions' "$FIND_NEXT"
+has '逐条带推翻回法「推翻 #<票号> <条目> 改选 <X>」' 'find-next step 11 gives each auto-decision its reversal recipe' "$FIND_NEXT"
+has '再列「**要你做**」：没拍板的本人事项' 'find-next step 11 lists the undecided human items' "$FIND_NEXT"
+has '「<条目>：选 <X>（总控自动拍板 <日期>，可推翻）」' 'the supervisor writes its own 拍板 comment for recommended items' "$FIND_NEXT"
+has '只有条目需要本人身份或凭据（停车类别 `auth`）才问用户' 'the supervisor asks only for auth' "$FIND_NEXT"
+has '已自动拍板 w · 要你做 v' 'the SUMMARY line counts auto-decisions and human to-dos' "$FIND_NEXT"
+has '集中列出本次总控期间的全部自动拍板' 'ALL_DONE lists every auto-decision of the supervision' "$FIND_NEXT"
+has '或拍的是决策票、地图条目（迷雾毕业、散票建地图）和散票分流时' 'the reversal recipe reaches decision tickets, map entries and loose tickets' "$FIND_NEXT"
+without '待你拍板 w' 'the SUMMARY line no longer counts items waiting for the user' "$FIND_NEXT"
+without '按推进模式第 6 步的问题轮格式问用户' 'the supervisor no longer asks the parked items' "$FIND_NEXT"
+without '因 3 轮问询上限' 'the wrap-up no longer names the three-round cap' "$FIND_NEXT"
+without '已问满 3 轮' 'the error handling no longer names the three-round cap' "$FIND_NEXT"
+without '问是等还是停止' 'the error handling no longer asks the user to choose' "$FIND_NEXT"
+
 # --- the Ticket Brief template --------------------------------------------------
 
 for text in 'worker_done' '--task-id' '## 护栏' '探索笔记' '规格内容' '票内容' \
