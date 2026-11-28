@@ -36,15 +36,17 @@ fix / 冲突角色（--role fix / --role merge）沿用本模板：把「票内�
 
 1. 测试先行：先写会失败的测试，再写实现让它通过，再重构；每一步都跑测试。测试命令见「验收命令」。
 2. 自己提交：每个逻辑步骤一个 commit（消息用仓库惯用的语言，写明票号 `#<m>`）；结束前工作区必须干净（`git status --porcelain` 为空），不留未提交或未跟踪的文件。
-3. 不要再派发任何 worker 或子代理，不要启动另一个 claude / codex 进程；必须等待时在前台等够，不要起后台进程后就结束。
+3. 不要再派发任何 worker 或子代理，不要启动另一个 claude / codex 进程；必须等待时在前台等够，不要起后台进程后就结束。冒烟票例外：agent 驱动冒烟票的操作序列里，要开的 Orca 终端或会话是被测的操作本身，不算派发（见下面 ops 节）；护栏点名了 `orca orchestration worker-start` 才能用，没点名仍禁止，第 4 条不因此放宽——开的会话是被测对象，不是绕过源码 hook 的途径。
 4. If a source-write hook blocks you, stop and state that in your report. Do not work around it: do not use `env -u FLASH_ORCHESTRATOR`, do not start another `claude`, `claude-glm`, or `codex` process, do not use `orca orchestration worker-start`, and do not write source through Bash to bypass the hook.
 5. Run any `rm` as its own Bash command with literal paths: no variables, globs, `$(...)`, or `sh -c` strings, and never chained with `&&`, `;` or pipes. Do not pass `rm` as an argument to a wrapper script; call `docker rm <name>` directly. Prefer fresh directory names over deleting and recreating one.
-6. 范围：只做「期望改动」列出的修改点。范围外的问题写进报告，不要顺手改。设计级或微妙正确性的问题不要猜，写进报告交回，由调用方决定。
+6. 范围：只做「期望改动」列出的修改点。范围外的问题写进报告，不要顺手改。设计级或微妙正确性的问题不要猜，写进报告交回，由调用方决定。某一步只有放宽安全边界（护栏、hook、权限这类）才能做时不执行：把该项记进报告的「未执行的放宽项」，该条验收按「已记录」算过；不要替调用方决定放宽。
 7. git 命令因已存在的 `.lock` 文件失败时（多个 Run 共用一个仓库），等几秒重试，最多 3 次；绝不删 `.lock` 文件。
 
 ### ops 票（仅在票是 ops 票时保留本节；ops 票不要求第 1、2 条）
 
 - 本票经 ssh-manager 执行：可以用 `mcp__ssh-manager__*` 工具（调用方已用 `--mcp-config` 加上）。先 `mcp__ssh-manager__list_servers` 拿真实 `server_id`，读该服务器的 `caveats` / `role` / `services` 再动手，不要凭记忆猜主机。
+- 本机运维票（票面写「在本机执行」且带 `## 护栏`；agent 驱动冒烟票是其中一种）：工作在本机做——文件、服务、本机状态——不出本机。删掉上面 ssh-manager 那一行（调用方没有加 `--mcp-config`；票里也有 ssh 的事时除外），护栏照下面的写法原样粘贴。
+- agent 驱动冒烟票（本机运维票的一种）：票面写了要驱动的 Orca 操作序列（`orca` CLI 调用按序：开终端或工作区、发输入、等待、读输出）、预期证据和护栏。按票面的操作序列驱动（用法见 orchestration / orca-cli 技能），把预期证据——终端输出摘录、报告首部、状态文件——写进结果报告。序列里开 Orca 终端或会话是操作本身，不是派 worker（第 3 条的例外）；护栏点名了 `orca orchestration worker-start` 才能用，没点名仍禁止。
 - 护栏（票的 `## 护栏` 一节，原样）：
   <原样粘贴>
 - 护栏挡住你要做的事、或验收标准达不到时，只报告、不硬推；报告里写清远端改了什么、怎么回滚。
@@ -84,6 +86,7 @@ fix / 冲突角色（--role fix / --role merge）沿用本模板：把「票内�
 2. **验收证据**：对每条验收命令写出命令原文、退出码、输出末尾（最多 30 行，原样粘贴，不要概括）。
 3. **未完成或偏离 Brief 之处**：没有就写「无」。
 4. **范围外发现 / 设计级疑问**：没有就写「无」。
+5. **未执行的放宽项**：只有放宽安全边界才能做的步骤、被护栏挡住没做的步骤，逐项写清哪一步、要放宽什么；没有写「无」。
 
 ## 完成后（worker_done）
 

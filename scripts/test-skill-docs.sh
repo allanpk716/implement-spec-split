@@ -26,7 +26,10 @@
 # (做错 3 — step 6, the selecting Opus review of the flash mode and the
 # supervisor each carry the rule), and step 9's local install is for this
 # skill's own repository only (越界 2 — no other repository's install.sh is
-# run at landing).
+# run at landing). The Ticket Brief template carries the rules 规格 #58 wrote
+# for every Ticket (Spec 缺失 1: the local ops ticket and the agent-driven smoke
+# ticket in the ops section, the smoke exception of rule 3, a loosening recorded
+# instead of taken, the fifth item of the report).
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -402,6 +405,27 @@ for text in 'worker_done' '--task-id' '## 护栏' '探索笔记' '规格内容' 
   has "$text" "Brief template has [$text]" "$BRIEF"
 done
 without '不要 `git commit`' 'Brief template requires the worker to commit' "$BRIEF"
+
+# The Ticket Brief template carries the rules 规格 #58 wrote for every Ticket,
+# not only for an ssh ops ticket (审查 Spec 缺失 1). A Lean start loads no
+# skills, so a worker knows only its Brief: one written from the template as it
+# stood had nowhere to record a loosening, and a smoke ticket's worker read
+# rule 3 as forbidding the very terminal the ticket is about. The ops section
+# now names the local ops ticket and the agent-driven smoke ticket, rule 3
+# carries the smoke exception (rule 4, the hook rule, is copied verbatim and
+# stays as it is), a step that would need a loosened boundary is recorded
+# instead of taken, and the report has a fifth item for those items.
+for text in '本机运维票' 'agent 驱动冒烟票' '未执行的放宽项' 'Orca 操作序列'; do
+  has "$text" "Brief template names [$text]" "$BRIEF"
+done
+has '冒烟票例外：agent 驱动冒烟票的操作序列里，要开的 Orca 终端或会话是被测的操作本身，不算派发' \
+  'Brief template rule 3 excepts the session a smoke ticket opens' "$BRIEF"
+has '护栏点名了 `orca orchestration worker-start` 才能用，没点名仍禁止' \
+  'Brief template keeps worker-start forbidden unless the guardrails name it' "$BRIEF"
+has '删掉上面 ssh-manager 那一行' 'Brief template tells a local ops ticket to drop the ssh-manager line' "$BRIEF"
+has '某一步只有放宽安全边界（护栏、hook、权限这类）才能做时不执行：把该项记进报告的「未执行的放宽项」，该条验收按「已记录」算过' \
+  'Brief template records a loosening instead of taking the step' "$BRIEF"
+has '5. **未执行的放宽项**：' 'Brief template report has the fifth item' "$BRIEF"
 
 # --- the three root Brief templates carry the 环境约束 section verbatim (票 #60, 规格 #58)
 
