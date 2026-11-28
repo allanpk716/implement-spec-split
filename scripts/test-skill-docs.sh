@@ -17,7 +17,11 @@
 # and 1 from their own lines (one positive and one negative check), where a
 # 9.1 rerun's 3 / 4 / 5 go, the 9.1 review trigger stated once and pointed to
 # from Unattended landing and Flash mode, and the --attempt of a step 5
-# re-dispatch and of 9.1's fix roles taken as the next free one.
+# re-dispatch and of 9.1's fix roles taken as the next free one. So are the two
+# rules of ticket #79: tests and verification finish in the foreground before
+# the final report (the Brief templates and the step 5 dispatch texts), and a
+# main session verifies a worker gone idle without a report itself (ps, git)
+# instead of waiting again.
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -29,6 +33,8 @@ set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SKILL=$ROOT/SKILL.md
 BRIEF=$ROOT/find-next/templates/brief-implement.md
+# The root template of the Opus / codex division, a different file from BRIEF.
+BRIEF_ROOT=$ROOT/templates/brief-implement.md
 HOOKS=$ROOT/hooks/README.md
 GLOSSARY=$ROOT/GLOSSARY.md
 FIND_NEXT=$ROOT/find-next/SKILL.md
@@ -56,7 +62,7 @@ without() { # text name file
   if grep -Fq -- "$1" "$3" 2>/dev/null; then bad "$2" "unexpected [$1] in ${3#$ROOT/}"; else ok "$2"; fi
 }
 
-for file in "$SKILL" "$BRIEF" "$HOOKS" "$GLOSSARY" "$FIND_NEXT" "$LIB_TRANSCRIPT" "$DELEGATE_GUARD"; do
+for file in "$SKILL" "$BRIEF" "$BRIEF_ROOT" "$HOOKS" "$GLOSSARY" "$FIND_NEXT" "$LIB_TRANSCRIPT" "$DELEGATE_GUARD"; do
   [ -f "$file" ] || { bad "file exists" "$file"; printf '\n%d passed, %d failed\n' "$PASSED" "$FAILED"; exit "$FAILED"; }
 done
 
@@ -230,6 +236,60 @@ for text in 'worker_done' '--task-id' '## 护栏' '探索笔记' '规格内容' 
   has "$text" "Brief template has [$text]" "$BRIEF"
 done
 without '不要 `git commit`' 'Brief template requires the worker to commit' "$BRIEF"
+
+# --- tests finish in the foreground; an idle worker is verified, not waited for (票 #79)
+
+# On 2026-11-28 two workers (spec-62 fix-r2, spec-26 merger-tmain) left their
+# tests running in the background, wrote that they would report when those had
+# finished, and ended their turn. Nothing wakes an idle worker: the report never
+# came and each session waited. So the Brief templates say that tests and
+# verification finish in the foreground before the final report, the step 5
+# dispatch texts for the merge role and the fix roles carry the same rule, and
+# a main session that meets a worker gone idle without a report verifies it
+# itself (ps, git) instead of waiting again. Each place is pinned where the
+# rule is written.
+
+# The Ticket Brief template every dispatched role's Brief is written from, and
+# the root template of the Opus / codex division: the same sentence in both.
+has '测试与验证一律前台跑完再交最终报告；不得把测试放到后台然后结束回合' \
+  'Ticket Brief template runs its tests in the foreground before the final report' "$BRIEF"
+has 'worker 空闲后不会被唤醒，后台收尾等于失联' \
+  'Ticket Brief template says why: nothing wakes an idle worker' "$BRIEF"
+has '测试与验证一律前台跑完再交最终报告；不得把测试放到后台然后结束回合' \
+  'root Brief template runs its tests in the foreground before the final report' "$BRIEF_ROOT"
+# Step 5: the merge role's Brief and each fix role's Brief carry the rule.
+has 'carrying the foreground-test rule (票 #79: its tests and verification finish in the foreground before its final report' \
+  'SKILL.md step 5 merge-role Brief carries the foreground-test rule' "$SKILL"
+has 'runs the test command in the foreground before its final report (the foreground-test rule of the `3` line' \
+  'SKILL.md step 5 re-bump Brief carries the foreground-test rule' "$SKILL"
+has 'a Brief that carries the foreground-test rule of the `3` line' \
+  'SKILL.md step 5 test-failure fix Brief carries the foreground-test rule' "$SKILL"
+# The main session verifies a worker gone idle without a report itself and
+# never waits again for it; the two wait exits that can meet one, and the
+# Worker failures rules, point to it.
+has 'A worker that went idle without a final report (票 #79)' \
+  'SKILL.md has the rule for a worker gone idle without a final report' "$SKILL"
+has 'never wait again for such a worker' \
+  'SKILL.md never waits again for a worker gone idle without a report' "$SKILL"
+has 'Verify yourself, in the foreground: `ps` for the test it left running' \
+  'SKILL.md verifies an idle worker by the process it left' "$SKILL"
+has "for the branch's last commit time and \`git status --porcelain\` in its worktree for its state" \
+  'SKILL.md verifies an idle worker by the branch and the worktree' "$SKILL"
+has "What it left goes through the gate's three script checks below" \
+  'SKILL.md judges a worker gone idle by the gate, as if it had reported' "$SKILL"
+has 'a worker that went idle without a report (item 6) is never waited for again' \
+  'SKILL.md wait timeout points an idle worker to the rule' "$SKILL"
+has "that worker is item 6's, never one to wait for again" \
+  'SKILL.md wait mail points a worker stopped without reporting to the rule' "$SKILL"
+has 'a worker that went idle without a report and left a gate that is not met (verify it first, as "Dispatching a role" item 6 says' \
+  'unattended landing verifies an idle worker before it counts as a failure' "$SKILL"
+# find-next: an --worker agent subagent gone idle without a final report.
+has '**子代理空闲却没交最终报告**（票 #79）' \
+  'find-next SKILL.md has the rule for a subagent gone idle without a final report' "$FIND_NEXT"
+has '自己核实，按证据判定完成或失败并收尾，不无限等待' \
+  'find-next SKILL.md verifies itself instead of waiting' "$FIND_NEXT"
+has '按「推进模式」开头的核实规则自己核实' \
+  'find-next error handling points an idle subagent to the rule' "$FIND_NEXT"
 
 # --- hooks README ----------------------------------------------------------------
 

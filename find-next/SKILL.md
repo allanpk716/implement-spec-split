@@ -137,6 +137,8 @@ flash 模式下，本节所有原本由主会话审读或复核的结论都按�
 
 `--worker agent` 时的同构做法（适用于本节所有原本派 codex-worker.sh 的步骤；仅非 flash 会话，flash 模式下这些步骤照旧派 codex worker，见「flash 模式」一节的「worker 后端」）：照旧建运行目录和子目录、照旧写 `brief.md`，然后开一个 Agent 子代理，`model` 显式传 `--agent-model` 的值，prompt 固定为：「读 <该子目录>/brief.md 并照做，把最终报告写到 <该子目录>/result.md，同时作为你的最终回复」。Brief 里「wrapper 会把最终回复存成 result.md，不要自己写」这类话是对 codex worker 说的，agent 模式下以 prompt 为准：子代理自己写 `result.md`。没有 `status.json`，主会话以子代理的返回和 `result.md` 为准；失败时把原因补进 Brief、换新运行目录重派一次，再失败就停下报告，不自动改用 codex 或 self。
 
+**子代理空闲却没交最终报告**（票 #79）：`--worker agent` 的子代理留下「测试在后台跑，跑完再报」之类的话、结束回合返回时，没有机制会再唤醒它，后台任务结束也没人来报——主会话不等这份报告，自己核实，按证据判定完成或失败并收尾，不无限等待。核实在前台做：`ps` 看它留下的进程还在不在（`ps -axo pid,etime,time,command`；还在跑的后台任务不是进展——它的回合已经结束，没人会去读结果——结束它）；看它该交的产物在不在、全不全（`result.md`，以及 Brief 要求的 `resolution.md`、草稿）；它会改仓库时（task、prototype）再看分支最近提交时间和工作区状态（`git for-each-ref --sort=-committerdate --format='%(refname:short) %(committerdate:relative)' 'refs/heads/<分支>'`、`git status --porcelain`）。产物齐全、该提交的已提交，就当作它交了报告，照常复核；产物缺失或没提交，按失败处理——把原因补进 Brief、换新运行目录重派一次，再失败就停下报告。
+
 **Brief 卫生**：往 Brief 里引用仓库外的文件（调研文档、别处的笔记、`~/ops` 下的脚本这类）前，先用系统索引（macOS 的 `mdfind`）或 `ls` 定位到确切路径并确认存在再写；定位不到就在 Brief 里明写「未定位到，不作为依据」，不给模糊路径让 worker 自行全盘搜索。各 Brief 模板的「环境约束（找文件与子进程）」一节是 worker 侧的对应约束。
 
 推进模式只支持 GitHub 跟踪器。先读 `docs/agents/issue-tracker.md`；发现本地 markdown 跟踪器时，说明推进模式不支持，改按 `--suggest` 或 `--list` 执行。**同一仓库同一时间只在一个会话里运行推进模式**，由第 1 步的 `find-next-advance` 锁保证。
@@ -339,6 +341,7 @@ flash 模式下，本节所有原本由主会话审读或复核的结论都按�
 - worker `stalled` / `error`：把失败原因补进 Brief，换新运行目录重跑一次；再失败就停下报告。
 - worker `violation`：报告作废，把 `changed_paths` 交给用户；不发布、不关票。
 - `--worker agent` 的子代理没有 `status.json` 和上述错误码：以子代理返回与 `result.md` 为准，失败时换新运行目录重派一次；再失败就停下报告，不自动改用 codex 或 self。
+- `--worker agent` 的子代理空闲却没交最终报告（留下「测试在后台跑，跑完再报」之类的话就结束回合）：不等它，按「推进模式」开头的核实规则自己核实（`ps`、产物、`git`），按证据判定完成或失败再收尾。
 - GitHub 或发布脚本失败：停止在当前操作，不手工补已由脚本负责的创建/核对；可修复后重跑幂等脚本。
 - 一轮扫描没有任何 research、决策、迷雾毕业、task、prototype、散票分流、起草、发布或启动可做：先放 `completion-report.sh <仓库>` 的完成度结论（脚本非 0 时写「完成度结论（查询失败）」），下面再输出当前最接近的阻塞点（含空地图、已认领不动的票、等待时机的散票）并结束。
 - 已问满 3 轮或用户回「先到这」：不再发下一轮问题，按第 11 步收尾并列出剩余待拍板事项。

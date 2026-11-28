@@ -41,6 +41,7 @@ fix / 冲突角色（--role fix / --role merge）沿用本模板：把「票内�
 5. Run any `rm` as its own Bash command with literal paths: no variables, globs, `$(...)`, or `sh -c` strings, and never chained with `&&`, `;` or pipes. Do not pass `rm` as an argument to a wrapper script; call `docker rm <name>` directly. Prefer fresh directory names over deleting and recreating one.
 6. 范围：只做「期望改动」列出的修改点。范围外的问题写进报告，不要顺手改。设计级或微妙正确性的问题不要猜，写进报告交回，由调用方决定。
 7. git 命令因已存在的 `.lock` 文件失败时（多个 Run 共用一个仓库），等几秒重试，最多 3 次；绝不删 `.lock` 文件。
+8. 测试与验证一律前台跑完再交最终报告；不得把测试放到后台然后结束回合——worker 空闲后不会被唤醒，后台收尾等于失联。「验收命令」在前台逐条跑完、看到退出码，再写报告、再发 `worker_done`；命令太久被挪到后台的，继续在前台等它结束。
 
 ### ops 票（仅在票是 ops 票时保留本节；ops 票不要求第 1、2 条）
 
