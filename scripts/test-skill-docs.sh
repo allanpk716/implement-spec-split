@@ -700,10 +700,10 @@ has 'turns each unexecuted loosening into a loose ticket, whatever repository th
 # like "可自动采纳：否 — someone has to plug it into the real device and test"
 # went to the reversibility rule, which picked an option the Run cannot carry
 # out (it changes nothing, so it is the most "reversible" one), and only the fix
-# role's report parked the Run. Such an option is now listed under 要你做 and
-# never picked, the same exception as find-next's step 6; the parking categories
-# are not touched.
-has "An option that needs the owner's own hands — a physical action the Run cannot carry out — is never picked either, whatever the rule above would pick: list it under 要你做 in the landing report and decide among the remaining options as above; when no option is left, the item parks by the two parking rules above." \
+# role's report parked the Run. Such an option is now listed under 要你做的 of
+# the landing report and never picked, the same exception as find-next's step 6;
+# the parking categories are not touched.
+has "An option that needs the owner's own hands — a physical action the Run cannot carry out — is never picked either, whatever the rule above would pick: list it under 要你做的 in the landing report and decide among the remaining options as above; when no option is left, the item parks by the two parking rules above." \
   "SKILL.md step 8 never picks an option that needs the owner's own hands" "$SKILL"
 
 # --- the two-clone shape of the clone-direct install is a known limitation (规格 #58 复审 Spec 6, 取舍 2 选 A) ---
