@@ -6,6 +6,15 @@ set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 DOCTOR=$ROOT/scripts/doctor.sh
 NODE_BIN=$(command -v node)
+# The skills this checkout has, read the way test-install.sh reads them: every
+# git-tracked SKILL.md, named by its frontmatter name. doctor runs install.sh
+# --check (规格 #58 票 #65), which expects a link for each under ~/.claude/skills,
+# so new_case links them all into the case's HOME, pointing at this checkout.
+SKILL_LINKS=$(git -C "$ROOT" ls-files | grep -E '(^|/)SKILL\.md$' | while IFS= read -r f; do
+  if [ "$f" = SKILL.md ]; then d=.; else d=${f%/SKILL.md}; fi
+  n=$(tr -d '\r' < "$ROOT/$f" | sed -n 's/^name:[[:space:]]*//p' | head -n 1)
+  printf '%s %s\n' "$n" "$d"
+done)
 WORK=$(mktemp -d)
 CASE_INDEX=0
 FAILED=0
@@ -55,6 +64,15 @@ EOF
   printf '<!-- opus-codex-division: v2 -->\n' > "$CASE_CLAUDE/CLAUDE.md"
   hook_settings "$ROOT/hooks/delegate-guard.js" 'Edit|Write|NotebookEdit|Bash' > "$CASE_CLAUDE/settings.json"
   with_subagent_guard "$ROOT/hooks/subagent-guard.js" 'Agent|Task'
+  # Every skill linked the way install.sh would link it, into this checkout.
+  # Read-only for the checkout: doctor only ever runs install.sh --check. 5g
+  # replaces the root skill's link with a real copy and removes the link first.
+  mkdir -p "$CASE_CLAUDE/skills"
+  while IFS=' ' read -r n d; do
+    [ -n "$n" ] || continue
+    if [ "$d" = . ]; then t=$ROOT; else t=$ROOT/$d; fi
+    ln -s "$t" "$CASE_CLAUDE/skills/$n"
+  done <<< "$SKILL_LINKS"
 }
 
 hook_settings() {
@@ -126,17 +144,28 @@ fs.writeFileSync(process.env.SETTINGS, JSON.stringify(root, null, 2) + '\n');
 NODE
 }
 
+# The locations install.sh reads (规格 #58 票 #65) are the case's own unless a
+# case points them elsewhere: CASE_ISS_SKILLS_DIR / CASE_ISS_SETTINGS hold
+# decoys in the test that doctor hands install.sh its own values, and
+# CASE_ISS_EXPECTATIONS swaps in a fixture expectation list (empty = the
+# built-in one). DELEGATE_GUARD_DISABLE is dropped: a dispatched session may
+# carry DELEGATE_GUARD_DISABLE=1, and with it the guard allows every write, so
+# the delegate-guard smoke test would read as a failure in every case.
 run_doctor() {
   local args=("$@")
-  env HOME="$CASE_HOME" CLAUDE_CONFIG_DIR="$CASE_CLAUDE" CODEX_HOME="$CASE_CODEX" PATH="$CASE_BIN:$PATH" \
+  env -u DELEGATE_GUARD_DISABLE HOME="$CASE_HOME" CLAUDE_CONFIG_DIR="$CASE_CLAUDE" CODEX_HOME="$CASE_CODEX" PATH="$CASE_BIN:$PATH" \
+    ISS_SKILLS_DIR="${CASE_ISS_SKILLS_DIR:-$CASE_CLAUDE/skills}" ISS_CLAUDE_SETTINGS="${CASE_ISS_SETTINGS:-$CASE_CLAUDE/settings.json}" \
+    ISS_CONFIG_EXPECTATIONS_FILE="${CASE_ISS_EXPECTATIONS-}" \
     bash "$DOCTOR" "${args[@]}" > "$CASE_DIR/doctor.out" 2> "$CASE_DIR/doctor.err"
   RUN_EXIT=$?
 }
 
 run_doctor_without_codex() {
   local args=("$@")
-  env HOME="$CASE_HOME" CLAUDE_CONFIG_DIR="$CASE_CLAUDE" CODEX_HOME="$CASE_CODEX" NODE_BIN="$NODE_BIN" \
+  env -u DELEGATE_GUARD_DISABLE HOME="$CASE_HOME" CLAUDE_CONFIG_DIR="$CASE_CLAUDE" CODEX_HOME="$CASE_CODEX" NODE_BIN="$NODE_BIN" \
     PATH="$CASE_SAFE_BIN:/usr/bin:/bin" \
+    ISS_SKILLS_DIR="${CASE_ISS_SKILLS_DIR:-$CASE_CLAUDE/skills}" ISS_CLAUDE_SETTINGS="${CASE_ISS_SETTINGS:-$CASE_CLAUDE/settings.json}" \
+    ISS_CONFIG_EXPECTATIONS_FILE="${CASE_ISS_EXPECTATIONS-}" \
     bash "$DOCTOR" "${args[@]}" > "$CASE_DIR/doctor.out" 2> "$CASE_DIR/doctor.err"
   RUN_EXIT=$?
 }
@@ -182,6 +211,58 @@ process.exit(out.checks.some(c => c.level === process.env.LEVEL && c.message.inc
 NODE
 }
 
+# summary counts every check by level, the install check's rows included.
+expect_summary() { # name
+  OUT_FILE=$CASE_DIR/doctor.out node - <<'NODE' && record PASS "$1" || record FAIL "$1" "summary does not match the checks"
+const out = JSON.parse(require('fs').readFileSync(process.env.OUT_FILE, 'utf8'));
+const tally = {pass: 0, warn: 0, fail: 0, info: 0};
+for (const c of out.checks) tally[c.level.toLowerCase()] += 1;
+process.exit(Object.keys(tally).every(k => tally[k] === out.summary[k]) ? 0 : 1);
+NODE
+}
+
+# Everything under the case's HOME -- settings.json and the skills directory
+# included -- as one line per entry: kind, path, link text or content hash.
+# Compared before and after doctor ran (规格 #58 票 #65: doctor changes nothing).
+snapshot_home() {
+  HOME_DIR=$CASE_HOME node - <<'NODE'
+const fs = require('fs'), path = require('path'), crypto = require('crypto');
+const root = process.env.HOME_DIR, lines = [];
+const walk = dir => {
+  for (const name of fs.readdirSync(dir).sort()) {
+    const full = path.join(dir, name), rel = path.relative(root, full), st = fs.lstatSync(full);
+    if (st.isSymbolicLink()) lines.push(`l ${rel} -> ${fs.readlinkSync(full)}`);
+    else if (st.isDirectory()) { lines.push(`d ${rel}`); walk(full); }
+    else lines.push(`f ${rel} ${crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex')}`);
+  }
+};
+walk(root);
+console.log(lines.join('\n'));
+NODE
+}
+
+remember_home() { HOME_BEFORE=$(snapshot_home); }
+
+expect_home_unchanged() { # name
+  local now
+  now=$(snapshot_home)
+  if [ "$now" = "$HOME_BEFORE" ]; then
+    record PASS "$1"
+  else
+    record FAIL "$1" "$(diff <(printf '%s\n' "$HOME_BEFORE") <(printf '%s\n' "$now") | head -n 6 | tr '\n' '|')"
+  fi
+}
+
+# install.sh in install mode backs settings.json up to <its directory>/backups/;
+# doctor never runs that mode, so the directory must not appear.
+expect_no_backups() { # name
+  if [ -e "$CASE_CLAUDE/backups" ]; then
+    record FAIL "$1" "$CASE_CLAUDE/backups exists"
+  else
+    record PASS "$1"
+  fi
+}
+
 free_port() {
   node -e 'const n=require("net"),s=n.createServer();s.listen(0,"127.0.0.1",()=>{console.log(s.address().port);s.close()})'
 }
@@ -220,6 +301,12 @@ expect_has PASS "delegate-guard 冒烟测试" "full configuration smoke hook"
 expect_has PASS "已注册 subagent-guard" "full configuration registers subagent-guard"
 expect_has PASS "subagent-guard matcher 覆盖 Agent" "full configuration subagent-guard matcher covers Agent"
 expect_has PASS "subagent-guard 冒烟测试" "full configuration subagent-guard smoke"
+# The install check (规格 #58 票 #65): every skill linked, the expectation met,
+# so one PASS, and summary counts it. The skill directory is this checkout, not
+# ~/.claude/skills/implement-spec-split, so that WARN's hint names install.sh.
+expect_has PASS "本机安装与仓库期望一致" "full configuration: the install check passes"
+expect_summary "full configuration: summary counts every check, the install check included"
+expect_hint WARN "运行 install.sh 建链" "the skill-directory hint points at install.sh"
 
 # 2. Stage 3 entirely absent.
 new_case
@@ -260,17 +347,25 @@ expect_has PASS "delegate-guard.js 存在" "absolute node path in hook command i
 new_case
 hook_settings "$ROOT/hooks/delegate-guard.js" 'Edit|Write|NotebookEdit' > "$CASE_CLAUDE/settings.json"
 SETTINGS_BEFORE=$(cat "$CASE_CLAUDE/settings.json")
+# The install check (规格 #58 票 #65) reports the same drift as a FAIL of its
+# own -- install.sh would add Bash after a backup -- next to doctor's own check.
+remember_home
 run_doctor --json
 expect_exit 1 "matcher without Bash exits 1"
 expect_has PASS "覆盖 Edit 和 Write" "matcher without Bash still passes the Edit and Write check"
 expect_has FAIL "未覆盖 Bash" "matcher without Bash reports FAIL"
 expect_hint FAIL "hooks/README.md" "matcher without Bash hints at hooks/README.md"
 expect_hint FAIL "docs/setup.md" "matcher without Bash hints at docs/setup.md"
+expect_has FAIL "delegate-guard-matcher 未满足" "matcher without Bash: the install check reports FAIL too"
+expect_hint FAIL "运行 install.sh（落地时会自动运行）" "matcher without Bash: the install check hints at install.sh"
+expect_summary "matcher without Bash: summary counts every check, the install check included"
 if [ "$(cat "$CASE_CLAUDE/settings.json")" = "$SETTINGS_BEFORE" ]; then
   record PASS "doctor leaves settings.json unchanged"
 else
   record FAIL "doctor leaves settings.json unchanged" "settings.json was modified"
 fi
+expect_home_unchanged "matcher without Bash: doctor leaves the whole HOME byte for byte unchanged"
+expect_no_backups "matcher without Bash: doctor creates no backups directory"
 
 # 5d. delegate-guard only: an install from before 规格 #26 has no
 # subagent-guard; that is a WARN, never a FAIL.
@@ -302,8 +397,14 @@ expect_has FAIL "subagent-guard.js 不存在" "missing subagent-guard path repor
 
 # 5g. Hooks registered the way hooks/README.md's snippets have them: `node ~/…`
 # with the ~ unquoted. The hook runs (the shell expands it), so doctor expands
-# it too and judges the files present instead of "does not exist".
+# it too and judges the files present instead of "does not exist". The hooks
+# live in a real copy of the skill directory, so the fixture's link goes first:
+# through it, mkdir -p would land in this checkout's hooks/ and cp would write
+# there. rm takes the link, never its target. The copy is not the main
+# checkout, which the install check reports as a WARN (install.sh never touches
+# a real directory), not a FAIL.
 new_case
+if [ -L "$CASE_CLAUDE/skills/implement-spec-split" ]; then rm "$CASE_CLAUDE/skills/implement-spec-split"; fi
 mkdir -p "$CASE_CLAUDE/skills/implement-spec-split/hooks"
 cp "$ROOT/hooks/delegate-guard.js" "$ROOT/hooks/lib-shell.js" "$ROOT/hooks/lib-transcript.js" \
   "$ROOT/hooks/subagent-guard.js" "$CASE_CLAUDE/skills/implement-spec-split/hooks/"
@@ -315,6 +416,7 @@ expect_has PASS "delegate-guard.js 存在" "a ~/ delegate-guard.js path is judge
 expect_has PASS "subagent-guard.js 存在" "a ~/ subagent-guard.js path is judged present"
 expect_has PASS "delegate-guard 冒烟测试" "a ~/ delegate-guard.js path runs for the smoke test"
 expect_has PASS "subagent-guard 冒烟测试" "a ~/ subagent-guard.js path runs for the smoke test"
+expect_has WARN "是真实目录不是软链" "a ~/ skill directory is a real copy: the install check reports WARN, not FAIL"
 
 # 5h. A PreToolUse entry without a matcher is recorded with an empty first
 # column: the command must stay in its own column and the hook read as
@@ -434,6 +536,73 @@ NODE
 new_case
 run_doctor --unknown
 expect_exit 64 "unknown argument exits 64"
+
+# The install check (规格 #58 票 #65): doctor runs install.sh --check --json,
+# which is read-only, and translates what it finds. A skill link install.sh
+# would make is a WARN that points at install.sh; doctor itself leaves the
+# link missing and everything under the HOME as it was.
+
+# 18. One skill link missing.
+new_case
+rm "$CASE_CLAUDE/skills/grill-router"
+remember_home
+run_doctor --json
+expect_exit 0 "a missing skill link exits 0"
+expect_has WARN "grill-router 未安装" "a missing skill link is reported as WARN"
+expect_hint WARN "运行 install.sh（落地时会自动运行）" "a missing skill link hints at install.sh"
+expect_none FAIL "a missing skill link is no FAIL"
+expect_without PASS "本机安装与仓库期望一致" "a missing skill link: the install check does not pass"
+expect_summary "a missing skill link: summary counts every check, the install check included"
+expect_home_unchanged "a missing skill link: doctor leaves the whole HOME byte for byte unchanged"
+expect_no_backups "a missing skill link: doctor creates no backups directory"
+
+# 19. A skill link pointing at another checkout (another clone).
+new_case
+mkdir -p "$CASE_DIR/other-checkout/grill-router"
+rm "$CASE_CLAUDE/skills/grill-router"
+ln -s "$CASE_DIR/other-checkout/grill-router" "$CASE_CLAUDE/skills/grill-router"
+remember_home
+run_doctor --json
+expect_exit 0 "a skill link pointing elsewhere exits 0"
+expect_has WARN "grill-router 软链指错" "a skill link pointing elsewhere is reported as WARN"
+expect_hint WARN "运行 install.sh（落地时会自动运行）" "a skill link pointing elsewhere hints at install.sh"
+expect_none FAIL "a skill link pointing elsewhere is no FAIL"
+expect_home_unchanged "a skill link pointing elsewhere: doctor leaves the link alone"
+
+# 20. doctor hands install.sh its own settings.json and skills directory: the
+# values of ISS_SKILLS_DIR / ISS_CLAUDE_SETTINGS in doctor's environment (an
+# empty skills directory; a settings.json whose hook matcher lacks Bash) are
+# not what gets checked.
+new_case
+mkdir -p "$CASE_DIR/decoy/skills"
+printf '%s\n' '{"hooks":{"PreToolUse":[{"matcher":"Edit|Write","hooks":[{"type":"command","command":"node \"/nowhere/delegate-guard.js\""}]}]}}' > "$CASE_DIR/decoy/settings.json"
+CASE_ISS_SKILLS_DIR=$CASE_DIR/decoy/skills CASE_ISS_SETTINGS=$CASE_DIR/decoy/settings.json run_doctor --json
+expect_exit 0 "outer ISS_* values do not make doctor check the wrong places"
+expect_has PASS "本机安装与仓库期望一致" "doctor passes its own skills directory and settings.json to install.sh"
+expect_without WARN "未安装" "an outer ISS_SKILLS_DIR is not what doctor checks"
+expect_none FAIL "an outer ISS_CLAUDE_SETTINGS is not what doctor checks"
+
+# 21. install.sh cannot run (its expectation list is unreadable: exit 2): one
+# WARN says the install state is unknown, and doctor carries on.
+new_case
+CASE_ISS_EXPECTATIONS=$CASE_DIR/no-such-expectations.json run_doctor --json
+expect_exit 0 "install.sh exiting 2 is a WARN, not a crash"
+expect_has WARN "install.sh --check 跑不起来" "install.sh exiting 2 is reported as WARN"
+expect_none FAIL "install.sh exiting 2 is no FAIL"
+expect_without PASS "本机安装与仓库期望一致" "install.sh exiting 2: the install check does not pass"
+
+# 22. An unexecuted loosening (a fixture expectation list with a loosen item:
+# NotebookEdit must not be in the matcher). install.sh never applies it, so the
+# hint does not promise that running install.sh will.
+new_case
+cat > "$CASE_DIR/loosen.json" <<'JSON'
+[{"id":"no-notebook-edit","direction":"loosen","check":{"type":"preToolUseMatcher","hook":"delegate-guard.js","exclude":["NotebookEdit"]},"fix":"append-matcher-tools"}]
+JSON
+CASE_ISS_EXPECTATIONS=$CASE_DIR/loosen.json run_doctor --json
+expect_exit 0 "an unexecuted loosening exits 0"
+expect_has WARN "放宽项 no-notebook-edit 未执行" "an unexecuted loosening is reported as WARN"
+expect_hint WARN "手工" "an unexecuted loosening points at a manual change, not at install.sh"
+expect_none FAIL "an unexecuted loosening is no FAIL"
 
 if [ "$FAILED" -eq 0 ]; then
   printf 'Summary: %d passed, 0 failed\n' "$PASSED"
