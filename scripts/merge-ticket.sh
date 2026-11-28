@@ -65,8 +65,9 @@
 # as what it touched; a version file as what the two tips hold. The base is
 # the first commit on the Ticket tip's first-parent chain that the Integration
 # branch already has (the Integration tip at dispatch time; a merge-back does
-# not move it, a rebase does). For a numbered directory the Integration side
-# is the net diff from there to its tip, the Ticket side the net diff from
+# not move it, a rebase does), or the merge-base of the two tips when there is
+# none. For a numbered directory the Integration side is the net diff from
+# there to its tip, the Ticket side the net diff from
 # merge-base(Integration tip, Ticket tip) to the Ticket tip, so the check is
 # whether the merged result would hold the same number twice. Both clear once
 # the Ticket side re-bumps: the old entry is gone from its net additions, and
@@ -93,13 +94,13 @@
 #   6  shared counters collide: nothing merged, tests not run, worktree
 #      untouched; stderr lists each colliding counter with both sides' commits
 #      (`<counter>\t<side>\t<commit> <subject>\t<paths>`, one line per side; a
-#      tab in a subject comes out as a space) for the Brief of the worker that
-#      re-bumps the Ticket side. Under --no-ticket-worktree (step 9.1) the ref
-#      is read only and the first line names the integration branch as the
-#      side to re-bump instead; the lines keep their `integration` / `ticket`
-#      labels either way. Rerun after the re-bump; a rerun that still exits 6
-#      means the re-bump did not clear it; the round cap is the caller's
-#      (SKILL.md steps 5 / 9.1)
+#      tab in a subject comes out as a space, and the paths field is empty for
+#      a version file) for the Brief of the worker that re-bumps the Ticket
+#      side. Under --no-ticket-worktree (step 9.1) the ref is read only and the
+#      first line names the integration branch as the side to re-bump instead;
+#      the lines keep their `integration` / `ticket` labels either way. Rerun
+#      after the re-bump; a rerun that still exits 6 means the re-bump did not
+#      clear it; the round cap is the caller's (SKILL.md steps 5 / 9.1)
 #  64  bad usage
 
 set -u
@@ -222,7 +223,7 @@ first_parent_base() { # ticket_ref integration_ref
 
 # How many entries of <dir> at <tip> are named <digits>-... or <digits>_...
 # (a directory needs two to count as numbered). "." is the top level.
-numbered_entries() { # dir tip
+numbered_entry_count() { # dir tip
   local list
   if [ "$1" = . ]; then
     list=$(git -C "$WORKTREE" ls-tree --name-only "$2" 2>/dev/null) || return 1
@@ -288,7 +289,7 @@ side_commit() { # side from to path
 # touched one of its entries.
 numbered_hits() { # base integration_tip merge_base ticket_tip
   numbered_pairs "$@" | while IFS=$'\t' read -r dir digits integration_paths ticket_paths; do
-    [ "$(numbered_entries "$dir" "$2")" -ge 2 ] 2>/dev/null || continue
+    [ "$(numbered_entry_count "$dir" "$2")" -ge 2 ] 2>/dev/null || continue
     printf 'numbered-dir %s %s\tintegration\t%s\t%s\n' "$dir" "$digits" \
       "$(side_commit integration "$1" "$2" "${integration_paths%%, *}")" "$integration_paths"
     printf 'numbered-dir %s %s\tticket\t%s\t%s\n' "$dir" "$digits" \
