@@ -49,7 +49,8 @@
 # SKILL.md and a pin on it alone caught nothing (Standards 8); the three drafting
 # templates justify ready-for-human by identity, credentials or physical action
 # and carry a guardrail sample for a local or smoke ops ticket next to the ssh
-# one, each "样例见下" naming its sample (Spec 3).
+# one, each "样例见下" naming its sample (Spec 3); step 8 of SKILL.md never picks
+# an option that needs the owner's own hands (Spec 7, trade-off 3 = A).
 #
 # Usage: scripts/test-skill-docs.sh
 # Exit code: the number of failed checks.
@@ -688,6 +689,20 @@ without "turns each unexecuted loosening into a loose ticket — for a Spec on t
   "GLOSSARY: the loose tickets are no longer read as limited to this skill's own repository" "$GLOSSARY"
 has 'turns each unexecuted loosening into a loose ticket, whatever repository the Spec is on' \
   'GLOSSARY: the Unattended landing entry opens a loose ticket for a Spec on any repository' "$GLOSSARY"
+
+# --- step 8 never picks an option that needs the owner's own hands (规格 #58 复审 Spec 7, 取舍 3 选 A) ---
+
+# The parking triggers of step 8 were two: an item that needs the owner's
+# identity or credentials, and an item with nothing reversible. find-next's
+# step 6 also leaves a physical action to the human. Read literally, an item
+# like "可自动采纳：否 — someone has to plug it into the real device and test"
+# went to the reversibility rule, which picked an option the Run cannot carry
+# out (it changes nothing, so it is the most "reversible" one), and only the fix
+# role's report parked the Run. Such an option is now listed under 要你做 and
+# never picked, the same exception as find-next's step 6; the parking categories
+# are not touched.
+has "An option that needs the owner's own hands — a physical action the Run cannot carry out — is never picked either, whatever the rule above would pick: list it under 要你做 in the landing report and decide among the remaining options as above; when no option is left, the item parks by the two parking rules above." \
+  "SKILL.md step 8 never picks an option that needs the owner's own hands" "$SKILL"
 
 printf '\n%d passed, %d failed\n' "$PASSED" "$FAILED"
 exit "$FAILED"
